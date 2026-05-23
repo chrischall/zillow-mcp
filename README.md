@@ -25,6 +25,26 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | `zillow_get_market_report` | Median sale/list/rent, days on market, inventory, ZHVI for a region | |
 | `zillow_calculate_mortgage` | Local PITI calculator — principal+interest, taxes, insurance, HOA, PMI (no network) | |
 
+## Acknowledgement of Terms
+
+By using this MCP server, you acknowledge and agree to the following:
+
+**1. This server accesses your own Zillow session.** Every request is dispatched through your own browser tab (logged in or not) via the fetchproxy extension. It does not — and cannot — access anyone else's account.
+
+**2. [Zillow's Terms of Use](https://www.zillow.com/z/corp/terms/) govern your use of this server**, just as they govern your direct use of zillow.com. The clauses most relevant here:
+
+> You may not use any robot, spider, scraper or other automated means to access the Services for any purpose without our express written permission… nor may you conduct automated queries (including screen and database scraping, spiders, robots, crawlers, bypassing CAPTCHAs or similar precautions).
+
+You are agreeing to those terms — read by the maintainer 2026-05-23 — every time you invoke a tool in this server. Zillow's terms broadly prohibit automated access without written permission; this is an unofficial tool and Zillow has not granted it permission.
+
+**3. Personal, non-commercial use only.** This project is not affiliated with, endorsed by, sponsored by, or in partnership with Zillow Group. It is a personal automation tool that drives the same Zillow website you would drive by hand — one search at a time, your own saved homes, your own market reports. Do not use it to bulk-extract listings, train models, populate a competing real-estate product, or for any commercial purpose.
+
+**4. Stability is not guaranteed.** This server reads private internal endpoints (`/async-create-search-page-state/`, `__NEXT_DATA__` blobs, `/myzillow/...`) that Zillow may change without notice. It may break. It may stop working. That's by design — the surface is not theirs to maintain on our behalf.
+
+**5. You accept full responsibility** for any consequences of using this server in connection with your Zillow access — rate limiting, account warnings, suspension, IP blocks, captcha walls, or any enforcement action Zillow Group takes. If Zillow objects to your use, stop using this server.
+
+This section is the maintainer's good-faith summary of the terms — it is not legal advice and does not modify or supersede Zillow's actual ToS.
+
 ## Install
 
 ### Option A — npx (after publishing)
