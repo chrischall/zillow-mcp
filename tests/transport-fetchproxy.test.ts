@@ -93,4 +93,16 @@ describe('FetchproxyTransport', () => {
       /extension offline/
     );
   });
+
+  it('start/close delegate to the inner FetchproxyServer', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    installInner(t, inner);
+
+    await t.start();
+    expect(inner.listen).toHaveBeenCalledTimes(1);
+
+    await t.close();
+    expect(inner.close).toHaveBeenCalledTimes(1);
+  });
 });

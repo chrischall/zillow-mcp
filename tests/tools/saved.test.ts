@@ -36,12 +36,45 @@ describe('findSavedSearches', () => {
   it('returns [] when no candidate array is found', () => {
     expect(findSavedSearches({ foo: 'bar' })).toEqual([]);
   });
+
+  it('shape-walks pageProps when direct keys miss', () => {
+    // The direct keys (savedSearches, userSavedSearches) are absent —
+    // but a generically-named array contains entries that pass the
+    // shape predicate. The walker should still find it.
+    const searches = [{ id: 5, name: 'X', filterState: { x: 1 } }];
+    const result = findSavedSearches({ data: searches });
+    expect(result).toBe(searches);
+  });
+
+  it('shape-walker accepts searchQueryState or filterState as the marker', () => {
+    const a = findSavedSearches({
+      blob: [{ id: 1, searchQueryState: {} }],
+    });
+    const b = findSavedSearches({
+      blob: [{ id: 1, filterState: {} }],
+    });
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+  });
+
+  it('shape-walker skips arrays whose first element lacks the marker', () => {
+    const result = findSavedSearches({
+      noise: [{ unrelated: true }],
+      good: [{ filterState: {} }],
+    });
+    expect(result).toEqual([{ filterState: {} }]);
+  });
 });
 
 describe('findSavedHomes', () => {
   it('returns pageProps.savedHomes when present', () => {
     const homes = [{ zpid: 1, hdpUrl: '/x' }];
     expect(findSavedHomes({ savedHomes: homes })).toBe(homes);
+  });
+
+  it('falls back to userSavedHomes', () => {
+    const homes = [{ zpid: 3, hdpUrl: '/z' }];
+    expect(findSavedHomes({ userSavedHomes: homes })).toBe(homes);
   });
 
   it('falls back to favoriteHomes', () => {
@@ -51,6 +84,67 @@ describe('findSavedHomes', () => {
 
   it('returns [] when nothing matches', () => {
     expect(findSavedHomes({})).toEqual([]);
+  });
+
+  it('shape-walks pageProps when direct keys miss', () => {
+    const homes = [{ zpid: 12, hdpUrl: '/x' }];
+    const result = findSavedHomes({ data: homes });
+    expect(result).toBe(homes);
+  });
+
+  it('shape-walker requires zpid + (hdpUrl or savedAt)', () => {
+    expect(
+      findSavedHomes({ blob: [{ zpid: 1, hdpUrl: '/x' }] })
+    ).toHaveLength(1);
+    expect(
+      findSavedHomes({ blob: [{ zpid: 1, savedAt: '2026-01-01' }] })
+    ).toHaveLength(1);
+    expect(findSavedHomes({ blob: [{ zpid: 1 }] })).toEqual([]);
+    expect(findSavedHomes({ blob: [{ hdpUrl: '/x' }] })).toEqual([]);
+  });
+});
+
+describe('saved-tool formatting via the MCP boundary', () => {
+  let h: Awaited<ReturnType<typeof createTestHarness>>;
+
+  beforeEach(async () => {
+    if (h) await h.close();
+    h = await createTestHarness((server) =>
+      registerSavedTools(server, mockClient)
+    );
+  });
+
+  it('formatSearch handles a search with no id (stays undefined)', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWith({
+        savedSearches: [{ name: 'Anonymous', searchQueryState: {} }],
+      })
+    );
+    const result = await h.callTool('zillow_get_saved_searches', {});
+    const parsed = parseToolResult<Array<{ id?: string }>>(result);
+    expect(parsed[0].id).toBeUndefined();
+  });
+
+  it('formatHome prefers an absolute hdpUrl over the synthesized fallback', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWith({
+        savedHomes: [
+          { zpid: 5, hdpUrl: 'https://www.zillow.com/homedetails/5_zpid/' },
+        ],
+      })
+    );
+    const result = await h.callTool('zillow_get_saved_homes', {});
+    const parsed = parseToolResult<Array<{ url: string }>>(result);
+    expect(parsed[0].url).toBe('https://www.zillow.com/homedetails/5_zpid/');
+  });
+
+  it('formatHome falls back to /homedetails/<zpid>_zpid/ when hdpUrl is missing', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWith({ savedHomes: [{ zpid: 42 }] })
+    );
+    const result = await h.callTool('zillow_get_saved_homes', {});
+    const parsed = parseToolResult<Array<{ url: string }>>(result);
+    expect(parsed[0].url).toBe('https://www.zillow.com/homedetails/42_zpid/');
   });
 });
 

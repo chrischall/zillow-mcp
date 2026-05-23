@@ -106,17 +106,22 @@ export class ZillowClient {
   }
 
   private throwIfSignInPage(result: FetchResult): void {
-    // Zillow surfaces a `?login` / `?sso` path or a captcha interstitial
-    // when the session is missing. The captcha page is heavy with
-    // "/captcha/" in the body; the login redirect lands on
-    // /user/login or appends ?login=true.
-    const signInMarkers = ['/user/login', 'captcha-delivery'];
+    // Zillow signals a missing session in two ways:
+    //   1. URL — a redirect to `/user/login` or `?login=true` on any path.
+    //   2. Body — the DataDome captcha interstitial includes the literal
+    //      string `captcha-delivery` (the script host name). The < 80KB
+    //      guard avoids matching that substring inside the gargantuan
+    //      legitimate SSR pages (300-800KB) that might mention it in
+    //      passing.
+    //
+    // We deliberately do NOT treat `/user/login` *in the body* as a
+    // sign-in marker — every signed-in Zillow page has a "Sign in"
+    // link in its nav pointing there, so a body-match would
+    // false-positive on legitimate small pages.
     const looksLikeSignIn =
       /\/user\/login/.test(result.url) ||
       /[?&]login=true/.test(result.url) ||
-      signInMarkers.some(
-        (m) => result.body.includes(m) && result.body.length < 80_000
-      );
+      (result.body.includes('captcha-delivery') && result.body.length < 80_000);
     if (looksLikeSignIn) throw new SessionNotAuthenticatedError();
   }
 }

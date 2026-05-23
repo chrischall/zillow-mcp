@@ -193,9 +193,15 @@ export function registerSearchTools(
   server.registerTool(
     'zillow_search_properties',
     {
+      title: 'Search Zillow listings',
       description:
-        'Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters. Returns matching properties with price, beds/baths, sqft, Zestimate, and the homedetails URL. Does NOT return Zestimate history — use zillow_get_zestimate_history for that.',
-      annotations: { readOnlyHint: true },
+        'Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters (status, price band, beds/baths minimums, home types). Returns matching properties with price, beds/baths, sqft, Zestimate, status, image, and homedetails URL. Does NOT return Zestimate history — use zillow_get_zestimate_history for that. Read-only; safe to call repeatedly.',
+      annotations: {
+        title: 'Search Zillow listings',
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: {
         location: z
           .string()

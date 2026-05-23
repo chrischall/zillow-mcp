@@ -33,6 +33,10 @@ src/
   client.ts             # ZillowClient.fetchHtml / fetchJson + error mapping
                         #   (non-2xx, sign-in interstitial, 204 → null)
   next-data.ts          # extractNextData + getPageProps helpers
+  page-props.ts         # findArrayByShape — direct-key + heuristic walker
+                        #   used by tools/saved.ts (the page-shape drifts)
+  url.ts                # urlToPath — reduce a Zillow URL or bare path
+                        #   to its path+search portion
   mcp.ts                # textResult() result-wrapper
   tools/
     search.ts           # zillow_search_properties (buildSearchBody + formatListing)
@@ -73,7 +77,8 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 
 - All tools prefixed `zillow_*`.
 - Tool return shape: `textResult(data)` from `src/mcp.ts` → `{ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }`. Don't hand-roll the wrapper.
-- Read-only tools set `annotations: { readOnlyHint: true }`. v0.1 has no write tools.
+- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for `zillow_calculate_mortgage` (pure local computation). v0.1 has no write tools — when added, set `readOnlyHint: false` and consider `destructiveHint`.
+- Path-only inputs to `ZillowClient`: pass `/some/path?with=query`, never a full URL. `FetchproxyTransport` prepends `https://www.zillow.com`. When a tool takes a `url` arg from the user, reduce it via `urlToPath` from `src/url.ts`.
 - Write a failing test before implementation (TDD).
 - ESM + NodeNext: imports use `.js` extensions even for `.ts` source.
 - stdio transport: log warnings/banners to **stderr** only — stdout is reserved for JSON-RPC.
@@ -83,19 +88,21 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 - **Next.js hydration.** Zillow embeds full page state as JSON in `<script id="__NEXT_DATA__">`. `src/next-data.ts` extracts it; tools then drill into `props.pageProps` for the per-page data.
 - **gdpClientCache is JSON-encoded inside JSON.** The homedetails page has `pageProps.gdpClientCache: "{...}"` (string). `src/tools/properties.ts::findPropertyInPageProps` parses it and finds the first entry with a `property` field.
 - **Saved-data field names drift.** `pageProps.savedSearches` was renamed to `userSavedSearches` in at least one redeploy. `src/tools/saved.ts::findSavedSearches` checks the canonical name first, then walks all array fields for a shape-match (`searchQueryState` or `filterState` in the first element).
-- **Sign-in detection.** `src/client.ts::throwIfSignInPage` flags `/user/login` redirects, `?login=true` URL params, and the captcha-delivery interstitial. Surfaces `SessionNotAuthenticatedError` with a "sign into zillow.com in the bridged tab" message.
+- **Sign-in detection.** `src/client.ts::throwIfSignInPage` flags `/user/login` redirects, `?login=true` URL params, and the DataDome captcha interstitial (body matches `captcha-delivery` AND body < 80KB — the guard avoids matching the same string in large SSR pages that mention it in passing). We deliberately do NOT body-match `/user/login` since every signed-in Zillow page has a "Sign in" link in its nav that would false-positive.
 
 ## Versioning
 
-Version appears in SEVEN places — all must match:
+Version appears in EIGHT places — all must match:
 
 1. `package.json` → `"version"`
-2. `package-lock.json` (kept in sync by `npm install`)
-3. `src/index.ts` → `VERSION` const + banner
+2. `package-lock.json` → kept in sync by `npm install --package-lock-only`
+3. `src/index.ts` → `VERSION` const (annotated with `// x-release-please-version`) + startup banner
 4. `manifest.json` → `"version"`
 5. `server.json` → `"version"` and `packages[].version`
 6. `.claude-plugin/plugin.json` → `"version"`
 7. `.claude-plugin/marketplace.json` → `metadata.version` + `plugins[].version`
+
+`release-please-config.json` registers all of these as `extra-files` so the release-please workflow rewrites them in one PR per release.
 
 release-please-config.json registers all of these as `extra-files` so the release-please workflow rewrites them in one PR per release.
 

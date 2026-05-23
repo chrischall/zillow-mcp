@@ -17,13 +17,13 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 
 | Tool | Purpose | Auth-scoped |
 | --- | --- | :---: |
-| `zillow_search_properties` | Search listings by location and filters | |
-| `zillow_get_property` | Full record for a zpid (price, Zestimate, beds, schools, history) | |
-| `zillow_get_zestimate_history` | Time series of Zestimate values | |
-| `zillow_get_saved_searches` | Your saved searches with new-listing counts | ✓ |
-| `zillow_get_saved_homes` | Your favorited homes | ✓ |
-| `zillow_get_market_report` | Median price, days on market, ZHVI for a region | |
-| `zillow_calculate_mortgage` | Local PITI calculator (no network) | |
+| `zillow_search_properties` | Search listings by location, status, price band, beds/baths, home type | |
+| `zillow_get_property` | Full record for a zpid (price, Zestimate, beds, schools, neighborhood, price history) | |
+| `zillow_get_zestimate_history` | Time series of Zestimate values (and rent Zestimate where available) | |
+| `zillow_get_saved_searches` | Your saved searches with new-listing counts and notification frequency | ✓ |
+| `zillow_get_saved_homes` | Your favorited homes with current price + Zestimate | ✓ |
+| `zillow_get_market_report` | Median sale/list/rent, days on market, inventory, ZHVI for a region | |
+| `zillow_calculate_mortgage` | Local PITI calculator — principal+interest, taxes, insurance, HOA, PMI (no network) | |
 
 ## Install
 

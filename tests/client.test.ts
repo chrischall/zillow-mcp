@@ -55,6 +55,35 @@ describe('ZillowClient', () => {
     );
   });
 
+  it('fetchHtml does NOT false-positive on a normal page containing /user/login in nav HTML', async () => {
+    // Every signed-in Zillow page renders a "Sign in" link → the body
+    // would historically match /user/login. Verify we don't flag those.
+    const client = new ZillowClient({
+      transport: stubTransport(async () => ({
+        status: 200,
+        body: '<html><nav><a href="/user/login">Sign in</a></nav><main>real content</main></html>',
+        url: 'https://www.zillow.com/homedetails/1_zpid/',
+      })),
+    });
+    await expect(
+      client.fetchHtml('/homedetails/1_zpid/')
+    ).resolves.toBeDefined();
+  });
+
+  it('fetchHtml does NOT flag captcha-delivery mentioned in a large page body', async () => {
+    // CSP / privacy-policy pages mention 'captcha-delivery' in passing;
+    // the < 80KB guard should keep us out of trouble on those.
+    const bigBody = 'x'.repeat(100_000) + ' captcha-delivery in tos ';
+    const client = new ZillowClient({
+      transport: stubTransport(async () => ({
+        status: 200,
+        body: bigBody,
+        url: 'https://www.zillow.com/privacy/',
+      })),
+    });
+    await expect(client.fetchHtml('/privacy/')).resolves.toBeDefined();
+  });
+
   it('fetchHtml throws for non-2xx status', async () => {
     const client = new ZillowClient({
       transport: stubTransport(async () => ({

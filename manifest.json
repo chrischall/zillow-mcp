@@ -33,12 +33,12 @@
     }
   },
   "tools": [
-    { "name": "zillow_search_properties", "description": "Search Zillow listings by location, filters" },
-    { "name": "zillow_get_property", "description": "Fetch a property's full details by zpid or homedetails URL" },
-    { "name": "zillow_get_zestimate_history", "description": "Historical Zestimate values for a property" },
-    { "name": "zillow_get_saved_searches", "description": "List the signed-in user's saved searches" },
-    { "name": "zillow_get_saved_homes", "description": "List the signed-in user's saved (favorited) homes" },
-    { "name": "zillow_get_market_report", "description": "Market report for a region (median price, days on market, etc.)" },
-    { "name": "zillow_calculate_mortgage", "description": "Local mortgage-payment calculator (principal, interest, taxes, insurance)" }
+    { "name": "zillow_search_properties", "description": "Search Zillow listings by location and optional filters (status, price, beds/baths, home type)" },
+    { "name": "zillow_get_property", "description": "Fetch a property's full details (price, Zestimate, beds, schools, price history) by zpid or homedetails URL" },
+    { "name": "zillow_get_zestimate_history", "description": "Historical Zestimate time series for a property by zpid or URL" },
+    { "name": "zillow_get_saved_searches", "description": "The signed-in user's saved searches with new-listing counts" },
+    { "name": "zillow_get_saved_homes", "description": "The signed-in user's saved (favorited) homes" },
+    { "name": "zillow_get_market_report", "description": "Market report for a region — median sale/list/rent prices, days on market, ZHVI" },
+    { "name": "zillow_calculate_mortgage", "description": "Local PITI mortgage-payment calculator — no network" }
   ]
 }
