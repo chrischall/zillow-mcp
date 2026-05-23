@@ -42,6 +42,7 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -49,6 +50,63 @@ jobs:
           token: ${{ secrets.RELEASE_PAT }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # Dedupe entries in CHANGELOG.md. With merge-commit (no-squash)
+      # workflows, the merge commit's body holds the PR title (via
+      # `merge_commit_message: PR_TITLE`), and conventional-commits-parser
+      # walks bodies — so the source commit AND the merge commit both
+      # show up as the same `fix:`/`feat:` entry. GitHub's valid
+      # merge-setting combos can't avoid this, and release-please has
+      # no flag to ignore merge commits. So we dedupe after the fact:
+      # within each release section in CHANGELOG.md, drop bullet lines
+      # whose text (minus the trailing `([hash](url))`) matches an
+      # earlier line in the same section.
+      - name: Checkout release PR branch
+        if: steps.release.outputs.pr != ''
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Dedupe CHANGELOG entries
+        if: steps.release.outputs.pr != ''
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+
+          path = pathlib.Path("CHANGELOG.md")
+          lines = path.read_text().splitlines(keepends=True)
+          # Strip the trailing `([hash](url))` to get the dedup key.
+          hash_link = re.compile(r" \(\[[0-9a-f]+\]\([^)]+\)\)$")
+          out, seen, in_section = [], set(), False
+          for line in lines:
+              if line.startswith("## ["):
+                  in_section = True
+                  seen = set()
+                  out.append(line)
+                  continue
+              if in_section and line.startswith("* "):
+                  key = hash_link.sub("", line.rstrip("\n"))
+                  if key in seen:
+                      continue
+                  seen.add(key)
+              out.append(line)
+          path.write_text("".join(out))
+          PY
+
+          if git diff --quiet CHANGELOG.md; then
+            echo "No duplicates to dedupe."
+            exit 0
+          fi
+          PR_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          # [skip ci] avoids re-triggering CI on this housekeeping commit;
+          # the release PR has already had CI green from the release-please
+          # commit it lives alongside.
+          git commit -m "chore(changelog): dedupe entries [skip ci]"
+          git push origin "$PR_BRANCH"
 
   publish:
     needs: release-please
