@@ -5,7 +5,6 @@
 
 ### Bug Fixes
 
-* **server.json:** shorten description to ≤100 chars for MCP Registry ([1428c54](https://github.com/chrischall/zillow-mcp/commit/1428c54c28694a9d84cc3ba5d8b3cb4271791936))
 * **server.json:** shorten description to ≤100 chars for MCP Registry ([f544a6a](https://github.com/chrischall/zillow-mcp/commit/f544a6a31f8ef0c87b0782235f15653a8c112a42))
 
 
