@@ -120,9 +120,15 @@ export function registerMortgageTools(server: McpServer): void {
   server.registerTool(
     'zillow_calculate_mortgage',
     {
+      title: 'Calculate mortgage payment (local)',
       description:
-        'Local-only mortgage payment calculator. Returns a full PITI breakdown (principal + interest, property tax, insurance, HOA, PMI) and total interest over the life of the loan. No network call. Provide either down_payment OR down_payment_percent; defaults to 20%. Property tax can be given as property_tax_annual or property_tax_rate (% of home price). PMI applies automatically when LTV > 80% and pmi_rate is provided.',
-      annotations: { readOnlyHint: true },
+        'Local-only mortgage payment calculator. Returns a full PITI breakdown (principal + interest, property tax, insurance, HOA, PMI) and total interest over the life of the loan. No network call — fully deterministic, safe to use for scenario comparison without burning a fetch. Provide either down_payment OR down_payment_percent; defaults to 20%. Property tax can be given as property_tax_annual or property_tax_rate (% of home price). PMI applies automatically when LTV > 80% and pmi_rate is provided.',
+      annotations: {
+        title: 'Calculate mortgage payment (local)',
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         home_price: z.number().positive(),
         down_payment: z.number().nonnegative().optional(),

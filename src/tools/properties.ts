@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
+import { urlToPath } from '../url.js';
 
 /**
  * Zillow's homedetails pages are SSR Next.js. The full property object
@@ -60,6 +61,7 @@ export interface FormattedProperty {
   zpid: string;
   url: string;
   address?: RawProperty['address'];
+  neighborhood?: string;
   price?: number;
   zestimate?: number;
   rent_zestimate?: number;
@@ -99,25 +101,35 @@ export function findPropertyInPageProps(pageProps: Record<string, unknown>): Raw
   } catch {
     return null;
   }
+  // Prefer entries whose Apollo key looks like a property record
+  // (`Property:<zpid>`) — guards against a non-property entry that
+  // happens to carry a `property` field sorting first in iteration.
+  for (const [key, v] of Object.entries(cache)) {
+    if (
+      key.startsWith('Property:') &&
+      v &&
+      typeof v === 'object' &&
+      v.property
+    ) {
+      return v.property;
+    }
+  }
+  // Fallback: any entry with a `property` field (covers older cache
+  // shapes where the Apollo typename prefix may differ).
   for (const v of Object.values(cache)) {
     if (v && typeof v === 'object' && v.property) return v.property;
   }
   return null;
 }
 
+/**
+ * Resolve the homedetails path. Accepts either a numeric zpid (we build
+ * the bare canonical path `/homedetails/<zpid>_zpid/`, which Zillow 302s
+ * to the slugged version) or a full URL/path (reduced via `urlToPath`).
+ */
 function buildPath(args: { zpid?: number | string; url?: string }): string {
-  if (args.url) {
-    try {
-      const u = new URL(args.url);
-      return `${u.pathname}${u.search}`;
-    } catch {
-      // Assume it was already a path
-      return args.url.startsWith('/') ? args.url : `/${args.url}`;
-    }
-  }
-  if (args.zpid !== undefined) {
-    return `/homedetails/${args.zpid}_zpid/`;
-  }
+  if (args.url) return urlToPath(args.url);
+  if (args.zpid !== undefined) return `/homedetails/${args.zpid}_zpid/`;
   throw new Error('zillow_get_property: must provide either zpid or url');
 }
 
@@ -132,6 +144,7 @@ function format(raw: RawProperty): FormattedProperty {
     zpid,
     url,
     address: raw.address,
+    neighborhood: raw.address?.neighborhood,
     price: raw.price,
     zestimate: raw.zestimate,
     rent_zestimate: raw.rentZestimate,
@@ -162,9 +175,15 @@ export function registerPropertyTools(
   server.registerTool(
     'zillow_get_property',
     {
+      title: 'Get Zillow property details',
       description:
-        "Fetch a property's full Zillow record by zpid (e.g. 12345) or by homedetails URL. Returns address, price, Zestimate, beds/baths, square footage, year built, schools, and price history. Provide exactly one of zpid or url.",
-      annotations: { readOnlyHint: true },
+        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address, neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, and price history. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
+      annotations: {
+        title: 'Get Zillow property details',
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: {
         zpid: z
           .union([z.number().int().positive(), z.string()])

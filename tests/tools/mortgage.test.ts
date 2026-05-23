@@ -98,7 +98,23 @@ describe('computeMortgage', () => {
   it('rejects non-positive home_price', () => {
     expect(() =>
       computeMortgage({ home_price: 0, interest_rate: 5 })
-    ).toThrow();
+    ).toThrow(/home_price/);
+  });
+
+  it('rejects negative interest_rate', () => {
+    expect(() =>
+      computeMortgage({ home_price: 100_000, interest_rate: -1 })
+    ).toThrow(/interest_rate/);
+  });
+
+  it('rejects zero or negative loan_term_years', () => {
+    expect(() =>
+      computeMortgage({
+        home_price: 100_000,
+        interest_rate: 5,
+        loan_term_years: 0,
+      })
+    ).toThrow(/loan_term_years/);
   });
 });
 

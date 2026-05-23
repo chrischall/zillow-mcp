@@ -69,6 +69,43 @@ describe('findPropertyInPageProps', () => {
     });
     expect(property?.zpid).toBe(5);
   });
+
+  it('skips null entries in the cache', () => {
+    // Defensive against Zillow shipping the cache with sparse entries.
+    const cache = { x: null, y: { property: { zpid: 6 } } };
+    const property = findPropertyInPageProps({
+      gdpClientCache: JSON.stringify(cache),
+    });
+    expect(property?.zpid).toBe(6);
+  });
+
+  it('returns null when no entry has a property field', () => {
+    const cache = { x: { foo: 'bar' }, y: { baz: 'qux' } };
+    expect(
+      findPropertyInPageProps({ gdpClientCache: JSON.stringify(cache) })
+    ).toBeNull();
+  });
+
+  it('prefers Property:<zpid> keys over other entries that carry a property field', () => {
+    // Belt-and-braces: if iteration order ever puts a non-Property
+    // entry first, we should still pick the real property record.
+    const cache = {
+      ROOT_QUERY: { property: { zpid: 999 } }, // wrong shape, sorts first
+      'Property:42': { property: { zpid: 42 } },
+    };
+    const property = findPropertyInPageProps({
+      gdpClientCache: JSON.stringify(cache),
+    });
+    expect(property?.zpid).toBe(42);
+  });
+
+  it('falls back to any entry with a property field when no Property:<zpid> key exists', () => {
+    const cache = { ROOT_QUERY: { property: { zpid: 5 } } };
+    const property = findPropertyInPageProps({
+      gdpClientCache: JSON.stringify(cache),
+    });
+    expect(property?.zpid).toBe(5);
+  });
 });
 
 describe('zillow_get_property tool', () => {
@@ -124,6 +161,32 @@ describe('zillow_get_property tool', () => {
       url: 'https://www.zillow.com/homedetails/foo-bar/7_zpid/',
     });
     expect(mockFetchHtml.mock.calls[0][0]).toBe('/homedetails/foo-bar/7_zpid/');
+  });
+
+  it('accepts a bare path (URL.parse falls through to the path branch)', async () => {
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 8 }));
+    await harness.callTool('zillow_get_property', {
+      url: '/homedetails/foo/8_zpid/',
+    });
+    expect(mockFetchHtml.mock.calls[0][0]).toBe('/homedetails/foo/8_zpid/');
+  });
+
+  it('preserves a neighborhood from address', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 100,
+        address: {
+          streetAddress: '1 Main',
+          city: 'Brooklyn',
+          state: 'NY',
+          zipcode: '11215',
+          neighborhood: 'Park Slope',
+        },
+      })
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 100 });
+    const parsed = parseToolResult<{ neighborhood: string }>(result);
+    expect(parsed.neighborhood).toBe('Park Slope');
   });
 
   it('throws when neither zpid nor url is provided', async () => {

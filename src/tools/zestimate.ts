@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
+import { urlToPath } from '../url.js';
 import { findPropertyInPageProps } from './properties.js';
 
 /**
@@ -89,27 +90,53 @@ export function registerZestimateTools(
   server.registerTool(
     'zillow_get_zestimate_history',
     {
+      title: 'Get Zestimate history for a property',
       description:
-        "Historical Zestimate values for a property, by zpid. Returns a time series of {date, value, rent?} entries. Pulls from the same homedetails page as zillow_get_property — if you've already fetched the property, you have this data too.",
-      annotations: { readOnlyHint: true },
+        "Historical Zestimate values for a property by zpid or homedetails URL. Returns a time series of {date, value, rent?} entries (rent included when Zillow has a rent Zestimate for the property). Note: zillow_get_property returns only the *current* Zestimate as a scalar — call this tool when you need the trend. Read-only; safe to call repeatedly.",
+      annotations: {
+        title: 'Get Zestimate history for a property',
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: {
         zpid: z
           .union([z.number().int().positive(), z.string()])
-          .describe('Zillow Property ID'),
+          .optional()
+          .describe('Zillow Property ID. Provide either zpid or url.'),
+        url: z
+          .string()
+          .optional()
+          .describe(
+            'Zillow homedetails URL (or path). Provide either zpid or url.'
+          ),
       },
     },
-    async ({ zpid }) => {
-      const html = await client.fetchHtml(`/homedetails/${zpid}_zpid/`);
+    async ({ zpid, url }) => {
+      const path = url
+        ? urlToPath(url)
+        : zpid !== undefined
+          ? `/homedetails/${zpid}_zpid/`
+          : null;
+      if (!path) {
+        throw new Error(
+          'zillow_get_zestimate_history: must provide either zpid or url'
+        );
+      }
+      const html = await client.fetchHtml(path);
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);
       const property = findPropertyInPageProps(pageProps);
       if (!property) {
         throw new Error(
-          `Could not locate property data in __NEXT_DATA__ for zpid=${zpid}.`
+          `Could not locate property data in __NEXT_DATA__ at ${path}.`
         );
       }
       const series = extractZestimateHistory(property as RawPropertyWithCharts);
-      return textResult({ zpid: String(zpid), points: series });
+      return textResult({
+        zpid: String((property as { zpid?: number | string }).zpid ?? zpid ?? ''),
+        points: series,
+      });
     }
   );
 }

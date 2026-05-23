@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
+import { urlToPath } from '../url.js';
 
 /**
  * Zillow's market data lives on the Local Info / "home values" page,
@@ -66,20 +67,16 @@ function format(raw: RawMarketInfo) {
   };
 }
 
+/**
+ * Resolve a market-report path. Accepts a full URL or a slug under
+ * `/home-values/`. Plain slugs (`6181/brooklyn-ny/`) are normalized
+ * by prepending `/home-values/`.
+ */
 function pathFromInput(args: { region_path?: string; url?: string }): string {
-  if (args.url) {
-    try {
-      const u = new URL(args.url);
-      return `${u.pathname}${u.search}`;
-    } catch {
-      return args.url.startsWith('/') ? args.url : `/${args.url}`;
-    }
-  }
+  if (args.url) return urlToPath(args.url);
   if (args.region_path) {
-    const p = args.region_path.startsWith('/')
-      ? args.region_path
-      : `/${args.region_path}`;
-    return p.includes('/home-values/') ? p : `/home-values${p.startsWith('/') ? p : `/${p}`}`;
+    const p = urlToPath(args.region_path);
+    return p.includes('/home-values/') ? p : `/home-values${p}`;
   }
   throw new Error(
     'zillow_get_market_report: provide either region_path (e.g. "/home-values/6181/brooklyn-ny/") or url.'
@@ -93,9 +90,15 @@ export function registerMarketTools(
   server.registerTool(
     'zillow_get_market_report',
     {
+      title: 'Get Zillow market report for a region',
       description:
-        'Market report for a Zillow region: median sale/list/rent prices, days on market, inventory, Zillow Home Value Index (ZHVI). Provide either a region_path (e.g. "/home-values/6181/brooklyn-ny/") or a full Zillow home-values URL.',
-      annotations: { readOnlyHint: true },
+        'Market report for a Zillow region: median sale/list/rent prices, days on market, inventory, Zillow Home Value Index (ZHVI), year-over-year ZHVI change, and buyer/seller balance. Provide either a `region_path` (e.g. "/home-values/6181/brooklyn-ny/") or a full Zillow home-values URL. Read-only; safe to call repeatedly.',
+      annotations: {
+        title: 'Get Zillow market report for a region',
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: {
         region_path: z
           .string()
