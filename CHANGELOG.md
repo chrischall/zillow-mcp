@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/chrischall/zillow-mcp/compare/v0.2.1...v0.2.2) (2026-05-23)
+
+
+### Bug Fixes
+
+* **tools:** correct live Zillow endpoints + parse paths (v0.2.1 was DOA) ([#9](https://github.com/chrischall/zillow-mcp/issues/9)) ([f9cde33](https://github.com/chrischall/zillow-mcp/commit/f9cde33bbe17d1e8c63249317e178c245b7a8a20))
+
 ## [0.2.1](https://github.com/chrischall/zillow-mcp/compare/v0.2.0...v0.2.1) (2026-05-23)
 
 
