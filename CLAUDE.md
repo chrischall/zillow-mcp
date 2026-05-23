@@ -143,7 +143,7 @@ For every PR, apply exactly one label:
 | *(none / unmatched)*   | Other Changes            |
 | `ignore-for-release`   | Hidden from notes        |
 
-Open with `gh pr create --label <label>`, then `gh pr merge <num> --auto --merge`. Repo allows merge commits only — never `--squash`/`--rebase`.
+Open with `gh pr create --label <label>`, then `gh pr merge <num> --auto --squash`. Repo allows squash-merge only — never `--merge`/`--rebase`.
 
 ## What to not do
 
