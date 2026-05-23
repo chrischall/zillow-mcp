@@ -90,6 +90,16 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 - **Saved-data field names drift.** `pageProps.savedSearches` was renamed to `userSavedSearches` in at least one redeploy. `src/tools/saved.ts::findSavedSearches` checks the canonical name first, then walks all array fields for a shape-match (`searchQueryState` or `filterState` in the first element).
 - **Sign-in detection.** `src/client.ts::throwIfSignInPage` flags `/user/login` redirects, `?login=true` URL params, and the DataDome captcha interstitial (body matches `captcha-delivery` AND body < 80KB — the guard avoids matching the same string in large SSR pages that mention it in passing). We deliberately do NOT body-match `/user/login` since every signed-in Zillow page has a "Sign in" link in its nav that would false-positive.
 
+## Publishing constraints
+
+The MCP Registry's [server.schema.json](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json) caps `server.json`'s `description` at **100 characters**. Values over that fail `mcp-publisher publish` with HTTP 422 (`validation failed: expected length <= 100, location: body.description`). The other description fields (`manifest.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) have no published length constraint and can stay longer.
+
+Sanity-check before committing a description change:
+
+```bash
+jq -r '.description | length' server.json
+```
+
 ## Versioning
 
 Version appears in EIGHT places — all must match:
