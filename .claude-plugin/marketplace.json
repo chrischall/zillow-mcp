@@ -1,0 +1,36 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "zillow-mcp",
+  "owner": {
+    "name": "Chris Hall",
+    "email": "chris.c.hall@gmail.com"
+  },
+  "metadata": {
+    "description": "MCP server for Zillow — search listings, fetch property details, Zestimate history, saved searches & homes, market reports. Routes through the user's signed-in zillow.com tab via the fetchproxy browser extension to dodge bot detection.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "zillow-mcp",
+      "displayName": "Zillow",
+      "source": "./",
+      "description": "MCP server for Zillow — search listings, get property details, Zestimate history, saved searches & homes, market reports",
+      "version": "0.1.0",
+      "author": {
+        "name": "Chris Hall"
+      },
+      "homepage": "https://github.com/chrischall/zillow-mcp",
+      "repository": "https://github.com/chrischall/zillow-mcp",
+      "license": "MIT",
+      "keywords": [
+        "zillow",
+        "real-estate",
+        "property",
+        "zestimate",
+        "housing",
+        "mcp"
+      ],
+      "category": "productivity"
+    }
+  ]
+}

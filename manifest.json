@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/dxt/main/dist/mcpb-manifest.schema.json",
+  "manifest_version": "0.3",
+  "name": "zillow-mcp",
+  "display_name": "Zillow",
+  "version": "0.1.0",
+  "description": "Zillow real-estate access for Claude — search listings, fetch property details, Zestimate history, saved searches & homes, market reports",
+  "author": {
+    "name": "Chris Chall",
+    "email": "chris.c.hall@gmail.com",
+    "url": "https://github.com/chrischall"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chrischall/zillow-mcp"
+  },
+  "homepage": "https://github.com/chrischall/zillow-mcp",
+  "support": "https://github.com/chrischall/zillow-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "zillow",
+    "real-estate",
+    "property",
+    "zestimate",
+    "housing"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/bundle.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/bundle.js"]
+    }
+  },
+  "tools": [
+    { "name": "zillow_search_properties", "description": "Search Zillow listings by location, filters" },
+    { "name": "zillow_get_property", "description": "Fetch a property's full details by zpid or homedetails URL" },
+    { "name": "zillow_get_zestimate_history", "description": "Historical Zestimate values for a property" },
+    { "name": "zillow_get_saved_searches", "description": "List the signed-in user's saved searches" },
+    { "name": "zillow_get_saved_homes", "description": "List the signed-in user's saved (favorited) homes" },
+    { "name": "zillow_get_market_report", "description": "Market report for a region (median price, days on market, etc.)" },
+    { "name": "zillow_calculate_mortgage", "description": "Local mortgage-payment calculator (principal, interest, taxes, insurance)" }
+  ]
+}

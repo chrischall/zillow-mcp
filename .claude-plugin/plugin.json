@@ -1,0 +1,23 @@
+{
+  "name": "zillow-mcp",
+  "displayName": "Zillow",
+  "version": "0.1.0",
+  "description": "Zillow real-estate access for Claude — search listings, get property details, Zestimate history, your saved searches & homes, market reports",
+  "author": {
+    "name": "Chris Hall",
+    "email": "chris.c.hall@gmail.com"
+  },
+  "homepage": "https://github.com/chrischall/zillow-mcp",
+  "repository": "https://github.com/chrischall/zillow-mcp",
+  "license": "MIT",
+  "keywords": [
+    "zillow",
+    "real-estate",
+    "property",
+    "zestimate",
+    "housing",
+    "mcp"
+  ],
+  "skills": "./SKILL.md",
+  "mcp": "./.mcp.json"
+}
