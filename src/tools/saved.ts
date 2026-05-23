@@ -10,10 +10,16 @@ import { findArrayByShape } from '../page-props.js';
  * what the *signed-in user* has saved, because Bridge is MLS-partnership-
  * scoped, not user-scoped.
  *
- * Both pages are SSR Next.js with full state embedded in __NEXT_DATA__.
- * The exact field names drift between Zillow deployments, so we use
- * `findArrayByShape` to try a list of well-known keys first and then
- * walk the pageProps for a shape-match if none hit.
+ * Both pages are SSR Next.js with full state embedded in __NEXT_DATA__:
+ *   - Saved searches: GET `/myzillow/SavedSearches` (capital S, no
+ *     trailing slash). pageProps.savedSearches is the array.
+ *   - Saved homes:    GET `/myzillow/favorites`. pageProps.collectionsResponse
+ *     is an array of collections; we flatten homes out of each.
+ *
+ * URL paths and field names verified via live page inspection
+ * (2026-05-23). The page-shape may still drift between deploys, so
+ * `findArrayByShape` is used to try well-known keys first and fall
+ * back to a shape walk.
  */
 
 interface RawSavedSearch {
@@ -49,15 +55,26 @@ interface RawSavedHome {
   savedAt?: string;
 }
 
+interface RawCollection {
+  id?: string | number;
+  name?: string;
+  homes?: RawSavedHome[];
+  properties?: RawSavedHome[];
+  items?: RawSavedHome[];
+}
+
 /** Direct field names Zillow has used for saved-search arrays. */
 const SAVED_SEARCH_KEYS = ['savedSearches', 'userSavedSearches'] as const;
 
-/** Direct field names Zillow has used for saved-homes arrays. */
+/**
+ * Direct field names Zillow has used for saved-homes arrays at
+ * the top level of pageProps. The 2026-05 favorites page wraps them
+ * inside `collectionsResponse` instead (handled separately below).
+ */
 const SAVED_HOME_KEYS = ['savedHomes', 'userSavedHomes', 'favoriteHomes'] as const;
 
 /**
- * Pluck the saved-searches array out of a parsed pageProps blob. See the
- * module docstring for why this is defensive.
+ * Pluck the saved-searches array out of a parsed pageProps blob.
  */
 export function findSavedSearches(
   pageProps: Record<string, unknown>
@@ -70,11 +87,31 @@ export function findSavedSearches(
 }
 
 /**
- * Pluck the saved-homes array out of a parsed pageProps blob.
+ * Pluck the saved-homes array out of a parsed pageProps blob. The
+ * current Zillow favorites page nests homes inside collections
+ * (`pageProps.collectionsResponse: Collection[]`), each of which may
+ * carry a `homes` / `properties` / `items` array of home records. We
+ * flatten across collections. Falls back to the older top-level
+ * `savedHomes` / `userSavedHomes` / `favoriteHomes` shapes for
+ * backward-compat.
  */
 export function findSavedHomes(
   pageProps: Record<string, unknown>
 ): RawSavedHome[] {
+  // 1. New shape (2026-05): collectionsResponse[].homes
+  const collections = pageProps.collectionsResponse;
+  if (Array.isArray(collections)) {
+    const flat: RawSavedHome[] = [];
+    for (const c of collections as RawCollection[]) {
+      if (Array.isArray(c.homes)) flat.push(...c.homes);
+      else if (Array.isArray(c.properties)) flat.push(...c.properties);
+      else if (Array.isArray(c.items)) flat.push(...c.items);
+    }
+    if (flat.length > 0) return flat;
+    // Collections present but empty (user has no saves) — return [].
+    if (collections.length > 0) return [];
+  }
+  // 2. Older shapes (top-level array of homes)
   return findArrayByShape<RawSavedHome>(
     pageProps,
     SAVED_HOME_KEYS,
@@ -136,7 +173,8 @@ export function registerSavedTools(
       inputSchema: {},
     },
     async () => {
-      const html = await client.fetchHtml('/user/savedSearches/');
+      // Note: path is case-sensitive (Zillow's web app uses capital S)
+      const html = await client.fetchHtml('/myzillow/SavedSearches');
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);
       const searches = findSavedSearches(pageProps);
@@ -149,7 +187,7 @@ export function registerSavedTools(
     {
       title: 'Get my saved (favorited) Zillow homes',
       description:
-        "The signed-in user's saved (favorited) homes on zillow.com. Returns address, price, Zestimate, status, and when each home was saved. Requires the user to be signed in. Read-only; safe to call repeatedly.",
+        "The signed-in user's saved (favorited) homes on zillow.com, flattened across all of the user's collections. Returns address, price, Zestimate, status, and when each home was saved. Requires the user to be signed in. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get my saved (favorited) Zillow homes',
         readOnlyHint: true,
@@ -159,7 +197,7 @@ export function registerSavedTools(
       inputSchema: {},
     },
     async () => {
-      const html = await client.fetchHtml('/myzillow/favorites/');
+      const html = await client.fetchHtml('/myzillow/favorites');
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);
       const homes = findSavedHomes(pageProps);

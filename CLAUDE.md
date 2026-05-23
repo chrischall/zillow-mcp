@@ -12,11 +12,11 @@ This is a "Pattern A" fetchproxy MCP (every call through fetchproxy), not "Patte
 
 | Tool | File | Endpoint | Kind |
 | --- | --- | --- | --- |
-| `zillow_search_properties` | `tools/search.ts` | POST `/async-create-search-page-state/` | read |
+| `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
 | `zillow_get_property` | `tools/properties.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
 | `zillow_get_zestimate_history` | `tools/zestimate.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
-| `zillow_get_saved_searches` | `tools/saved.ts` | GET `/user/savedSearches/` SSR | read (auth) |
-| `zillow_get_saved_homes` | `tools/saved.ts` | GET `/myzillow/favorites/` SSR | read (auth) |
+| `zillow_get_saved_searches` | `tools/saved.ts` | GET `/myzillow/SavedSearches` SSR | read (auth) |
+| `zillow_get_saved_homes` | `tools/saved.ts` | GET `/myzillow/favorites` SSR (collectionsResponse[].homes) | read (auth) |
 | `zillow_get_market_report` | `tools/market.ts` | GET `/home-values/<region>/` SSR | read |
 | `zillow_calculate_mortgage` | `tools/mortgage.ts` | (local; no network) | read |
 

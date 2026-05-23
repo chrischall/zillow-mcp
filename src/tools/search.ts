@@ -2,13 +2,20 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
+import { extractNextData, getPageProps } from '../next-data.js';
 
 /**
- * Zillow's React app calls `POST /async-create-search-page-state` with a
- * JSON body containing a `searchQueryState` object that mirrors the URL
- * query state. The response is JSON with cat1.searchResults.listResults
- * (and mapResults). We construct a minimal valid searchQueryState here
- * — Zillow tolerates missing fields and fills sensible defaults.
+ * Zillow's search page is SSR Next.js. We GET
+ * `/homes/<encoded-location>_rb/?searchQueryState=<URI-encoded JSON>`
+ * and parse `pageProps.searchPageState.cat1.searchResults.listResults`
+ * from the embedded `__NEXT_DATA__`.
+ *
+ * Why SSR (not the async POST API): live diagnostic showed
+ * `/async-create-search-page-state/` returns 404 in current Zillow, and
+ * the SSR page already embeds the full 40+ results we'd otherwise need
+ * to fetch. `?searchQueryState=` lets us apply filters server-side, so
+ * we get filtered results in one round-trip without needing to call
+ * any private JSON API.
  */
 
 type HomeType =
@@ -131,7 +138,12 @@ export interface SearchInput {
   limit?: number;
 }
 
-export function buildSearchBody(input: SearchInput): Record<string, unknown> {
+/**
+ * Construct the `searchQueryState` object that Zillow's SSR page reads
+ * from the `?searchQueryState=` query param. Mirrors the shape Zillow's
+ * own web app uses (verified via live page inspection 2026-05-23).
+ */
+export function buildSearchQueryState(input: SearchInput): Record<string, unknown> {
   const filterState: Record<string, unknown> = {};
   switch (input.status ?? 'for_sale') {
     case 'for_rent':
@@ -174,16 +186,27 @@ export function buildSearchBody(input: SearchInput): Record<string, unknown> {
     }
   }
   return {
-    searchQueryState: {
-      usersSearchTerm: input.location,
-      filterState,
-      isMapVisible: false,
-      isListVisible: true,
-    },
-    wants: { cat1: ['listResults'] },
-    requestId: 1,
-    isDebugRequest: false,
+    usersSearchTerm: input.location,
+    filterState,
+    isListVisible: true,
+    isMapVisible: false,
   };
+}
+
+/**
+ * Build the search URL. Uses Zillow's generic `/homes/<freetext>_rb/`
+ * search-by-text endpoint which accepts any human-readable location
+ * (city, ZIP, neighborhood, address) and resolves it server-side. The
+ * filter state rides as a `?searchQueryState=` query param.
+ */
+export function buildSearchPath(input: SearchInput): string {
+  const sqs = buildSearchQueryState(input);
+  // encodeURIComponent for the freetext segment; replace ' ' with '-' is
+  // Zillow's own slug style but encodeURIComponent works too — Zillow
+  // accepts both. Encoded form is safer for international characters.
+  const slug = encodeURIComponent(input.location.trim());
+  const qs = encodeURIComponent(JSON.stringify(sqs));
+  return `/homes/${slug}_rb/?searchQueryState=${qs}`;
 }
 
 export function registerSearchTools(
@@ -239,11 +262,14 @@ export function registerSearchTools(
       },
     },
     async (input) => {
-      const body = buildSearchBody(input);
-      const data = await client.fetchJson<{
-        cat1?: { searchResults?: { listResults?: RawListing[] } };
-      }>('/async-create-search-page-state/', { method: 'POST', body });
-      const raw = data.cat1?.searchResults?.listResults ?? [];
+      const path = buildSearchPath(input);
+      const html = await client.fetchHtml(path);
+      const nextData = extractNextData(html);
+      const pageProps = getPageProps(nextData);
+      const sps = pageProps.searchPageState as
+        | { cat1?: { searchResults?: { listResults?: RawListing[] } } }
+        | undefined;
+      const raw = sps?.cat1?.searchResults?.listResults ?? [];
       const limit = input.limit ?? 40;
       const formatted = raw
         .map(formatListing)

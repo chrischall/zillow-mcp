@@ -102,6 +102,53 @@ describe('findSavedHomes', () => {
     expect(findSavedHomes({ blob: [{ zpid: 1 }] })).toEqual([]);
     expect(findSavedHomes({ blob: [{ hdpUrl: '/x' }] })).toEqual([]);
   });
+
+  it('flattens homes across collectionsResponse[].homes (current Zillow shape)', () => {
+    const collectionsResponse = [
+      {
+        id: 'col-1',
+        name: 'Default',
+        homes: [
+          { zpid: 1, hdpUrl: '/homedetails/1_zpid/' },
+          { zpid: 2, hdpUrl: '/homedetails/2_zpid/' },
+        ],
+      },
+      {
+        id: 'col-2',
+        name: 'Beach houses',
+        homes: [{ zpid: 3, hdpUrl: '/homedetails/3_zpid/' }],
+      },
+    ];
+    const result = findSavedHomes({ collectionsResponse });
+    expect(result.map((h) => h.zpid)).toEqual([1, 2, 3]);
+  });
+
+  it('accepts `properties` and `items` as alternate keys inside a collection', () => {
+    const result = findSavedHomes({
+      collectionsResponse: [
+        { properties: [{ zpid: 10, hdpUrl: '/x' }] },
+        { items: [{ zpid: 20, hdpUrl: '/y' }] },
+      ],
+    });
+    expect(result.map((h) => h.zpid)).toEqual([10, 20]);
+  });
+
+  it('returns [] when collectionsResponse exists but every collection is empty', () => {
+    expect(
+      findSavedHomes({
+        collectionsResponse: [{ id: 'c', name: 'Empty', homes: [] }],
+      })
+    ).toEqual([]);
+  });
+
+  it('returns [] when collectionsResponse is an empty array (user has no collections)', () => {
+    expect(findSavedHomes({ collectionsResponse: [] })).toEqual([]);
+  });
+
+  it('falls back to top-level savedHomes shape when collectionsResponse is absent', () => {
+    const homes = [{ zpid: 7, hdpUrl: '/old' }];
+    expect(findSavedHomes({ savedHomes: homes })).toBe(homes);
+  });
 });
 
 describe('saved-tool formatting via the MCP boundary', () => {
@@ -173,7 +220,7 @@ describe('saved tools', () => {
     );
 
     const result = await harness.callTool('zillow_get_saved_searches', {});
-    expect(mockFetchHtml.mock.calls[0][0]).toBe('/user/savedSearches/');
+    expect(mockFetchHtml.mock.calls[0][0]).toBe('/myzillow/SavedSearches');
     const parsed = parseToolResult<Array<{ id: string; new_count: number }>>(
       result
     );
@@ -197,7 +244,7 @@ describe('saved tools', () => {
       })
     );
     const result = await harness.callTool('zillow_get_saved_homes', {});
-    expect(mockFetchHtml.mock.calls[0][0]).toBe('/myzillow/favorites/');
+    expect(mockFetchHtml.mock.calls[0][0]).toBe('/myzillow/favorites');
     const parsed = parseToolResult<Array<{ zpid: string; price: number; url: string }>>(
       result
     );
