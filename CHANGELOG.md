@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/chrischall/zillow-mcp/compare/v0.3.0...v0.4.0) (2026-05-24)
+
+
+### Features
+
+* add zillow_get_property_photos tool ([#15](https://github.com/chrischall/zillow-mcp/issues/15)) ([f0c57b0](https://github.com/chrischall/zillow-mcp/commit/f0c57b0c25918504318de42d09eeb77a25adb92b))
+
 ## [0.3.0](https://github.com/chrischall/zillow-mcp/compare/v0.2.2...v0.3.0) (2026-05-24)
 
 
