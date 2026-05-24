@@ -19,9 +19,15 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | --- | --- | :---: |
 | `zillow_search_properties` | Search listings by location, status, price band, beds/baths, home type | |
 | `zillow_get_property` | Full record for a zpid (price, Zestimate, beds, schools, neighborhood, price history) | |
+| `zillow_get_property_photos` | Full photo gallery for a property — every image embedded in the homedetails page with multi-width jpeg + webp variants and captions | |
 | `zillow_get_zestimate_history` | Time series of Zestimate values (and rent Zestimate where available) | |
+| `zillow_get_price_history` | Listing history (Listed/Sold/Pending/etc.) with price + days on market | |
+| `zillow_get_tax_history` | Annual tax-roll history — taxes paid and assessed value year-over-year | |
+| `zillow_compare_properties` | Side-by-side comparison of up to 12 properties, with an aligned summary table | |
+| `zillow_calculate_affordability` | Local affordability calculator — max purchase price from income/DTI/rates | |
+| `zillow_calculate_rent_vs_buy` | Local rent-vs-buy break-even with appreciation + opportunity cost | |
 | `zillow_get_saved_searches` | Your saved searches with new-listing counts and notification frequency | ✓ |
-| `zillow_get_saved_homes` | Your favorited homes with current price + Zestimate | ✓ |
+| `zillow_get_saved_homes` | Your favorited homes with current price + Zestimate + primary photo | ✓ |
 | `zillow_get_market_report` | Median sale/list/rent, days on market, inventory, ZHVI for a region | |
 | `zillow_calculate_mortgage` | Local PITI calculator — principal+interest, taxes, insurance, HOA, PMI (no network) | |
 
