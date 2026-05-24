@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import {
+  LocationNotResolved,
   buildSearchPath,
   buildSearchQueryState,
   formatListing,
+  listingsMatchLocation,
+  locationTokens,
   registerSearchTools,
+  resolveLocation,
   type RawListing,
 } from '../../src/tools/search.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
@@ -18,10 +22,126 @@ afterAll(async () => {
   if (harness) await harness.close();
 });
 
+/** Build a full SSR page response — used by both resolve + filter steps. */
+function htmlWithState(args: {
+  regionSelection?: Array<{ regionId: number; regionType: number }>;
+  mapBounds?: { north: number; south: number; east: number; west: number };
+  listResults?: RawListing[];
+  noSearchPageState?: boolean;
+}): string {
+  const sps: Record<string, unknown> = {};
+  if (!args.noSearchPageState) {
+    sps.queryState = {
+      regionSelection: args.regionSelection,
+      mapBounds: args.mapBounds,
+    };
+    sps.cat1 = { searchResults: { listResults: args.listResults ?? [] } };
+  }
+  const nextData = {
+    props: {
+      pageProps: args.noSearchPageState ? {} : { searchPageState: sps },
+    },
+  };
+  return `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+    nextData
+  )}</script>`;
+}
+
+/**
+ * Build a Lake Lure listing — used wherever we want a result that
+ * matches the "Lake Lure, NC 28746" input.
+ */
+function lakeLureListing(zpid: number): RawListing {
+  return {
+    hdpData: {
+      homeInfo: {
+        zpid,
+        streetAddress: `${zpid} Wambli Pass`,
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      },
+    },
+  };
+}
+
+/** A Brooklyn listing — the canonical "wrong region" fallback. */
+function brooklynListing(zpid: number): RawListing {
+  return {
+    hdpData: {
+      homeInfo: {
+        zpid,
+        streetAddress: `${zpid} 86th St`,
+        city: 'Brooklyn',
+        state: 'NY',
+        zipcode: '11214',
+      },
+    },
+  };
+}
+
+describe('locationTokens', () => {
+  it('splits on non-alphanumerics, drops short tokens, lowercases', () => {
+    expect(locationTokens('Lake Lure, NC 28746')).toEqual([
+      'lake',
+      'lure',
+      'nc',
+      '28746',
+    ]);
+  });
+});
+
+describe('listingsMatchLocation', () => {
+  it('returns true when any listing address contains a non-state input token', () => {
+    expect(
+      listingsMatchLocation(
+        [lakeLureListing(1)],
+        locationTokens('Lake Lure, NC 28746')
+      )
+    ).toBe(true);
+  });
+
+  it('returns false on Brooklyn fallback for a Lake Lure query', () => {
+    // Brooklyn results share only the state-code "ny" with the input's
+    // discriminating tokens — and state codes are excluded from the
+    // match set on purpose.
+    expect(
+      listingsMatchLocation(
+        [brooklynListing(1), brooklynListing(2), brooklynListing(3)],
+        locationTokens('Lake Lure, NC 28746')
+      )
+    ).toBe(false);
+  });
+
+  it('returns true when the only token is a state and the listing is in that state', () => {
+    // No discriminating tokens after dropping the state — return true
+    // (we don't have evidence of a mismatch).
+    expect(listingsMatchLocation([brooklynListing(1)], ['ny'])).toBe(true);
+  });
+});
+
 describe('buildSearchQueryState', () => {
   it('puts the location into usersSearchTerm', () => {
     const sqs = buildSearchQueryState({ location: 'Brooklyn, NY' });
     expect(sqs.usersSearchTerm).toBe('Brooklyn, NY');
+  });
+
+  it('pins regionSelection + mapBounds when a region is provided', () => {
+    const sqs = buildSearchQueryState(
+      { location: 'Lake Lure, NC' },
+      {
+        regionSelection: [{ regionId: 70190, regionType: 7 }],
+        mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+      }
+    );
+    expect(sqs.regionSelection).toEqual([{ regionId: 70190, regionType: 7 }]);
+    expect(sqs.mapBounds).toBeDefined();
+  });
+
+  it('omits regionSelection/mapBounds when no region is provided', () => {
+    const sqs = buildSearchQueryState({ location: 'x' });
+    expect(sqs.regionSelection).toBeUndefined();
+    expect(sqs.mapBounds).toBeUndefined();
   });
 
   it('encodes price filters', () => {
@@ -73,25 +193,25 @@ describe('buildSearchQueryState', () => {
 });
 
 describe('buildSearchPath', () => {
-  it('builds /homes/<slug>_rb/?searchQueryState=<encoded>', () => {
-    const path = buildSearchPath({ location: 'Brooklyn, NY' });
+  it('builds the bare /homes/<slug>_rb/ path when no sqs is given', () => {
+    expect(buildSearchPath('Brooklyn, NY')).toBe('/homes/Brooklyn%2C%20NY_rb/');
+  });
+
+  it('appends searchQueryState when sqs is provided', () => {
+    const path = buildSearchPath('Brooklyn, NY', { foo: 1 });
     expect(path).toMatch(/^\/homes\/Brooklyn%2C%20NY_rb\/\?searchQueryState=/);
-    // Decode and verify the payload
     const sqsRaw = path.split('searchQueryState=')[1]!;
-    const sqs = JSON.parse(decodeURIComponent(sqsRaw));
-    expect(sqs.usersSearchTerm).toBe('Brooklyn, NY');
-    expect(sqs.isListVisible).toBe(true);
+    expect(JSON.parse(decodeURIComponent(sqsRaw))).toEqual({ foo: 1 });
   });
 
   it('trims whitespace from the location slug', () => {
-    const path = buildSearchPath({ location: '  Brooklyn  ' });
-    expect(path).toMatch(/^\/homes\/Brooklyn_rb\//);
+    expect(buildSearchPath('  Brooklyn  ')).toBe('/homes/Brooklyn_rb/');
   });
 });
 
 describe('formatListing', () => {
   it('extracts the canonical fields from hdpData.homeInfo', () => {
-    const raw: RawListing = {
+    const formatted = formatListing({
       hdpData: {
         homeInfo: {
           zpid: 99999,
@@ -113,8 +233,7 @@ describe('formatListing', () => {
       },
       detailUrl: '/homedetails/123-main-st/99999_zpid/',
       imgSrc: 'https://photos.zillowstatic.com/x.jpg',
-    };
-    const formatted = formatListing(raw);
+    });
     expect(formatted).toMatchObject({
       zpid: '99999',
       price: 1_250_000,
@@ -129,124 +248,199 @@ describe('formatListing', () => {
     });
   });
 
-  it('falls back to top-level fields when hdpData is absent', () => {
-    const raw: RawListing = {
-      zpid: 42,
-      address: '1 First Ave',
-      beds: 1,
-      baths: 1,
-      unformattedPrice: 500_000,
-    };
-    const formatted = formatListing(raw);
-    expect(formatted?.zpid).toBe('42');
-    expect(formatted?.price).toBe(500_000);
-    expect(formatted?.url).toBe('https://www.zillow.com/homedetails/42_zpid/');
-  });
-
   it('returns null when zpid is missing entirely', () => {
     expect(formatListing({} as RawListing)).toBeNull();
   });
 
   it('preserves absolute detailUrl', () => {
-    const formatted = formatListing({
+    const f = formatListing({
       zpid: 7,
       detailUrl: 'https://www.zillow.com/homedetails/x/7_zpid/',
     });
-    expect(formatted?.url).toBe('https://www.zillow.com/homedetails/x/7_zpid/');
+    expect(f?.url).toBe('https://www.zillow.com/homedetails/x/7_zpid/');
   });
 });
 
-function htmlWithResults(listResults: RawListing[]): string {
-  const nextData = {
-    props: {
-      pageProps: {
-        searchPageState: { cat1: { searchResults: { listResults } } },
-      },
-    },
+describe('resolveLocation', () => {
+  const VALID_REGION = {
+    regionSelection: [{ regionId: 70190, regionType: 7 }],
+    mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
   };
-  return `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
-    nextData
-  )}</script>`;
-}
 
-describe('zillow_search_properties tool', () => {
+  it('returns regionSelection + mapBounds when the geocoder pins a region', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [lakeLureListing(1), lakeLureListing(2)],
+      })
+    );
+    const region = await resolveLocation(mockClient, 'Lake Lure, NC 28746');
+    expect(region.regionSelection).toEqual(VALID_REGION.regionSelection);
+    expect(region.mapBounds).toEqual(VALID_REGION.mapBounds);
+  });
+
+  it('throws LocationNotResolved when regionSelection is empty', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({ regionSelection: [], listResults: [] })
+    );
+    await expect(
+      resolveLocation(mockClient, 'asdfghjkl')
+    ).rejects.toBeInstanceOf(LocationNotResolved);
+  });
+
+  it('throws LocationNotResolved when Zillow silently falls back to a different region', async () => {
+    // The classic Brooklyn-fallback case: Zillow pinned a region, but the
+    // returned listings are nowhere near the query.
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: [{ regionId: 37607, regionType: 17 }], // Brooklyn
+        mapBounds: { north: 40.8, south: 40.5, east: -73.8, west: -74.0 },
+        listResults: [brooklynListing(1), brooklynListing(2), brooklynListing(3)],
+      })
+    );
+    await expect(
+      resolveLocation(mockClient, 'Lake Lure, NC 28746')
+    ).rejects.toThrow(/silently fell back to Brooklyn/);
+  });
+
+  it('accepts a valid resolution that returns zero listings (rural ZIP with no inventory)', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [],
+      })
+    );
+    await expect(
+      resolveLocation(mockClient, 'Lake Lure, NC 28746')
+    ).resolves.toBeDefined();
+  });
+
+  it('throws when the page has no searchPageState at all', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({ noSearchPageState: true })
+    );
+    await expect(
+      resolveLocation(mockClient, 'x')
+    ).rejects.toBeInstanceOf(LocationNotResolved);
+  });
+});
+
+describe('zillow_search_properties tool (two-step resolve + filter)', () => {
   it('setup', async () => {
     harness = await createTestHarness((server) =>
       registerSearchTools(server, mockClient)
     );
   });
 
-  it('fetches /homes/<slug>_rb/ and parses searchPageState.cat1.searchResults', async () => {
-    mockFetchHtml.mockResolvedValue(
-      htmlWithResults([
-        {
-          hdpData: {
-            homeInfo: {
-              zpid: 1,
-              streetAddress: '1 Main',
-              city: 'Brooklyn',
-              state: 'NY',
-              zipcode: '11215',
-              price: 100,
-              bedrooms: 2,
-              bathrooms: 1,
-            },
-          },
-        },
-        {
-          hdpData: {
-            homeInfo: {
-              zpid: 2,
-              streetAddress: '2 Main',
-              city: 'Brooklyn',
-              state: 'NY',
-              zipcode: '11215',
-              price: 200,
-            },
-          },
-        },
-      ])
-    );
+  const VALID_REGION = {
+    regionSelection: [{ regionId: 70190, regionType: 7 }],
+    mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+  };
 
+  it('resolves location first (bare URL), then refetches with region pinned + filters', async () => {
+    // Step 1: resolve — no qs in URL
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [lakeLureListing(1)],
+      })
+    );
+    // Step 2: filtered — qs with regionSelection + filters
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [lakeLureListing(1), lakeLureListing(2)],
+      })
+    );
     const result = await harness.callTool('zillow_search_properties', {
-      location: 'Brooklyn, NY',
-      price_min: 100_000,
+      location: 'Lake Lure, NC 28746',
+      beds_min: 3,
+      price_min: 500_000,
+      price_max: 1_100_000,
     });
     expect(result.isError).toBeFalsy();
-
-    const calledPath = mockFetchHtml.mock.calls[0][0] as string;
-    expect(calledPath).toMatch(/^\/homes\/Brooklyn%2C%20NY_rb\/\?searchQueryState=/);
-    // Verify the filter rode along in the query state
-    const sqsRaw = calledPath.split('searchQueryState=')[1]!;
-    const sqs = JSON.parse(decodeURIComponent(sqsRaw));
-    expect(sqs.filterState.price).toEqual({ min: 100_000 });
+    expect(mockFetchHtml).toHaveBeenCalledTimes(2);
+    // Step 1 path: bare
+    expect(mockFetchHtml.mock.calls[0][0]).toBe(
+      '/homes/Lake%20Lure%2C%20NC%2028746_rb/'
+    );
+    // Step 2 path: with sqs that pins regionSelection
+    const step2Path = mockFetchHtml.mock.calls[1][0] as string;
+    expect(step2Path).toMatch(/searchQueryState=/);
+    const sqs = JSON.parse(decodeURIComponent(step2Path.split('searchQueryState=')[1]!));
+    expect(sqs.regionSelection).toEqual(VALID_REGION.regionSelection);
+    expect(sqs.mapBounds).toEqual(VALID_REGION.mapBounds);
+    expect(sqs.filterState.price).toEqual({ min: 500_000, max: 1_100_000 });
+    expect(sqs.filterState.beds).toEqual({ min: 3 });
 
     const parsed = parseToolResult<Array<{ zpid: string }>>(result);
     expect(parsed.map((p) => p.zpid)).toEqual(['1', '2']);
   });
 
-  it('respects limit', async () => {
-    mockFetchHtml.mockResolvedValue(
-      htmlWithResults(
-        Array.from({ length: 10 }, (_, i) => ({
-          hdpData: { homeInfo: { zpid: i + 1 } },
-        }))
-      )
+  it('throws LocationNotResolved when the resolve step detects a silent fallback', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: [{ regionId: 37607, regionType: 17 }],
+        mapBounds: { north: 40.8, south: 40.5, east: -73.8, west: -74.0 },
+        listResults: [brooklynListing(1), brooklynListing(2), brooklynListing(3)],
+      })
     );
     const result = await harness.callTool('zillow_search_properties', {
-      location: 'x',
+      location: 'Lake Lure, NC 28746',
+    });
+    expect(result.isError).toBeTruthy();
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/could not resolve location.*Lake Lure/i);
+    expect(text).toMatch(/silently fell back/i);
+    // Only the resolve fetch fired — we bailed before step 2.
+    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
+  });
+
+  it('respects limit on step 2 results', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [lakeLureListing(1)],
+      })
+    );
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: Array.from({ length: 10 }, (_, i) => lakeLureListing(i + 1)),
+      })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC',
       limit: 3,
     });
     const parsed = parseToolResult<unknown[]>(result);
     expect(parsed).toHaveLength(3);
   });
 
-  it('returns [] when the SSR page has no results array', async () => {
-    mockFetchHtml.mockResolvedValue(
-      '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{}}}</script>'
+  it('returns [] when the filter step legitimately has no matches in a resolved region', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [lakeLureListing(1)],
+      })
+    );
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: VALID_REGION.regionSelection,
+        mapBounds: VALID_REGION.mapBounds,
+        listResults: [],
+      })
     );
     const result = await harness.callTool('zillow_search_properties', {
-      location: 'nowhere',
+      location: 'Lake Lure, NC',
+      price_max: 1,
     });
     const parsed = parseToolResult<unknown[]>(result);
     expect(parsed).toEqual([]);

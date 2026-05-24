@@ -141,17 +141,54 @@ export function findPropertyInPageProps(pageProps: Record<string, unknown>): Raw
   return null;
 }
 
+export class InvalidPropertyUrlError extends Error {
+  constructor(url: string) {
+    super(
+      `Zillow property URL "${url}" doesn't contain a zpid. ` +
+        `Zillow homedetails URLs end with "<zpid>_zpid/" (e.g. ` +
+        `"https://www.zillow.com/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746/12345_zpid/"). ` +
+        `Slug-only URLs (no _zpid suffix) redirect to Zillow's generic search page and ` +
+        `won't resolve to a property. Pass the zpid directly via the \`zpid\` param, or ` +
+        `find the zpid first via \`zillow_search_properties\`.`
+    );
+    this.name = 'InvalidPropertyUrlError';
+  }
+}
+
+/**
+ * Extract a zpid token from a Zillow homedetails URL or path. Zillow's
+ * canonical homedetails URL ends with `<zpid>_zpid/`; slug-only URLs
+ * (e.g. /homedetails/268-Mallard-Rd-Lake-Lure-NC-28746) silently
+ * redirect to the generic search page and don't resolve. Returns the
+ * zpid as a string when one is present, null otherwise.
+ */
+export function extractZpidFromUrl(url: string): string | null {
+  // Matches both /homedetails/<slug>/<zpid>_zpid/ and bare /<zpid>_zpid/.
+  const m = /\/(\d+)_zpid(?:\/|$)/.exec(url);
+  return m ? m[1] : null;
+}
+
 /**
  * Resolve the homedetails path. Accepts either a numeric zpid (we build
  * the bare canonical path `/homedetails/<zpid>_zpid/`, which Zillow 302s
- * to the slugged version) or a full URL/path (reduced via `urlToPath`).
+ * to the slugged version) or a full URL/path containing `<zpid>_zpid`
+ * (reduced via `urlToPath`).
+ *
+ * Throws `InvalidPropertyUrlError` for URLs missing the `_zpid` token
+ * — Zillow redirects those to its generic search page, so the page has
+ * no `gdpClientCache` and the downstream parser can't recover.
  */
 export function buildPath(args: {
   zpid?: number | string;
   url?: string;
 }): string {
-  if (args.url) return urlToPath(args.url);
   if (args.zpid !== undefined) return `/homedetails/${args.zpid}_zpid/`;
+  if (args.url) {
+    if (extractZpidFromUrl(args.url) === null) {
+      throw new InvalidPropertyUrlError(args.url);
+    }
+    return urlToPath(args.url);
+  }
   throw new Error('zillow property tool: must provide either zpid or url');
 }
 
@@ -171,9 +208,18 @@ export async function fetchPropertyRecord(
   const pageProps = getPageProps(nextData);
   const property = findPropertyInPageProps(pageProps);
   if (!property) {
+    // Diagnose what we actually got back so the error is actionable.
+    const cacheRaw =
+      (pageProps.gdpClientCache as string | undefined) ??
+      ((pageProps.componentProps as Record<string, unknown> | undefined)
+        ?.gdpClientCache as string | undefined);
+    const diagnosis = !cacheRaw
+      ? "pageProps.gdpClientCache (and pageProps.componentProps.gdpClientCache) were both absent — Zillow probably redirected this URL to its generic /homes/ search page, which means the URL didn't resolve to a property"
+      : `pageProps.gdpClientCache was present but no entry had a 'property' field — Zillow may have changed the cache key shape (we look for "Property:<zpid>" first, then any entry with a property field)`;
     throw new Error(
-      `Could not locate property data in __NEXT_DATA__ at ${path}. ` +
-        `Zillow may have changed their page structure.`
+      `Could not locate property data in __NEXT_DATA__ at ${path}. ${diagnosis}. ` +
+        `If you passed a slug-only URL, retry with the zpid (\`zpid: 12345\`) ` +
+        `or a full URL containing \`<zpid>_zpid\`.`
     );
   }
   return { raw: property, path };
