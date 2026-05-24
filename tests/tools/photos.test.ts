@@ -34,37 +34,37 @@ describe('largestJpeg', () => {
 });
 
 describe('formatPhoto', () => {
-  it('lifts the photo url + caption + multi-width sources', () => {
-    const out = formatPhoto({
-      caption: 'Living room',
-      subjectType: 'INTERIOR',
-      url: 'https://photos.zillowstatic.com/fp/abc-p_d.jpg',
-      mixedSources: {
-        jpeg: [
-          { url: 'https://a/192.jpg', width: 192 },
-          { url: 'https://a/1536.jpg', width: 1536 },
-        ],
-        webp: [
-          { url: 'https://a/192.webp', width: 192 },
-          { url: 'https://a/1536.webp', width: 1536 },
-        ],
-      },
-    });
+  const raw = {
+    caption: 'Living room',
+    subjectType: 'INTERIOR',
+    url: 'https://photos.zillowstatic.com/fp/abc-p_d.jpg',
+    mixedSources: {
+      jpeg: [
+        { url: 'https://a/192.jpg', width: 192 },
+        { url: 'https://a/1536.jpg', width: 1536 },
+      ],
+      webp: [
+        { url: 'https://a/192.webp', width: 192 },
+        { url: 'https://a/1536.webp', width: 1536 },
+      ],
+    },
+  };
+
+  it('omits the multi-width source lists by default (size budget)', () => {
+    const out = formatPhoto(raw);
     expect(out).toEqual({
       url: 'https://photos.zillowstatic.com/fp/abc-p_d.jpg',
       url_large: 'https://a/1536.jpg',
       url_large_webp: 'https://a/1536.webp',
       caption: 'Living room',
       subject_type: 'INTERIOR',
-      jpeg_sources: [
-        { url: 'https://a/192.jpg', width: 192 },
-        { url: 'https://a/1536.jpg', width: 1536 },
-      ],
-      webp_sources: [
-        { url: 'https://a/192.webp', width: 192 },
-        { url: 'https://a/1536.webp', width: 1536 },
-      ],
     });
+  });
+
+  it('includes the multi-width source lists when include_sources=true', () => {
+    const out = formatPhoto(raw, true);
+    expect(out?.jpeg_sources).toEqual(raw.mixedSources.jpeg);
+    expect(out?.webp_sources).toEqual(raw.mixedSources.webp);
   });
 
   it('returns null when the photo has no url and no sources', () => {
