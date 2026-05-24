@@ -2,7 +2,7 @@
 
 Zillow real-estate access as an MCP server for Claude — search listings, fetch property details, Zestimate history, your saved searches & homes, and market reports via natural language.
 
-> ⚠️ Zillow does not publish a public consumer API. The official [Bridge API](https://www.bridgeinteractive.com/developers/bridge-api/) is gated to MLS partners. This server uses the same private endpoints the zillow.com web app uses, routed through your own signed-in browser tab via the [fetchproxy](https://github.com/chrischall/fetchproxy) extension. Akamai / PerimeterX see a real browser session, not a Node process — but you should still treat this as informal use of Zillow's website. Use at your own discretion.
+> ⚠️ Zillow does not publish a public consumer API. The official [Bridge API](https://www.bridgeinteractive.com/developers/bridge-api/) is gated to MLS partners. This server uses the same private endpoints the zillow.com web app uses, routed through your own signed-in browser tab via the [fetchproxy](https://github.com/chrischall/fetchproxy) extension. Every request acts on behalf of your existing session — your cookies, your TLS, your JS context — exactly as if you'd clicked it in the browser yourself. Treat this as informal use of Zillow's website. Use at your own discretion.
 
 ## Why this exists
 
@@ -112,7 +112,7 @@ Open zillow.com and sign in. That's all the auth this server needs.
 └────────────────┘          └──────────────────┘        │  (separate)      │   cookies)    └─────────────┘
 ```
 
-The MCP server runs in Node, but every HTTP call to zillow.com is dispatched into your live browser tab through the fetchproxy extension. Akamai sees a real browser making a real request from a real session — `_abck`, TLS fingerprint, cookies all match the page that's already on screen. No headless browser, no impersonation, no proxy farm.
+The MCP server runs in Node, but every HTTP call to zillow.com is dispatched into your live browser tab through the fetchproxy extension. Each request rides your existing session — `_abck`, TLS fingerprint, and cookies all match the page that's already on screen. No headless browser stand-in, no separate identity, no third-party proxy: just your real browser, acting on its own behalf, with the MCP server picking what to ask for.
 
 ## Commands
 
