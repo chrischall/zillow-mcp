@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/chrischall/zillow-mcp/compare/v0.4.0...v0.4.1) (2026-05-24)
+
+
+### Bug Fixes
+
+* **photos:** omit per-photo source lists by default ([#17](https://github.com/chrischall/zillow-mcp/issues/17)) ([5bc79dc](https://github.com/chrischall/zillow-mcp/commit/5bc79dcfb5e06e987e672eebe693b1be4496b63a))
+
 ## [0.4.0](https://github.com/chrischall/zillow-mcp/compare/v0.3.0...v0.4.0) (2026-05-24)
 
 
