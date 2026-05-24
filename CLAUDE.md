@@ -14,11 +14,17 @@ This is a "Pattern A" fetchproxy MCP (every call through fetchproxy), not "Patte
 | --- | --- | --- | --- |
 | `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
 | `zillow_get_property` | `tools/properties.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
+| `zillow_get_property_photos` | `tools/photos.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.photos[]) | read |
 | `zillow_get_zestimate_history` | `tools/zestimate.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
+| `zillow_get_price_history` | `tools/history.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.priceHistory) | read |
+| `zillow_get_tax_history` | `tools/history.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.taxHistory) | read |
+| `zillow_compare_properties` | `tools/compare.ts` | GET `/homedetails/<zpid>_zpid/` SSR ×N (concurrent) | read |
 | `zillow_get_saved_searches` | `tools/saved.ts` | GET `/myzillow/SavedSearches` SSR | read (auth) |
 | `zillow_get_saved_homes` | `tools/saved.ts` | GET `/myzillow/favorites` SSR (collectionsResponse[].homes) | read (auth) |
 | `zillow_get_market_report` | `tools/market.ts` | GET `/home-values/<region>/` SSR | read |
 | `zillow_calculate_mortgage` | `tools/mortgage.ts` | (local; no network) | read |
+| `zillow_calculate_affordability` | `tools/affordability.ts` | (local; no network) | read |
+| `zillow_calculate_rent_vs_buy` | `tools/affordability.ts` | (local; no network) | read |
 
 All SSR tools parse `<script id="__NEXT_DATA__">` from the response. Zillow is a Next.js app; `__NEXT_DATA__.props.pageProps` is the canonical hydration root.
 
