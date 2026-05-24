@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/chrischall/zillow-mcp/compare/v0.4.1...v0.4.2) (2026-05-24)
+
+
+### Documentation
+
+* canonical auto-merge guidance + softer fetchproxy framing ([#19](https://github.com/chrischall/zillow-mcp/issues/19)) ([e2a0143](https://github.com/chrischall/zillow-mcp/commit/e2a01438fb14c65e541eba25c0c31afcc9c83672))
+
 ## [0.4.1](https://github.com/chrischall/zillow-mcp/compare/v0.4.0...v0.4.1) (2026-05-24)
 
 
