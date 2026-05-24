@@ -22,6 +22,9 @@ import { registerZestimateTools } from './tools/zestimate.js';
 import { registerSavedTools } from './tools/saved.js';
 import { registerMarketTools } from './tools/market.js';
 import { registerMortgageTools } from './tools/mortgage.js';
+import { registerHistoryTools } from './tools/history.js';
+import { registerCompareTools } from './tools/compare.js';
+import { registerAffordabilityTools } from './tools/affordability.js';
 
 const VERSION = '0.2.2'; // x-release-please-version
 
@@ -42,6 +45,9 @@ registerZestimateTools(server, client);
 registerSavedTools(server, client);
 registerMarketTools(server, client);
 registerMortgageTools(server);
+registerHistoryTools(server, client);
+registerCompareTools(server, client);
+registerAffordabilityTools(server);
 
 console.error(
   `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${port ?? 37149}. ` +

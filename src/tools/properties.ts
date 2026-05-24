@@ -13,6 +13,29 @@ import { urlToPath } from '../url.js';
  * has a `property` field gives us the property record.
  */
 
+export interface RawPriceHistoryEntry {
+  date?: string;
+  time?: number;
+  event?: string;
+  price?: number;
+  priceChangeRate?: number;
+  pricePerSquareFoot?: number;
+  source?: string;
+  attributeSource?: {
+    infoString1?: string;
+    infoString2?: string;
+    infoString3?: string;
+  };
+}
+
+export interface RawTaxHistoryEntry {
+  time?: number;
+  taxPaid?: number;
+  taxIncreaseRate?: number;
+  value?: number;
+  valueIncreaseRate?: number;
+}
+
 export interface RawProperty {
   zpid?: number | string;
   hdpUrl?: string;
@@ -41,12 +64,8 @@ export interface RawProperty {
   favoriteCount?: number;
   taxAssessedValue?: number;
   taxAssessedYear?: number;
-  priceHistory?: Array<{
-    date?: string;
-    price?: number;
-    event?: string;
-    source?: string;
-  }>;
+  priceHistory?: RawPriceHistoryEntry[];
+  taxHistory?: RawTaxHistoryEntry[];
   schools?: Array<{
     name?: string;
     rating?: number;
@@ -127,13 +146,40 @@ export function findPropertyInPageProps(pageProps: Record<string, unknown>): Raw
  * the bare canonical path `/homedetails/<zpid>_zpid/`, which Zillow 302s
  * to the slugged version) or a full URL/path (reduced via `urlToPath`).
  */
-function buildPath(args: { zpid?: number | string; url?: string }): string {
+export function buildPath(args: {
+  zpid?: number | string;
+  url?: string;
+}): string {
   if (args.url) return urlToPath(args.url);
   if (args.zpid !== undefined) return `/homedetails/${args.zpid}_zpid/`;
-  throw new Error('zillow_get_property: must provide either zpid or url');
+  throw new Error('zillow property tool: must provide either zpid or url');
 }
 
-function format(raw: RawProperty): FormattedProperty {
+/**
+ * Fetch + parse a Zillow property record. Shared by `zillow_get_property`,
+ * `zillow_compare_properties`, `zillow_get_price_history`,
+ * `zillow_get_tax_history`, and any other tool that needs the full
+ * homedetails JSON. Throws on fetch error or unparseable page state.
+ */
+export async function fetchPropertyRecord(
+  client: ZillowClient,
+  args: { zpid?: number | string; url?: string }
+): Promise<{ raw: RawProperty; path: string }> {
+  const path = buildPath(args);
+  const html = await client.fetchHtml(path);
+  const nextData = extractNextData(html);
+  const pageProps = getPageProps(nextData);
+  const property = findPropertyInPageProps(pageProps);
+  if (!property) {
+    throw new Error(
+      `Could not locate property data in __NEXT_DATA__ at ${path}. ` +
+        `Zillow may have changed their page structure.`
+    );
+  }
+  return { raw: property, path };
+}
+
+export function format(raw: RawProperty): FormattedProperty {
   const zpid = String(raw.zpid ?? '');
   const url = raw.hdpUrl
     ? raw.hdpUrl.startsWith('http')
@@ -196,18 +242,8 @@ export function registerPropertyTools(
       },
     },
     async ({ zpid, url }) => {
-      const path = buildPath({ zpid, url });
-      const html = await client.fetchHtml(path);
-      const nextData = extractNextData(html);
-      const pageProps = getPageProps(nextData);
-      const property = findPropertyInPageProps(pageProps);
-      if (!property) {
-        throw new Error(
-          `Could not locate property data in __NEXT_DATA__ at ${path}. ` +
-            `Zillow may have changed their page structure.`
-        );
-      }
-      return textResult(format(property));
+      const { raw } = await fetchPropertyRecord(client, { zpid, url });
+      return textResult(format(raw));
     }
   );
 }
