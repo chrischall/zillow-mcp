@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/chrischall/zillow-mcp/compare/v0.2.2...v0.3.0) (2026-05-24)
+
+
+### Features
+
+* v0.3 — 5 new tools (compare, price/tax history, affordability, rent-vs-buy) ([#13](https://github.com/chrischall/zillow-mcp/issues/13)) ([e170470](https://github.com/chrischall/zillow-mcp/commit/e1704708afe787c20fb93607da85df0cfd77d7fd))
+
+
+### Documentation
+
+* add Acknowledgement of Terms section to README ([#11](https://github.com/chrischall/zillow-mcp/issues/11)) ([7b8e7e5](https://github.com/chrischall/zillow-mcp/commit/7b8e7e5aeb6f594038523e641b3e20bbf2516f71))
+
 ## [0.2.2](https://github.com/chrischall/zillow-mcp/compare/v0.2.1...v0.2.2) (2026-05-23)
 
 

@@ -26,7 +26,7 @@ import { registerHistoryTools } from './tools/history.js';
 import { registerCompareTools } from './tools/compare.js';
 import { registerAffordabilityTools } from './tools/affordability.js';
 
-const VERSION = '0.2.2'; // x-release-please-version
+const VERSION = '0.3.0'; // x-release-please-version
 
 const port = process.env.ZILLOW_WS_PORT
   ? Number(process.env.ZILLOW_WS_PORT)
