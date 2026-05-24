@@ -64,7 +64,19 @@ export function largestJpeg(
   return best?.url;
 }
 
-export function formatPhoto(p: RawPhoto): FormattedPhoto | null {
+/**
+ * Flatten a raw photo into the consumer shape. Pass `include_sources:
+ * true` to keep the full multi-width jpeg + webp source lists; by
+ * default we omit them. A typical homedetails page has 54 photos × 16
+ * source entries × ~120 bytes per URL — over the MCP per-call token
+ * budget on its own. `url`, `url_large`, and `url_large_webp` are
+ * usually enough for any consumer that just wants to display the
+ * image.
+ */
+export function formatPhoto(
+  p: RawPhoto,
+  include_sources = false
+): FormattedPhoto | null {
   const mixed = p.mixedSources;
   const url = p.url;
   if (!url && !mixed?.jpeg?.length && !mixed?.webp?.length) return null;
@@ -76,8 +88,10 @@ export function formatPhoto(p: RawPhoto): FormattedPhoto | null {
   if (largeWebp) out.url_large_webp = largeWebp;
   if (p.caption) out.caption = p.caption;
   if (p.subjectType) out.subject_type = p.subjectType;
-  if (mixed?.jpeg?.length) out.jpeg_sources = mixed.jpeg;
-  if (mixed?.webp?.length) out.webp_sources = mixed.webp;
+  if (include_sources) {
+    if (mixed?.jpeg?.length) out.jpeg_sources = mixed.jpeg;
+    if (mixed?.webp?.length) out.webp_sources = mixed.webp;
+  }
   return out;
 }
 
@@ -115,7 +129,7 @@ export function registerPhotosTools(
     {
       title: 'Get Zillow property photo gallery',
       description:
-        "The full photo gallery for a Zillow property — every image embedded in the homedetails page. Each entry returns the canonical hero URL plus a multi-width source list (jpeg + webp variants from ~192px up to ~1536px), caption when present, and subject type (e.g. INTERIOR, EXTERIOR). Provide exactly one of `zpid` or `url`. Returns `{ zpid, count, photos, street_view_url?, high_res_url? }`. Read-only; safe to call repeatedly.",
+        "The full photo gallery for a Zillow property — every image embedded in the homedetails page. Each entry returns the canonical hero URL plus the widest jpeg + webp variants and caption when present. Provide exactly one of `zpid` or `url`. Set `include_sources: true` to also include the full multi-width source lists (warning: a 50+ photo property can exceed the per-call token budget). Returns `{ zpid, count, photos, street_view_url?, high_res_url? }`. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get Zillow property photo gallery',
         readOnlyHint: true,
@@ -131,14 +145,20 @@ export function registerPhotosTools(
           .string()
           .optional()
           .describe('A Zillow homedetails URL (or path beginning with /homedetails/)'),
+        include_sources: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the full multi-width jpeg + webp source lists per photo (default false; on for properties with <~15 photos).'
+          ),
       },
     },
-    async ({ zpid, url }) => {
+    async ({ zpid, url, include_sources }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
       const p = raw as PropertyWithPhotos;
       const rawPhotos = pickPhotoArray(p);
       const photos = rawPhotos
-        .map(formatPhoto)
+        .map((photo) => formatPhoto(photo, include_sources ?? false))
         .filter((x): x is FormattedPhoto => x !== null);
       const zpidStr = String(raw.zpid ?? zpid ?? '');
       return textResult({
