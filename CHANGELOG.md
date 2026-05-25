@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/chrischall/zillow-mcp/compare/v0.4.3...v0.4.4) (2026-05-25)
+
+
+### Bug Fixes
+
+* **ci:** prevent labeled event from cancelling auto-review ([#24](https://github.com/chrischall/zillow-mcp/issues/24)) ([f226f9b](https://github.com/chrischall/zillow-mcp/commit/f226f9b03d60b661c2d31f6f59cfd824f24cea80))
+
 ## [0.4.3](https://github.com/chrischall/zillow-mcp/compare/v0.4.2...v0.4.3) (2026-05-25)
 
 
