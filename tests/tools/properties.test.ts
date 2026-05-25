@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import {
+  InvalidPropertyUrlError,
+  buildPath,
+  extractZpidFromUrl,
   findPropertyInPageProps,
   registerPropertyTools,
   type RawProperty,
@@ -31,6 +34,62 @@ function htmlWithProperty(raw: RawProperty): string {
     nextData
   )}</script>`;
 }
+
+describe('extractZpidFromUrl', () => {
+  it('pulls the zpid out of a canonical full URL', () => {
+    expect(
+      extractZpidFromUrl(
+        'https://www.zillow.com/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746/12345_zpid/'
+      )
+    ).toBe('12345');
+  });
+
+  it('handles a bare-path URL', () => {
+    expect(extractZpidFromUrl('/homedetails/foo/99_zpid/')).toBe('99');
+  });
+
+  it('handles a path with no trailing slash', () => {
+    expect(extractZpidFromUrl('/homedetails/foo/42_zpid')).toBe('42');
+  });
+
+  it('returns null for a slug-only URL (no _zpid)', () => {
+    expect(
+      extractZpidFromUrl(
+        'https://www.zillow.com/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746'
+      )
+    ).toBeNull();
+  });
+
+  it('returns null for the generic search URL', () => {
+    expect(extractZpidFromUrl('https://www.zillow.com/homes/')).toBeNull();
+  });
+});
+
+describe('buildPath', () => {
+  it('builds the canonical bare path for a zpid arg', () => {
+    expect(buildPath({ zpid: 12345 })).toBe('/homedetails/12345_zpid/');
+  });
+
+  it('passes a URL through urlToPath when it has a zpid', () => {
+    expect(
+      buildPath({
+        url: 'https://www.zillow.com/homedetails/foo/12345_zpid/',
+      })
+    ).toBe('/homedetails/foo/12345_zpid/');
+  });
+
+  it('throws InvalidPropertyUrlError when the URL has no _zpid token', () => {
+    expect(() =>
+      buildPath({
+        url: 'https://www.zillow.com/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746',
+      })
+    ).toThrow(InvalidPropertyUrlError);
+  });
+
+  it('throws a clear hint when neither zpid nor url is provided', () => {
+    expect(() => buildPath({})).toThrow(/zpid or url/);
+  });
+});
 
 describe('findPropertyInPageProps', () => {
   it('returns the first property in gdpClientCache', () => {

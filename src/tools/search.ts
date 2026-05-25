@@ -5,18 +5,38 @@ import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 
 /**
- * Zillow's search page is SSR Next.js. We GET
- * `/homes/<encoded-location>_rb/?searchQueryState=<URI-encoded JSON>`
- * and parse `pageProps.searchPageState.cat1.searchResults.listResults`
- * from the embedded `__NEXT_DATA__`.
+ * Zillow's search page is SSR Next.js. We hit it twice:
  *
- * Why SSR (not the async POST API): live diagnostic showed
- * `/async-create-search-page-state/` returns 404 in current Zillow, and
- * the SSR page already embeds the full 40+ results we'd otherwise need
- * to fetch. `?searchQueryState=` lets us apply filters server-side, so
- * we get filtered results in one round-trip without needing to call
- * any private JSON API.
+ *   1. Resolve: GET `/homes/<slug>_rb/` with NO `searchQueryState` query
+ *      param. Zillow's URL-slug geocoder resolves the freetext into a
+ *      `queryState.regionSelection` ({regionId, regionType}) plus
+ *      `queryState.mapBounds`. If the geocoder can't pin a region —
+ *      OR the returned results don't match the user's input — we
+ *      raise `LocationNotResolved` rather than silently fall back.
+ *
+ *   2. Filter: GET `/homes/<slug>_rb/?searchQueryState=…` with the
+ *      resolved `regionSelection` + `mapBounds` **pinned** plus the
+ *      caller's filters (price/beds/etc). Without those two fields,
+ *      Zillow's SSR ignores both the URL slug and `usersSearchTerm`
+ *      and falls back to the user's last-known region — that's the
+ *      "everything returns Brooklyn" bug we used to ship.
+ *
+ * Results live at `pageProps.searchPageState.cat1.searchResults.listResults`.
+ *
+ * Verified live 2026-05-24 against Lake Lure, NC 28746 (regionId 70190,
+ * regionType 7 = ZIP) and Brooklyn, NY (regionId 37607, regionType 17).
  */
+
+export class LocationNotResolved extends Error {
+  constructor(location: string, detail: string) {
+    super(
+      `Zillow could not resolve location "${location}" — ${detail}. ` +
+        `Try a more specific input (e.g. "1234 Main St, City, ST 12345"), a ZIP code, ` +
+        `or a city + state pair (e.g. "Lake Lure, NC").`
+    );
+    this.name = 'LocationNotResolved';
+  }
+}
 
 type HomeType =
   | 'house'
@@ -138,12 +158,100 @@ export interface SearchInput {
   limit?: number;
 }
 
+export interface RegionSelection {
+  regionId: number;
+  regionType: number;
+}
+
+export interface MapBounds {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
+export interface ResolvedRegion {
+  regionSelection: RegionSelection[];
+  mapBounds: MapBounds;
+}
+
+/**
+ * Tokenize a freetext location into lowercase alphanumeric words of
+ * length 2+, used to fuzzy-validate that returned listings match the
+ * caller's query.
+ */
+export function locationTokens(location: string): string[] {
+  return location
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+}
+
+/**
+ * Reject 2-letter US state abbreviations from the discriminating-token
+ * set — they appear inside thousands of unrelated addresses and turn
+ * "NY"-anywhere into a false-positive match for any Brooklyn fallback.
+ * We still keep them in the input tokens (so the caller's "NY" isn't
+ * lost from the error message), but mismatch detection uses the
+ * non-state subset.
+ */
+const US_STATE_CODES = new Set([
+  'al', 'ak', 'az', 'ar', 'ca', 'co', 'ct', 'de', 'fl', 'ga', 'hi', 'id',
+  'il', 'in', 'ia', 'ks', 'ky', 'la', 'me', 'md', 'ma', 'mi', 'mn', 'ms',
+  'mo', 'mt', 'ne', 'nv', 'nh', 'nj', 'nm', 'ny', 'nc', 'nd', 'oh', 'ok',
+  'or', 'pa', 'ri', 'sc', 'sd', 'tn', 'tx', 'ut', 'vt', 'va', 'wa', 'wv',
+  'wi', 'wy', 'dc', 'pr',
+]);
+
+/**
+ * Return true when at least one of the `listings`' addresses contains
+ * one of the `inputTokens`. Used to detect Zillow's silent fallback to
+ * the user's default region — Brooklyn listings for a Lake Lure query
+ * share no non-state tokens.
+ */
+export function listingsMatchLocation(
+  listings: RawListing[],
+  inputTokens: string[]
+): boolean {
+  // Drop noise tokens (state codes); we need a discriminating signal.
+  const discriminating = inputTokens.filter((t) => !US_STATE_CODES.has(t));
+  if (discriminating.length === 0) return true; // nothing to check
+  for (const l of listings) {
+    const info = l.hdpData?.homeInfo ?? {};
+    const haystack = [
+      info.streetAddress,
+      info.city,
+      info.state,
+      info.zipcode,
+      l.address,
+      l.addressStreet,
+      l.addressCity,
+      l.addressState,
+      l.addressZipcode,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    for (const tok of discriminating) {
+      if (haystack.includes(tok)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Construct the `searchQueryState` object that Zillow's SSR page reads
- * from the `?searchQueryState=` query param. Mirrors the shape Zillow's
- * own web app uses (verified via live page inspection 2026-05-23).
+ * from the `?searchQueryState=` query param. When `region` is provided
+ * the result pins `regionSelection` + `mapBounds`, which is required
+ * for Zillow to honor the URL slug instead of falling back to the
+ * user's last region.
  */
-export function buildSearchQueryState(input: SearchInput): Record<string, unknown> {
+export function buildSearchQueryState(
+  input: SearchInput,
+  region?: ResolvedRegion
+): Record<string, unknown> {
   const filterState: Record<string, unknown> = {};
   switch (input.status ?? 'for_sale') {
     case 'for_rent':
@@ -165,7 +273,6 @@ export function buildSearchQueryState(input: SearchInput): Record<string, unknow
       filterState.isForSaleForeclosure = { value: false };
       break;
     default:
-      // for_sale: leave the defaults Zillow's web app uses.
       break;
   }
   if (input.price_min !== undefined || input.price_max !== undefined) {
@@ -185,28 +292,91 @@ export function buildSearchQueryState(input: SearchInput): Record<string, unknow
       filterState[HOME_TYPE_FILTERS[ht]] = { value: true };
     }
   }
-  return {
+  const sqs: Record<string, unknown> = {
     usersSearchTerm: input.location,
     filterState,
     isListVisible: true,
     isMapVisible: false,
   };
+  if (region) {
+    sqs.regionSelection = region.regionSelection;
+    sqs.mapBounds = region.mapBounds;
+  }
+  return sqs;
 }
 
 /**
- * Build the search URL. Uses Zillow's generic `/homes/<freetext>_rb/`
- * search-by-text endpoint which accepts any human-readable location
- * (city, ZIP, neighborhood, address) and resolves it server-side. The
- * filter state rides as a `?searchQueryState=` query param.
+ * Build the search URL. When `sqs` is null, returns the bare
+ * `/homes/<slug>_rb/` path used for the resolve step.
  */
-export function buildSearchPath(input: SearchInput): string {
-  const sqs = buildSearchQueryState(input);
-  // encodeURIComponent for the freetext segment; replace ' ' with '-' is
-  // Zillow's own slug style but encodeURIComponent works too — Zillow
-  // accepts both. Encoded form is safer for international characters.
-  const slug = encodeURIComponent(input.location.trim());
+export function buildSearchPath(
+  location: string,
+  sqs?: Record<string, unknown>
+): string {
+  const slug = encodeURIComponent(location.trim());
+  if (!sqs) return `/homes/${slug}_rb/`;
   const qs = encodeURIComponent(JSON.stringify(sqs));
   return `/homes/${slug}_rb/?searchQueryState=${qs}`;
+}
+
+interface ZillowPageState {
+  queryState?: {
+    regionSelection?: RegionSelection[];
+    mapBounds?: MapBounds;
+  };
+  cat1?: { searchResults?: { listResults?: RawListing[] } };
+}
+
+/**
+ * Parse the `searchPageState` blob out of a Zillow SSR page response.
+ */
+export function extractSearchPageState(html: string): ZillowPageState | null {
+  const nextData = extractNextData(html);
+  const pageProps = getPageProps(nextData);
+  return (pageProps.searchPageState as ZillowPageState | undefined) ?? null;
+}
+
+/**
+ * Step 1 of search: fetch the bare `/homes/<slug>_rb/` page and pull
+ * out the resolved region. Validates that returned results match the
+ * caller's input. Throws `LocationNotResolved` on geocoder miss or
+ * silent fallback.
+ */
+export async function resolveLocation(
+  client: ZillowClient,
+  location: string
+): Promise<ResolvedRegion> {
+  const html = await client.fetchHtml(buildSearchPath(location));
+  const sps = extractSearchPageState(html);
+  if (!sps) {
+    throw new LocationNotResolved(
+      location,
+      'Zillow returned a page with no searchPageState'
+    );
+  }
+  const regionSelection = sps.queryState?.regionSelection ?? [];
+  const mapBounds = sps.queryState?.mapBounds;
+  if (regionSelection.length === 0 || !mapBounds) {
+    throw new LocationNotResolved(
+      location,
+      'Zillow returned no resolved region for that input'
+    );
+  }
+  const listResults = sps.cat1?.searchResults?.listResults ?? [];
+  if (
+    listResults.length > 0 &&
+    !listingsMatchLocation(listResults, locationTokens(location))
+  ) {
+    const first = listResults[0]?.hdpData?.homeInfo;
+    const fallbackTo = first
+      ? `${first.city ?? '?'}, ${first.state ?? '?'} ${first.zipcode ?? ''}`.trim()
+      : 'an unknown region';
+    throw new LocationNotResolved(
+      location,
+      `Zillow silently fell back to ${fallbackTo} (regionId ${regionSelection[0].regionId})`
+    );
+  }
+  return { regionSelection, mapBounds };
 }
 
 export function registerSearchTools(
@@ -218,7 +388,7 @@ export function registerSearchTools(
     {
       title: 'Search Zillow listings',
       description:
-        'Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters (status, price band, beds/baths minimums, home types). Returns matching properties with price, beds/baths, sqft, Zestimate, status, image, and homedetails URL. Does NOT return Zestimate history — use zillow_get_zestimate_history for that. Read-only; safe to call repeatedly.',
+        'Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters (status, price band, beds/baths minimums, home types). Returns matching properties with price, beds/baths, sqft, Zestimate, status, image, and homedetails URL. Throws LocationNotResolved if Zillow can\'t pin a region for the input (instead of silently falling back to your default search region). Does NOT return Zestimate history — use zillow_get_zestimate_history for that. Read-only; safe to call repeatedly.',
       annotations: {
         title: 'Search Zillow listings',
         readOnlyHint: true,
@@ -262,13 +432,12 @@ export function registerSearchTools(
       },
     },
     async (input) => {
-      const path = buildSearchPath(input);
-      const html = await client.fetchHtml(path);
-      const nextData = extractNextData(html);
-      const pageProps = getPageProps(nextData);
-      const sps = pageProps.searchPageState as
-        | { cat1?: { searchResults?: { listResults?: RawListing[] } } }
-        | undefined;
+      // Step 1: resolve the location to a region (throws on miss / fallback).
+      const region = await resolveLocation(client, input.location);
+      // Step 2: filtered search with the region pinned in.
+      const sqs = buildSearchQueryState(input, region);
+      const html = await client.fetchHtml(buildSearchPath(input.location, sqs));
+      const sps = extractSearchPageState(html);
       const raw = sps?.cat1?.searchResults?.listResults ?? [];
       const limit = input.limit ?? 40;
       const formatted = raw
