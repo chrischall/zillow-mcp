@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/chrischall/zillow-mcp/compare/v0.4.2...v0.4.3) (2026-05-25)
+
+
+### Bug Fixes
+
+* **search+get_property:** resolve location explicitly, reject slug-only URLs ([#21](https://github.com/chrischall/zillow-mcp/issues/21)) ([9367861](https://github.com/chrischall/zillow-mcp/commit/93678612bf279942de3ec8ffe5300a66ed7d5c46))
+
 ## [0.4.2](https://github.com/chrischall/zillow-mcp/compare/v0.4.1...v0.4.2) (2026-05-24)
 
 
