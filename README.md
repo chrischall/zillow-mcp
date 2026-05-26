@@ -19,6 +19,7 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | --- | --- | :---: |
 | `zillow_search_properties` | Search listings by location, status, price band, beds/baths, home type | |
 | `zillow_get_property` | Full record for a zpid (price, Zestimate, beds, schools, neighborhood, price history) | |
+| `zillow_get_by_address` | Resolve a free-text address (with optional city/state/zip) to its Zillow zpid + canonical URL | |
 | `zillow_get_property_photos` | Full photo gallery for a property — every image embedded in the homedetails page with multi-width jpeg + webp variants and captions | |
 | `zillow_get_zestimate_history` | Time series of Zestimate values (and rent Zestimate where available) | |
 | `zillow_get_price_history` | Listing history (Listed/Sold/Pending/etc.) with price + days on market | |
