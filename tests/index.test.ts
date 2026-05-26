@@ -9,6 +9,7 @@ import { registerZestimateTools } from '../src/tools/zestimate.js';
 import { registerSavedTools } from '../src/tools/saved.js';
 import { registerMarketTools } from '../src/tools/market.js';
 import { registerMortgageTools } from '../src/tools/mortgage.js';
+import { registerHealthcheckTools } from '../src/tools/healthcheck.js';
 import { createTestHarness } from './helpers.js';
 
 const mockClient = {
@@ -24,6 +25,7 @@ const EXPECTED_TOOLS = [
   'zillow_get_saved_homes',
   'zillow_get_market_report',
   'zillow_calculate_mortgage',
+  'zillow_healthcheck',
 ];
 
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
@@ -40,6 +42,7 @@ describe('tool registration', () => {
       registerSavedTools(server, mockClient);
       registerMarketTools(server, mockClient);
       registerMortgageTools(server);
+      registerHealthcheckTools(server, mockClient);
     });
     const tools = await harness.listTools();
     const names = tools.map((t) => t.name).sort();
