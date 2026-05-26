@@ -31,6 +31,7 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | `zillow_get_saved_homes` | Your favorited homes with current price + Zestimate + primary photo | ✓ |
 | `zillow_get_market_report` | Median sale/list/rent, days on market, inventory, ZHVI for a region | |
 | `zillow_calculate_mortgage` | Local PITI calculator — principal+interest, taxes, insurance, HOA, PMI (no network) | |
+| `zillow_healthcheck` | Round-trip a public Zillow URL through the bridge to localize bridge/extension/Zillow-side failures | |
 
 ## Acknowledgement of Terms
 

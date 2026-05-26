@@ -26,6 +26,7 @@ import { registerHistoryTools } from './tools/history.js';
 import { registerCompareTools } from './tools/compare.js';
 import { registerAffordabilityTools } from './tools/affordability.js';
 import { registerPhotosTools } from './tools/photos.js';
+import { registerHealthcheckTools } from './tools/healthcheck.js';
 import { registerGetByAddressTools } from './tools/get-by-address.js';
 
 const VERSION = '0.4.5'; // x-release-please-version
@@ -51,6 +52,7 @@ registerHistoryTools(server, client);
 registerCompareTools(server, client);
 registerAffordabilityTools(server);
 registerPhotosTools(server, client);
+registerHealthcheckTools(server, client);
 registerGetByAddressTools(server, client);
 
 console.error(
