@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/chrischall/zillow-mcp/compare/v0.4.5...v0.5.0) (2026-05-26)
+
+
+### Features
+
+* **get_by_address:** add zillow_get_by_address for one-shot address → zpid ([#37](https://github.com/chrischall/zillow-mcp/issues/37)) ([a9308d1](https://github.com/chrischall/zillow-mcp/commit/a9308d161d0d6ef338746c638415c0eaf61915ed))
+* **healthcheck:** add zillow_healthcheck for bridge diagnostics ([#36](https://github.com/chrischall/zillow-mcp/issues/36)) ([203fa51](https://github.com/chrischall/zillow-mcp/commit/203fa51cc74656c952145dac6f11187d9ce48647))
+
+
+### Bug Fixes
+
+* **get_property:** fall back to resoFacts.yearBuilt when top-level is null ([#34](https://github.com/chrischall/zillow-mcp/issues/34)) ([2a8cc42](https://github.com/chrischall/zillow-mcp/commit/2a8cc42aae47c293aeece035b0d59ea5dc9a525c))
+* **get_property:** surface mlsStreetAddress alongside streetAddress ([#35](https://github.com/chrischall/zillow-mcp/issues/35)) ([678c440](https://github.com/chrischall/zillow-mcp/commit/678c440695bf2d68f7b227e1b53f42fe824ee787))
+* **search:** handle address & street-level queries without a regionSelection ([#38](https://github.com/chrischall/zillow-mcp/issues/38)) ([c938821](https://github.com/chrischall/zillow-mcp/commit/c93882155ad5dc33bd6f39710dbee960d7a4b0b4))
+
 ## [0.4.5](https://github.com/chrischall/zillow-mcp/compare/v0.4.4...v0.4.5) (2026-05-26)
 
 
