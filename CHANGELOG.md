@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.5](https://github.com/chrischall/zillow-mcp/compare/v0.4.4...v0.4.5) (2026-05-26)
+
+
+### Documentation
+
+* **claude:** warn against early PRs and call out first-party dep bumps ([#27](https://github.com/chrischall/zillow-mcp/issues/27)) ([ca71ab5](https://github.com/chrischall/zillow-mcp/commit/ca71ab56e53818b1d7ba0cdaae6d0ca33a807a6e))
+
 ## [0.4.4](https://github.com/chrischall/zillow-mcp/compare/v0.4.3...v0.4.4) (2026-05-25)
 
 
