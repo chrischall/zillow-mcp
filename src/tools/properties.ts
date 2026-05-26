@@ -74,12 +74,27 @@ export interface RawProperty {
     type?: string;
     studentsPerTeacher?: number;
   }>;
+  /**
+   * Canonical MLS-feed street address. On some listings this disagrees
+   * with `address.streetAddress` (e.g. zpid 248872078: "109 Overlook
+   * Point Ln" vs MLS "169 Overlook Point Ln"). Surfaced separately so
+   * the caller can disambiguate without re-scraping. See issue #30.
+   */
+  mlsStreetAddress?: string;
 }
 
 export interface FormattedProperty {
   zpid: string;
   url: string;
   address?: RawProperty['address'];
+  /**
+   * Canonical MLS street address. Present whenever the raw property
+   * payload includes `mlsStreetAddress` (typically true on listings
+   * that ever flowed through an MLS feed). May disagree with
+   * `address.streetAddress` — when both are returned, callers should
+   * prefer this value as the canonical address. See issue #30.
+   */
+  mls_street_address?: string;
   neighborhood?: string;
   price?: number;
   zestimate?: number;
@@ -236,6 +251,7 @@ export function format(raw: RawProperty): FormattedProperty {
     zpid,
     url,
     address: raw.address,
+    mls_street_address: raw.mlsStreetAddress,
     neighborhood: raw.address?.neighborhood,
     price: raw.price,
     zestimate: raw.zestimate,
@@ -269,7 +285,7 @@ export function registerPropertyTools(
     {
       title: 'Get Zillow property details',
       description:
-        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address, neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, and price history. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
+        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, and price history. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get Zillow property details',
         readOnlyHint: true,
