@@ -265,6 +265,66 @@ describe('zillow_get_property tool', () => {
     expect(text).toMatch(/Could not locate property/i);
   });
 
+  it('surfaces mls_street_address alongside the address.streetAddress (issue #30)', async () => {
+    // For some zpids the page-level streetAddress disagrees with the
+    // canonical MLS form. Surface both so the caller can disambiguate.
+    // Verified live for zpid 248872078 (109 vs 169 Overlook Point Ln).
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 248872078,
+        address: {
+          streetAddress: '109 Overlook Point Ln',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        },
+        mlsStreetAddress: '169 Overlook Point Ln',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: 248872078,
+    });
+    const parsed = parseToolResult<{
+      address: { streetAddress: string };
+      mls_street_address: string;
+    }>(result);
+    expect(parsed.address.streetAddress).toBe('109 Overlook Point Ln');
+    expect(parsed.mls_street_address).toBe('169 Overlook Point Ln');
+  });
+
+  it('surfaces mls_street_address even with whitespace-only differences from streetAddress', async () => {
+    // For zpid 208205936 the two differ only in spacing ("131 Pier Point
+    // Dr" vs "131 Pierpoint Dr"). Both must be reachable.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 208205936,
+        address: { streetAddress: '131 Pier Point Dr' },
+        mlsStreetAddress: '131 Pierpoint Dr',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: 208205936,
+    });
+    const parsed = parseToolResult<{
+      address: { streetAddress: string };
+      mls_street_address: string;
+    }>(result);
+    expect(parsed.address.streetAddress).toBe('131 Pier Point Dr');
+    expect(parsed.mls_street_address).toBe('131 Pierpoint Dr');
+  });
+
+  it('omits mls_street_address when the page payload lacks it', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 1,
+        address: { streetAddress: '1 Main St' },
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+    const parsed = parseToolResult<{ mls_street_address?: string }>(result);
+    expect(parsed.mls_street_address).toBeUndefined();
+  });
+
   it('falls back to resoFacts.yearBuilt when the top-level yearBuilt is missing (issue #29)', async () => {
     // Verified live (May 2026): zpids 102228838, 102109205, 99388739 omit top-level yearBuilt but populate resoFacts.yearBuilt.
     mockFetchHtml.mockResolvedValue(
