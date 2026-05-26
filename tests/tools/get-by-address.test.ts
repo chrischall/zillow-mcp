@@ -157,6 +157,62 @@ describe('zillow_get_by_address tool', () => {
     expect(result.isError).toBeTruthy();
   });
 
+  it('returns resolved=false when the first listing has no zpid', async () => {
+    // formatListing() returns null when neither hdpData.homeInfo.zpid nor the
+    // top-level zpid is present — exercise the !formatted branch.
+    const nextData = {
+      props: {
+        pageProps: {
+          searchPageState: {
+            cat1: {
+              searchResults: {
+                listResults: [
+                  { detailUrl: '/homedetails/foo/', hdpData: { homeInfo: {} } },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    mockFetchHtml.mockResolvedValue(
+      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+        nextData
+      )}</script>`
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '1 Main St',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; error?: string }>(
+      result
+    );
+    expect(parsed.resolved).toBe(false);
+    expect(parsed.error).toMatch(/no zpid/i);
+  });
+
+  it('returns resolved=false when Zillow silently falls back to a different region', async () => {
+    // Vague input like "Main St" can trigger Zillow's silent fallback to the
+    // user's default region. Guard against returning a wrong-location zpid.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithFirstListing({
+        zpid: 99999,
+        detailUrl: '/homedetails/1-Brooklyn-Way/99999_zpid/',
+        streetAddress: '1 Brooklyn Way',
+        city: 'Brooklyn',
+        state: 'NY',
+        zipcode: '11215',
+      })
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: 'Sleeping Bear Ln Lake Lure',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; error?: string }>(
+      result
+    );
+    expect(parsed.resolved).toBe(false);
+    expect(parsed.error).toMatch(/no listing found/i);
+  });
+
   it('builds an absolute URL when detailUrl is missing — falls back to zpid path', async () => {
     // Some responses include zpid but no detailUrl. We still want a
     // canonical URL on the way out.

@@ -7,6 +7,8 @@ import {
   buildSearchPath,
   extractSearchPageState,
   formatListing,
+  listingsMatchLocation,
+  locationTokens,
   type RawListing,
 } from './search.js';
 
@@ -122,6 +124,16 @@ export function registerGetByAddressTools(
         const result: GetByAddressResult = {
           resolved: false,
           error: 'first listing had no zpid',
+          query: slug,
+        };
+        return textResult(result);
+      }
+      // Catch Zillow's silent fallback to the user's default region (same
+      // guard as resolveLocation in search.ts).
+      if (!listingsMatchLocation([firstRaw], locationTokens(slug))) {
+        const result: GetByAddressResult = {
+          resolved: false,
+          error: 'no listing found',
           query: slug,
         };
         return textResult(result);
