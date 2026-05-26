@@ -3,19 +3,25 @@
 // What we verify is the path → URL prepending and the discriminated-
 // union mapping (ok:true → triple, ok:false → throw).
 import { describe, it, expect, vi } from 'vitest';
-import { FetchproxyTransport } from '../src/transport-fetchproxy.js';
+import {
+  FetchproxyBridgeDownError,
+  FetchproxyTimeoutError,
+  FetchproxyTransport,
+} from '../src/transport-fetchproxy.js';
 
 type Inner = {
   listen: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   fetch: ReturnType<typeof vi.fn>;
+  role: 'host' | 'peer' | null;
 };
 
-function stubInner(): Inner {
+function stubInner(role: 'host' | 'peer' | null = 'host'): Inner {
   return {
     listen: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     fetch: vi.fn(),
+    role,
   };
 }
 
@@ -104,5 +110,65 @@ describe('FetchproxyTransport', () => {
 
     await t.close();
     expect(inner.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('status() returns role, port, and freshness counters before any request', () => {
+    const t = new FetchproxyTransport({ version: '0.0.0', port: 37200 });
+    const inner = stubInner(null);
+    installInner(t, inner);
+    const s = t.status();
+    expect(s.role).toBeNull();
+    expect(s.port).toBe(37200);
+    expect(s.serverVersion).toBe('0.0.0');
+    expect(s.fetchTimeoutMs).toBe(30_000);
+    expect(s.lastSuccessAt).toBeNull();
+    expect(s.lastFailureAt).toBeNull();
+    expect(s.consecutiveFailures).toBe(0);
+  });
+
+  it('status() records lastSuccessAt and resets consecutiveFailures on success', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    inner.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: 'x',
+      url: 'https://www.zillow.com/x',
+    });
+    installInner(t, inner);
+    await t.fetch({ path: '/x', method: 'GET' });
+    const s = t.status();
+    expect(s.lastSuccessAt).toBeGreaterThan(0);
+    expect(s.consecutiveFailures).toBe(0);
+  });
+
+  it('throws FetchproxyBridgeDownError when kind=content_script_unreachable', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    inner.fetch.mockResolvedValue({
+      ok: false,
+      error: 'Could not establish connection. Receiving end does not exist.',
+      kind: 'content_script_unreachable',
+    });
+    installInner(t, inner);
+    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBeInstanceOf(
+      FetchproxyBridgeDownError
+    );
+    const s = t.status();
+    expect(s.lastFailureAt).toBeGreaterThan(0);
+    expect(s.consecutiveFailures).toBe(1);
+  });
+
+  it('FetchproxyTimeoutError fires when the inner fetch never resolves', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0', fetchTimeoutMs: 25 });
+    const inner = stubInner();
+    inner.fetch.mockReturnValue(new Promise(() => {})); // never resolves
+    installInner(t, inner);
+    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBeInstanceOf(
+      FetchproxyTimeoutError
+    );
+    const s = t.status();
+    expect(s.lastFailureReason).toMatch(/timeout/);
+    expect(s.consecutiveFailures).toBe(1);
   });
 });
