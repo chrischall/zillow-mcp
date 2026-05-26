@@ -292,7 +292,7 @@ describe('zillow_get_property tool', () => {
     expect(parsed.mls_street_address).toBe('169 Overlook Point Ln');
   });
 
-  it('surfaces mls_street_address even when it agrees with streetAddress', async () => {
+  it('surfaces mls_street_address even with whitespace-only differences from streetAddress', async () => {
     // For zpid 208205936 the two differ only in spacing ("131 Pier Point
     // Dr" vs "131 Pierpoint Dr"). Both must be reachable.
     mockFetchHtml.mockResolvedValue(
