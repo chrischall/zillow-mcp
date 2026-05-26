@@ -80,12 +80,7 @@ export interface RawProperty {
     type?: string;
     studentsPerTeacher?: number;
   }>;
-  /**
-   * RESO (Real Estate Standards Org) facts. Populated even on listings
-   * whose top-level `yearBuilt`/`livingArea`/etc are missing — Zillow's
-   * MLS pipeline writes here even when the GraphQL gdpClientCache root
-   * doesn't surface a value. See issue #29.
-   */
+  // MLS RESO facts; fallback source when top-level fields are missing (issue #29).
   resoFacts?: RawResoFacts;
 }
 
@@ -257,9 +252,7 @@ export function format(raw: RawProperty): FormattedProperty {
     baths: raw.bathrooms,
     living_area: raw.livingArea,
     lot_size: raw.lotSize,
-    // Top-level `yearBuilt` is missing on a meaningful slice of listings
-    // (issue #29). Fall back to `resoFacts.yearBuilt`, which is populated
-    // from the MLS RESO feed even when the GraphQL root isn't.
+    // Fall back to MLS RESO yearBuilt when the top-level is missing (issue #29).
     year_built: raw.yearBuilt ?? raw.resoFacts?.yearBuilt,
     home_type: raw.homeType,
     status: raw.homeStatus,
