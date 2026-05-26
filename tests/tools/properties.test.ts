@@ -264,4 +264,45 @@ describe('zillow_get_property tool', () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/Could not locate property/i);
   });
+
+  it('falls back to resoFacts.yearBuilt when the top-level yearBuilt is missing (issue #29)', async () => {
+    // Verified live (May 2026): zpids 102228838, 102109205, 99388739 omit top-level yearBuilt but populate resoFacts.yearBuilt.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 102228838,
+        // yearBuilt deliberately omitted at the top level
+        resoFacts: { yearBuilt: 1966 },
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: 102228838,
+    });
+    const parsed = parseToolResult<{ year_built: number }>(result);
+    expect(parsed.year_built).toBe(1966);
+  });
+
+  it('keeps the top-level yearBuilt when both paths are populated', async () => {
+    // 456147481, 102205216: top-level yearBuilt is correct; fallback must not override.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 456147481,
+        yearBuilt: 2007,
+        resoFacts: { yearBuilt: 1900 },
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: 456147481,
+    });
+    const parsed = parseToolResult<{ year_built: number }>(result);
+    expect(parsed.year_built).toBe(2007);
+  });
+
+  it('returns year_built undefined when neither path is populated', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({ zpid: 1, resoFacts: {} } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+    const parsed = parseToolResult<{ year_built?: number }>(result);
+    expect(parsed.year_built).toBeUndefined();
+  });
 });

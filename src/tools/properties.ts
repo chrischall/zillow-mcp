@@ -36,6 +36,11 @@ export interface RawTaxHistoryEntry {
   valueIncreaseRate?: number;
 }
 
+export interface RawResoFacts {
+  yearBuilt?: number;
+  // Only fallback-used fields are typed; widen as needed.
+}
+
 export interface RawProperty {
   zpid?: number | string;
   hdpUrl?: string;
@@ -74,6 +79,8 @@ export interface RawProperty {
     type?: string;
     studentsPerTeacher?: number;
   }>;
+  // MLS RESO facts; fallback source when top-level fields are missing (issue #29).
+  resoFacts?: RawResoFacts;
 }
 
 export interface FormattedProperty {
@@ -244,7 +251,8 @@ export function format(raw: RawProperty): FormattedProperty {
     baths: raw.bathrooms,
     living_area: raw.livingArea,
     lot_size: raw.lotSize,
-    year_built: raw.yearBuilt,
+    // Fall back to MLS RESO yearBuilt when the top-level is missing (issue #29).
+    year_built: raw.yearBuilt ?? raw.resoFacts?.yearBuilt,
     home_type: raw.homeType,
     status: raw.homeStatus,
     description: raw.description,
