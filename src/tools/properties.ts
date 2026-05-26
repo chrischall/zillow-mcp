@@ -38,8 +38,7 @@ export interface RawTaxHistoryEntry {
 
 export interface RawResoFacts {
   yearBuilt?: number;
-  // resoFacts carries many more fields (lotSize, livingArea, parkingFeatures,
-  // etc). We only type the ones we use as fallbacks; widen as needed.
+  // Only fallback-used fields are typed; widen as needed.
 }
 
 export interface RawProperty {
