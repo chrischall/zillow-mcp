@@ -337,15 +337,56 @@ export function extractSearchPageState(html: string): ZillowPageState | null {
 }
 
 /**
+ * Result of `resolveLocation`. Either we got a region (city/ZIP-level
+ * handle that we can pin into a second filter-step request), OR we got
+ * matching listings directly (address- or street-specific queries
+ * where Zillow's resolver returns the property without first synthesizing
+ * a region). The second branch is the `zillow_search_properties` fix
+ * for issue #31 — full-address and neighborhood-street queries used to
+ * throw `LocationNotResolved` even though Zillow had returned the
+ * matching listings, because the resolver couldn't pin a region.
+ */
+export type ResolvedLocation =
+  | { kind: 'region'; region: ResolvedRegion }
+  | { kind: 'listings'; listings: RawListing[] };
+
+/**
  * Step 1 of search: fetch the bare `/homes/<slug>_rb/` page and pull
- * out the resolved region. Validates that returned results match the
- * caller's input. Throws `LocationNotResolved` on geocoder miss or
- * silent fallback.
+ * out either a region OR a set of listings that match the caller's
+ * input. Throws `LocationNotResolved` on geocoder miss, silent
+ * fallback, or if nothing usable comes back at all.
+ *
+ * The two-branch return is deliberate: regions feed the filtered step
+ * 2 request; listings short-circuit to a single-round-trip reply for
+ * address- and street-level queries (see issue #31).
  */
 export async function resolveLocation(
   client: ZillowClient,
   location: string
 ): Promise<ResolvedRegion> {
+  // Back-compat shim: callers that only care about the region branch
+  // keep getting a `ResolvedRegion` (throws if Zillow returned an
+  // address-style result with no region pinned). The richer
+  // `resolveLocationOrListings` exposes both branches.
+  const resolved = await resolveLocationOrListings(client, location);
+  if (resolved.kind === 'region') return resolved.region;
+  // The address-listings branch has no region — we can't pin a filter.
+  // Give the same error as the old code so prior callers still get a
+  // clean `LocationNotResolved`.
+  throw new LocationNotResolved(
+    location,
+    'Zillow returned no resolved region for that input'
+  );
+}
+
+/**
+ * The full step-1 resolver. Returns a `ResolvedLocation` discriminated
+ * by the kind of handle Zillow gave us. See `ResolvedLocation`.
+ */
+export async function resolveLocationOrListings(
+  client: ZillowClient,
+  location: string
+): Promise<ResolvedLocation> {
   const html = await client.fetchHtml(buildSearchPath(location));
   const sps = extractSearchPageState(html);
   if (!sps) {
@@ -356,16 +397,37 @@ export async function resolveLocation(
   }
   const regionSelection = sps.queryState?.regionSelection ?? [];
   const mapBounds = sps.queryState?.mapBounds;
-  if (regionSelection.length === 0 || !mapBounds) {
-    throw new LocationNotResolved(
-      location,
-      'Zillow returned no resolved region for that input'
-    );
-  }
   const listResults = sps.cat1?.searchResults?.listResults ?? [];
+  const tokens = locationTokens(location);
+
+  if (regionSelection.length === 0 || !mapBounds) {
+    // No region was pinned. Issue #31: address- and street-level
+    // queries land here. Surface the listings directly when they
+    // actually match the user's input — otherwise we have nothing
+    // useful to return.
+    if (listResults.length === 0) {
+      throw new LocationNotResolved(
+        location,
+        'Zillow returned no resolved region for that input'
+      );
+    }
+    if (!listingsMatchLocation(listResults, tokens)) {
+      const first = listResults[0]?.hdpData?.homeInfo;
+      const fallbackTo = first
+        ? `${first.city ?? '?'}, ${first.state ?? '?'} ${first.zipcode ?? ''}`.trim()
+        : 'an unknown region';
+      throw new LocationNotResolved(
+        location,
+        `Zillow returned listings from ${fallbackTo} but no region match for the input`
+      );
+    }
+    return { kind: 'listings', listings: listResults };
+  }
+  // Region pinned. Check it didn't silently fall back to an unrelated
+  // place (the classic Brooklyn-for-Lake-Lure case).
   if (
     listResults.length > 0 &&
-    !listingsMatchLocation(listResults, locationTokens(location))
+    !listingsMatchLocation(listResults, tokens)
   ) {
     const first = listResults[0]?.hdpData?.homeInfo;
     const fallbackTo = first
@@ -376,7 +438,7 @@ export async function resolveLocation(
       `Zillow silently fell back to ${fallbackTo} (regionId ${regionSelection[0].regionId})`
     );
   }
-  return { regionSelection, mapBounds };
+  return { kind: 'region', region: { regionSelection, mapBounds } };
 }
 
 export function registerSearchTools(
@@ -388,7 +450,7 @@ export function registerSearchTools(
     {
       title: 'Search Zillow listings',
       description:
-        'Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters (status, price band, beds/baths minimums, home types). Returns matching properties with price, beds/baths, sqft, Zestimate, status, image, and homedetails URL. Throws LocationNotResolved if Zillow can\'t pin a region for the input (instead of silently falling back to your default search region). Does NOT return Zestimate history — use zillow_get_zestimate_history for that. Read-only; safe to call repeatedly.',
+        "Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters (status, price band, beds/baths minimums, home types). Returns matching properties with price, beds/baths, sqft, Zestimate, status, image, and homedetails URL. Works with city/ZIP-level queries (filtered against your criteria) AND with full-address or street-only queries (returns the listings Zillow resolves to directly — filters are not applied in this single-round-trip path; use zillow_get_by_address for the cleanest one-shot address → zpid lookup). Throws LocationNotResolved if Zillow can't pin either a region or matching listings for the input (instead of silently falling back to your default search region). Does NOT return Zestimate history — use zillow_get_zestimate_history for that. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Search Zillow listings',
         readOnlyHint: true,
@@ -432,14 +494,29 @@ export function registerSearchTools(
       },
     },
     async (input) => {
-      // Step 1: resolve the location to a region (throws on miss / fallback).
-      const region = await resolveLocation(client, input.location);
+      const limit = input.limit ?? 40;
+      // Step 1: resolve. Either we got a region we can pin into a
+      // filtered second request, or we got an address-shaped match
+      // where Zillow's resolver returned the listing directly.
+      const resolved = await resolveLocationOrListings(client, input.location);
+      if (resolved.kind === 'listings') {
+        // Single-round-trip path (issue #31): no region to pin, so a
+        // second filtered request would just produce a different
+        // arbitrary set. Skip step 2 and surface what the resolver
+        // gave us. Filters from `input` are not applied here — when
+        // the resolver returns a specific listing, filters narrowing
+        // it further don't add value.
+        const formatted = resolved.listings
+          .map(formatListing)
+          .filter((x): x is FormattedListing => x !== null)
+          .slice(0, limit);
+        return textResult(formatted);
+      }
       // Step 2: filtered search with the region pinned in.
-      const sqs = buildSearchQueryState(input, region);
+      const sqs = buildSearchQueryState(input, resolved.region);
       const html = await client.fetchHtml(buildSearchPath(input.location, sqs));
       const sps = extractSearchPageState(html);
       const raw = sps?.cat1?.searchResults?.listResults ?? [];
-      const limit = input.limit ?? 40;
       const formatted = raw
         .map(formatListing)
         .filter((x): x is FormattedListing => x !== null)

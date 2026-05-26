@@ -445,4 +445,136 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     const parsed = parseToolResult<unknown[]>(result);
     expect(parsed).toEqual([]);
   });
+
+  it('returns matched listings when Zillow returns no region but does return matching listings (full address) — issue #31', async () => {
+    // Address-style query: Zillow's resolver doesn't pin a region (no
+    // city- or ZIP-level handle for a single property), but it DOES
+    // populate the matching listing in listResults. Surface it without
+    // a second filter round-trip. The user passed "155 Quail Cove Blvd
+    // 1601 Lake Lure NC".
+    const matchingListing: RawListing = {
+      hdpData: {
+        homeInfo: {
+          zpid: 200,
+          streetAddress: '155 Quail Cove Blvd #1601',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        },
+      },
+    };
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: [],
+        mapBounds: undefined,
+        listResults: [matchingListing],
+      })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: '155 Quail Cove Blvd 1601 Lake Lure NC',
+    });
+    expect(result.isError).toBeFalsy();
+    const parsed = parseToolResult<Array<{ zpid: string; city?: string }>>(result);
+    expect(parsed.map((p) => p.zpid)).toEqual(['200']);
+    expect(parsed[0].city).toBe('Lake Lure');
+    // Single round-trip — no filter step is possible without a region.
+    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns matched listings for a street-only neighborhood query (issue #31)', async () => {
+    // "Quail Cove Blvd Lake Lure NC" — no region pin, but the street
+    // does match listings Zillow returns under it.
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: [],
+        listResults: [
+          {
+            hdpData: {
+              homeInfo: {
+                zpid: 300,
+                streetAddress: '101 Quail Cove Blvd',
+                city: 'Lake Lure',
+                state: 'NC',
+                zipcode: '28746',
+              },
+            },
+          },
+          {
+            hdpData: {
+              homeInfo: {
+                zpid: 301,
+                streetAddress: '102 Quail Cove Blvd',
+                city: 'Lake Lure',
+                state: 'NC',
+                zipcode: '28746',
+              },
+            },
+          },
+        ],
+      })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: 'Quail Cove Blvd Lake Lure NC',
+    });
+    expect(result.isError).toBeFalsy();
+    const parsed = parseToolResult<Array<{ zpid: string }>>(result);
+    expect(parsed.map((p) => p.zpid)).toEqual(['300', '301']);
+  });
+
+  it('still throws LocationNotResolved when no region AND no listings come back', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: [],
+        listResults: [],
+      })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: 'asdfghjkl no such place',
+    });
+    expect(result.isError).toBeTruthy();
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/could not resolve location/i);
+  });
+
+  it('still throws when no region AND listings do NOT match (silent fallback w/ no region)', async () => {
+    // Defensive: even though no region was pinned, Zillow returned
+    // unrelated listings. Don't surface them as the user's match.
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({
+        regionSelection: [],
+        listResults: [brooklynListing(1), brooklynListing(2)],
+      })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: '155 Quail Cove Blvd Lake Lure NC',
+    });
+    expect(result.isError).toBeTruthy();
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/could not resolve location/i);
+  });
+
+  it('respects the limit param on the address-path result', async () => {
+    const lots = Array.from({ length: 10 }, (_, i) =>
+      ({
+        hdpData: {
+          homeInfo: {
+            zpid: 500 + i,
+            streetAddress: `${i} Quail Cove Blvd`,
+            city: 'Lake Lure',
+            state: 'NC',
+            zipcode: '28746',
+          },
+        },
+      } as RawListing)
+    );
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithState({ regionSelection: [], listResults: lots })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: 'Quail Cove Blvd Lake Lure NC',
+      limit: 3,
+    });
+    const parsed = parseToolResult<unknown[]>(result);
+    expect(parsed).toHaveLength(3);
+  });
 });
