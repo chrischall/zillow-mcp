@@ -266,9 +266,7 @@ describe('zillow_get_property tool', () => {
   });
 
   it('falls back to resoFacts.yearBuilt when the top-level yearBuilt is missing (issue #29)', async () => {
-    // Some Zillow pages omit `property.yearBuilt` at the top level but
-    // still populate `property.resoFacts.yearBuilt`. Verified live for
-    // zpids 102228838, 102109205, 99388739 (May 2026).
+    // Verified live (May 2026): zpids 102228838, 102109205, 99388739 omit top-level yearBuilt but populate resoFacts.yearBuilt.
     mockFetchHtml.mockResolvedValue(
       htmlWithProperty({
         zpid: 102228838,
@@ -284,8 +282,7 @@ describe('zillow_get_property tool', () => {
   });
 
   it('keeps the top-level yearBuilt when both paths are populated', async () => {
-    // For zpids like 456147481 and 102205216 the top-level yearBuilt is
-    // already correct — the resoFacts fallback must not override it.
+    // 456147481, 102205216: top-level yearBuilt is correct; fallback must not override.
     mockFetchHtml.mockResolvedValue(
       htmlWithProperty({
         zpid: 456147481,
