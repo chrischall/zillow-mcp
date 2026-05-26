@@ -14,6 +14,7 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | --- | --- | --- | --- |
 | `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
 | `zillow_get_property` | `tools/properties.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
+| `zillow_get_by_address` | `tools/get-by-address.ts` | GET `/homes/<address-slug>_rb/` SSR — first `listResults[]` row | read |
 | `zillow_get_property_photos` | `tools/photos.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.photos[]) | read |
 | `zillow_get_zestimate_history` | `tools/zestimate.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
 | `zillow_get_price_history` | `tools/history.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.priceHistory) | read |
