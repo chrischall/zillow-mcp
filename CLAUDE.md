@@ -14,6 +14,7 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | --- | --- | --- | --- |
 | `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
 | `zillow_get_property` | `tools/properties.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
+| `zillow_get_by_address` | `tools/get-by-address.ts` | GET `/homes/<address-slug>_rb/` SSR — first `listResults[]` row | read |
 | `zillow_get_property_photos` | `tools/photos.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.photos[]) | read |
 | `zillow_get_zestimate_history` | `tools/zestimate.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
 | `zillow_get_price_history` | `tools/history.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.priceHistory) | read |
@@ -25,6 +26,7 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | `zillow_calculate_mortgage` | `tools/mortgage.ts` | (local; no network) | read |
 | `zillow_calculate_affordability` | `tools/affordability.ts` | (local; no network) | read |
 | `zillow_calculate_rent_vs_buy` | `tools/affordability.ts` | (local; no network) | read |
+| `zillow_healthcheck` | `tools/healthcheck.ts` | GET `/robots.txt` round-trip + bridge status snapshot | read |
 
 All SSR tools parse `<script id="__NEXT_DATA__">` from the response. Zillow is a Next.js app; `__NEXT_DATA__.props.pageProps` is the canonical hydration root.
 
@@ -51,6 +53,7 @@ src/
     saved.ts            # zillow_get_saved_searches, zillow_get_saved_homes
     market.ts           # zillow_get_market_report
     mortgage.ts         # zillow_calculate_mortgage (local PITI)
+    healthcheck.ts      # zillow_healthcheck (bridge round-trip diagnostics)
 
 tests/                  # 1:1 mirror of src/, plus tests/helpers.ts harness.
                         #   All tests mock ZillowClient.{fetchHtml,fetchJson}.
