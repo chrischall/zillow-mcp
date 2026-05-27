@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import {
   buildAddressSlug,
+  expandStreetSuffix,
   registerGetByAddressTools,
 } from '../../src/tools/get-by-address.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
@@ -55,6 +56,33 @@ function htmlWithFirstListing(args: {
     nextData
   )}</script>`;
 }
+
+describe('expandStreetSuffix', () => {
+  it('returns null when the address has no recognized suffix', () => {
+    expect(expandStreetSuffix('1 Main')).toBeNull();
+  });
+
+  it('expands an abbreviated suffix into its long form (Rd -> Road)', () => {
+    expect(expandStreetSuffix('268 Mallard Rd')).toBe('268 Mallard Road');
+  });
+
+  it('contracts a long suffix into its abbreviated form (Lane -> Ln)', () => {
+    expect(expandStreetSuffix('12 Eagle Lane')).toBe('12 Eagle Ln');
+  });
+
+  it('handles a trailing period on an abbreviated suffix (Rd.)', () => {
+    expect(expandStreetSuffix('268 Mallard Rd.')).toBe('268 Mallard Road');
+  });
+
+  it('preserves casing of the rest of the address', () => {
+    expect(expandStreetSuffix('268 MALLARD Rd')).toBe('268 MALLARD Road');
+  });
+
+  it('only swaps the suffix when it appears at the end of the street', () => {
+    // "Rd" in the middle of a name (e.g. "Roderick") shouldn't be touched.
+    expect(expandStreetSuffix('100 Roderick Dr')).toBe('100 Roderick Drive');
+  });
+});
 
 describe('buildAddressSlug', () => {
   it('joins the supplied fields into a single space-separated phrase', () => {
@@ -159,7 +187,10 @@ describe('zillow_get_by_address tool', () => {
 
   it('returns resolved=false when the first listing has no zpid', async () => {
     // formatListing() returns null when neither hdpData.homeInfo.zpid nor the
-    // top-level zpid is present — exercise the !formatted branch.
+    // top-level zpid is present. With the issue #51/#52 fallback ladder,
+    // a no-zpid result is treated the same as "no listing" (we go on to
+    // try the next rung) — when no rungs are applicable, the final
+    // error string is the generic one.
     const nextData = {
       props: {
         pageProps: {
@@ -187,7 +218,7 @@ describe('zillow_get_by_address tool', () => {
       result
     );
     expect(parsed.resolved).toBe(false);
-    expect(parsed.error).toMatch(/no zpid/i);
+    expect(parsed.error).toMatch(/no listing found/i);
   });
 
   it('returns resolved=false when Zillow silently falls back to a different region', async () => {
@@ -211,6 +242,180 @@ describe('zillow_get_by_address tool', () => {
     );
     expect(parsed.resolved).toBe(false);
     expect(parsed.error).toMatch(/no listing found/i);
+  });
+
+  it('retries with the expanded suffix when the abbreviated form misses (issue #51)', async () => {
+    // First call (abbreviated "Rd") returns no listing; second call
+    // (expanded "Road") finds the property.
+    let call = 0;
+    mockFetchHtml.mockImplementation(async () => {
+      call++;
+      if (call === 1) {
+        // Empty list results — Zillow couldn't resolve the abbreviated form.
+        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      }
+      return htmlWithFirstListing({
+        zpid: 50_000,
+        detailUrl: '/homedetails/268-Mallard-Road-Lake-Lure-NC-28746/50000_zpid/',
+        streetAddress: '268 Mallard Road',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      });
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '268 Mallard Rd',
+      city: 'Lake Lure',
+      state: 'NC',
+      zip: '28746',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('50000');
+    // Confirm we actually retried with the expansion.
+    expect(call).toBe(2);
+  });
+
+  it('retries with the abbreviated form when the expanded one misses', async () => {
+    let call = 0;
+    mockFetchHtml.mockImplementation(async () => {
+      call++;
+      if (call === 1) {
+        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      }
+      return htmlWithFirstListing({
+        zpid: 60_000,
+        detailUrl: '/homedetails/foo/60000_zpid/',
+        streetAddress: '12 Eagle Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+      });
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '12 Eagle Lane',
+      city: 'Lake Lure',
+      state: 'NC',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('60000');
+  });
+
+  it('falls back to a one-shot search (city/state + price band) when direct resolve fails (issue #52)', async () => {
+    // First two calls (abbrev + expanded) return nothing; the third call
+    // — a city+state search — returns the listing.
+    let call = 0;
+    mockFetchHtml.mockImplementation(async () => {
+      call++;
+      if (call <= 2) {
+        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      }
+      // The fallback search returns a listing in the matching city + a token from the address.
+      return htmlWithFirstListing({
+        zpid: 70_000,
+        detailUrl: '/homedetails/foo/70000_zpid/',
+        streetAddress: '142 Hidden Cove Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      });
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '142 Hidden Cove Ln',
+      city: 'Lake Lure',
+      state: 'NC',
+      zip: '28746',
+      price_min: 500_000,
+      price_max: 800_000,
+    });
+    const parsed = parseToolResult<{
+      resolved: boolean;
+      zpid?: string;
+      via?: string;
+    }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('70000');
+    expect(parsed.via).toBe('search_fallback');
+    // direct + expansion + search-fallback = 3 calls
+    expect(call).toBe(3);
+  });
+
+  it('search fallback: takes the region branch + 4th filtered call when scope resolve returns a pinned region', async () => {
+    // Triggers the `kind === 'region'` path of searchFallback (lines
+    // 211-228 of get-by-address.ts): rung 3's resolveLocationOrListings
+    // gets a page with `regionSelection` + `mapBounds` and no listResults,
+    // forcing a 4th request — the filtered search pinned to that region —
+    // which finally yields the listing.
+    let call = 0;
+    mockFetchHtml.mockImplementation(async () => {
+      call++;
+      if (call <= 2) {
+        // direct + suffix-expansion both miss
+        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      }
+      if (call === 3) {
+        // scope resolve: region pinned but no listResults yet
+        const nextData = {
+          props: {
+            pageProps: {
+              searchPageState: {
+                queryState: {
+                  regionSelection: [{ regionId: 41568, regionType: 6 }],
+                  mapBounds: {
+                    north: 35.55,
+                    south: 35.4,
+                    east: -82.05,
+                    west: -82.25,
+                  },
+                },
+                cat1: { searchResults: { listResults: [] } },
+              },
+            },
+          },
+        };
+        return `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script>`;
+      }
+      // 4th call: the filtered search with the pinned region — return the match.
+      return htmlWithFirstListing({
+        zpid: 75_000,
+        detailUrl: '/homedetails/foo/75000_zpid/',
+        streetAddress: '99 Hidden Cove Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      });
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '99 Hidden Cove Ln',
+      city: 'Lake Lure',
+      state: 'NC',
+      zip: '28746',
+      price_min: 400_000,
+      price_max: 900_000,
+    });
+    const parsed = parseToolResult<{
+      resolved: boolean;
+      zpid?: string;
+      via?: string;
+    }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('75000');
+    expect(parsed.via).toBe('search_fallback');
+    // direct + expansion + scope-resolve + filtered-search = 4 calls
+    expect(call).toBe(4);
+  });
+
+  it('still returns resolved=false when ALL retries fail', async () => {
+    mockFetchHtml.mockResolvedValue(
+      '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>'
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '1 Nowhere Ln',
+      city: 'Atlantis',
+      state: 'XX',
+    });
+    const parsed = parseToolResult<{ resolved: boolean }>(result);
+    expect(parsed.resolved).toBe(false);
   });
 
   it('builds an absolute URL when detailUrl is missing — falls back to zpid path', async () => {
