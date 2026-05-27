@@ -38,6 +38,14 @@ export interface RawTaxHistoryEntry {
 
 export interface RawResoFacts {
   yearBuilt?: number;
+  /**
+   * MLS-reported HOA dues. Pair with `associationFeeFrequency` (e.g.
+   * "Annually" / "Monthly") to derive a monthly USD figure. (Issue #42.)
+   */
+  associationFee?: number;
+  associationFeeFrequency?: string;
+  /** Fallback path for annual tax — Zillow may stash it here. (Issue #44.) */
+  taxAnnualAmount?: number;
   // Only fallback-used fields are typed; widen as needed.
 }
 
@@ -88,11 +96,41 @@ export interface RawProperty {
   mlsStreetAddress?: string;
   // MLS RESO facts; fallback source when top-level fields are missing (issue #29).
   resoFacts?: RawResoFacts;
+  /**
+   * Zillow surfaces a pre-computed monthly HOA on some listings. When
+   * present, prefer this over deriving from associationFee + frequency.
+   * (Issue #42.)
+   */
+  monthlyHoaFee?: number;
+  /** Annual tax (top-level). May be the not-yet-assessed `1` sentinel. (Issue #44.) */
+  taxAnnualAmount?: number;
+  /**
+   * Previous list price — populated when Zillow has seen a price change
+   * on the current listing cycle. Used to derive `price_drop_*`.
+   * (Issue #43.)
+   */
+  previousPrice?: number;
+  /**
+   * Time the listing was first posted on Zillow, in ms-since-epoch.
+   * Used as a fallback when `daysOnZillow` is absent. (Issue #43.)
+   */
+  timeOnZillow?: number;
+  /**
+   * Alternate address strings supplied by upstream MLS feeds. Surfaced
+   * as `address_alternates[]` in the formatted output. (Issue #50.)
+   */
+  altAddresses?: string[];
 }
 
 export interface FormattedProperty {
   zpid: string;
   url: string;
+  /**
+   * Sheets-paste-ready hyperlink formula pointing at the same listing.
+   * Always present (mirrors `url`). Pasting it into Google Sheets renders
+   * as a clickable "Zillow" link. (Issue #49.)
+   */
+  portal_url_hyperlink: string;
   address?: RawProperty['address'];
   /**
    * Canonical MLS street address. Present whenever the raw property
@@ -102,6 +140,12 @@ export interface FormattedProperty {
    * prefer this value as the canonical address. See issue #30.
    */
   mls_street_address?: string;
+  /**
+   * Alternate address strings (from MLS feeds, parcel variants, etc.)
+   * that disagree with `address.streetAddress`. Omitted when empty.
+   * (Issue #50.)
+   */
+  address_alternates?: string[];
   neighborhood?: string;
   price?: number;
   zestimate?: number;
@@ -117,12 +161,43 @@ export interface FormattedProperty {
   latitude?: number;
   longitude?: number;
   days_on_zillow?: number;
+  /**
+   * Alias for `days_on_zillow` (aligned with the other real-estate MCPs).
+   * Null when neither `daysOnZillow` nor `timeOnZillow` is available.
+   * (Issue #43.)
+   */
+  days_on_market?: number | null;
+  /** `previousPrice - price`. Null when either is missing. (Issue #43.) */
+  price_drop_amount?: number | null;
+  /** `(previous - current) / previous * 100`, rounded to 0.1. (Issue #43.) */
+  price_drop_percent?: number | null;
   page_views?: number;
   favorites?: number;
+  /**
+   * Monthly-normalized HOA cost. Prefers `monthlyHoaFee` from the raw
+   * payload; otherwise derived from `resoFacts.associationFee` +
+   * `associationFeeFrequency`. Null when no fee or unknown frequency.
+   * (Issue #42.)
+   */
+  hoa_monthly_usd?: number | null;
+  /** Null when the raw value was the not-yet-assessed 0/1 sentinel. (Issue #44.) */
+  tax_annual?: number | null;
+  /** "actual" | "not_yet_assessed". (Issue #44.) */
+  tax_status?: 'actual' | 'not_yet_assessed';
   tax_assessed_value?: number;
   tax_assessed_year?: number;
   price_history?: RawProperty['priceHistory'];
   schools?: RawProperty['schools'];
+  /** Most recent `Sold` event date (YYYY-MM-DD) from the price history. (Issue #57.) */
+  last_sold_date?: string | null;
+  /** Price from the most recent `Sold` event in the price history. (Issue #57.) */
+  last_sold_price?: number | null;
+  /**
+   * `(price - zestimate) / zestimate * 100`, rounded to 1 decimal.
+   * Negative when listed below the Zestimate. Null when either input
+   * is missing. (Issue #57.)
+   */
+  zest_vs_list_pct?: number | null;
 }
 
 /**
@@ -247,6 +322,123 @@ export async function fetchPropertyRecord(
   return { raw: property, path };
 }
 
+/**
+ * Build the Sheets-paste-ready hyperlink formula for a listing URL.
+ * Pasting the returned string into a Google Sheets cell renders as a
+ * clickable "Zillow" link. (Issue #49.)
+ */
+export function buildPortalUrlHyperlink(url: string): string {
+  return `=HYPERLINK("${url}","Zillow")`;
+}
+
+/**
+ * Convert an HOA `{amount, frequency}` pair (in Zillow's
+ * `resoFacts.associationFee*` shape) to monthly USD, rounded to the
+ * nearest dollar. Returns `null` for unknown frequency strings (with a
+ * stderr warning) or when the inputs are absent. (Issue #42.)
+ */
+export function hoaToMonthlyUsd(
+  amount: number | undefined,
+  frequency: string | undefined
+): number | null {
+  if (typeof amount !== 'number' || !frequency) return null;
+  let monthly: number;
+  switch (frequency) {
+    case 'Monthly':
+      monthly = amount;
+      break;
+    case 'Annually':
+      monthly = amount / 12;
+      break;
+    case 'Quarterly':
+      monthly = amount / 3;
+      break;
+    case 'SemiAnnually':
+      monthly = amount / 6;
+      break;
+    case 'Weekly':
+      monthly = (amount * 52) / 12;
+      break;
+    default:
+      console.error(
+        `[zillow-mcp] hoa_monthly_usd: unknown associationFeeFrequency "${frequency}" — returning null`
+      );
+      return null;
+  }
+  return Math.round(monthly);
+}
+
+/**
+ * Normalize an address for equality checks — collapse whitespace, drop
+ * punctuation, and lowercase. Used to dedupe `address_alternates`
+ * against the primary `address.streetAddress`.
+ */
+function normalizeAddressForCompare(s: string | undefined): string {
+  if (!s) return '';
+  return s.toLowerCase().replace(/[,#.]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Collect alternate address strings from the raw payload, excluding
+ * the primary. Sources currently include `mlsStreetAddress` (when it
+ * disagrees with `address.streetAddress`) and any `altAddresses[]`
+ * that may be present. Returns an empty array when nothing differs.
+ * (Issue #50.)
+ */
+export function collectAddressAlternates(
+  primary: string | undefined,
+  raw: RawProperty
+): string[] {
+  const primaryNorm = normalizeAddressForCompare(primary);
+  const candidates: string[] = [];
+  if (raw.mlsStreetAddress) candidates.push(raw.mlsStreetAddress);
+  if (raw.altAddresses) candidates.push(...raw.altAddresses);
+  const seen = new Set<string>();
+  const alternates: string[] = [];
+  for (const candidate of candidates) {
+    const norm = normalizeAddressForCompare(candidate);
+    if (!norm) continue;
+    if (norm === primaryNorm) continue;
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    alternates.push(candidate);
+  }
+  return alternates;
+}
+
+/**
+ * Find the most recent `Sold` event in a price history series.
+ * Picks by date (or epoch `time`), preferring the latest. (Issue #57.)
+ */
+export function findLastSold(
+  history: RawPriceHistoryEntry[] | undefined
+): { date: string; price: number } | null {
+  if (!history || history.length === 0) return null;
+  let best: { ts: number; date: string; price: number } | null = null;
+  for (const ev of history) {
+    if (!ev.event || !/sold/i.test(ev.event)) continue;
+    if (typeof ev.price !== 'number') continue;
+    let ts: number | null = null;
+    let date: string | null = null;
+    if (ev.date) {
+      const parsed = Date.parse(ev.date);
+      if (!Number.isNaN(parsed)) {
+        ts = parsed;
+        date = ev.date.slice(0, 10);
+      }
+    }
+    if (ts === null && typeof ev.time === 'number') {
+      ts = ev.time;
+      date = new Date(ev.time).toISOString().slice(0, 10);
+    }
+    if (ts === null || !date) continue;
+    if (best === null || ts > best.ts) {
+      best = { ts, date, price: ev.price };
+    }
+  }
+  return best ? { date: best.date, price: best.price } : null;
+}
+
 export function format(raw: RawProperty): FormattedProperty {
   const zpid = String(raw.zpid ?? '');
   const url = raw.hdpUrl
@@ -254,9 +446,11 @@ export function format(raw: RawProperty): FormattedProperty {
       ? raw.hdpUrl
       : `https://www.zillow.com${raw.hdpUrl}`
     : `https://www.zillow.com/homedetails/${zpid}_zpid/`;
-  return {
+
+  const out: FormattedProperty = {
     zpid,
     url,
+    portal_url_hyperlink: buildPortalUrlHyperlink(url),
     address: raw.address,
     mls_street_address: raw.mlsStreetAddress,
     neighborhood: raw.address?.neighborhood,
@@ -282,6 +476,88 @@ export function format(raw: RawProperty): FormattedProperty {
     price_history: raw.priceHistory,
     schools: raw.schools,
   };
+
+  // address_alternates: alternate flat-string addresses that disagree
+  // with the primary streetAddress. (Issue #50.)
+  const alternates = collectAddressAlternates(raw.address?.streetAddress, raw);
+  if (alternates.length > 0) out.address_alternates = alternates;
+
+  // days_on_market: alias of daysOnZillow with a null when missing.
+  // (Issue #43.) When daysOnZillow is absent but timeOnZillow is set,
+  // derive from the timestamp. Otherwise null.
+  if (typeof raw.daysOnZillow === 'number') {
+    out.days_on_market = raw.daysOnZillow;
+  } else if (typeof raw.timeOnZillow === 'number') {
+    const delta = Date.now() - raw.timeOnZillow;
+    out.days_on_market = Math.max(0, Math.floor(delta / 86_400_000));
+  } else {
+    out.days_on_market = null;
+  }
+
+  // price_drop_*: null when either side is missing or previous is zero.
+  // (Issue #43.)
+  if (
+    typeof raw.price === 'number' &&
+    typeof raw.previousPrice === 'number' &&
+    raw.previousPrice > 0
+  ) {
+    const drop = raw.previousPrice - raw.price;
+    out.price_drop_amount = drop;
+    out.price_drop_percent = Math.round((drop / raw.previousPrice) * 1000) / 10;
+  } else {
+    out.price_drop_amount = null;
+    out.price_drop_percent = null;
+  }
+
+  // hoa_monthly_usd: prefer pre-computed monthlyHoaFee, fall back to
+  // resoFacts.associationFee + frequency. (Issue #42.)
+  if (typeof raw.monthlyHoaFee === 'number') {
+    out.hoa_monthly_usd = raw.monthlyHoaFee;
+  } else {
+    out.hoa_monthly_usd = hoaToMonthlyUsd(
+      raw.resoFacts?.associationFee,
+      raw.resoFacts?.associationFeeFrequency
+    );
+  }
+
+  // tax_annual: null out the 0/1 not-yet-assessed sentinels.
+  // (Issue #44.) Fall back to resoFacts when top-level is missing.
+  const rawTax = raw.taxAnnualAmount ?? raw.resoFacts?.taxAnnualAmount;
+  if (typeof rawTax === 'number') {
+    if (rawTax <= 1) {
+      out.tax_annual = null;
+      out.tax_status = 'not_yet_assessed';
+    } else {
+      out.tax_annual = rawTax;
+      out.tax_status = 'actual';
+    }
+  }
+
+  // last_sold_*: scan price history for the most recent Sold event.
+  // (Issue #57.) No separate call — Zillow embeds priceHistory inline.
+  const lastSold = findLastSold(raw.priceHistory);
+  if (lastSold) {
+    out.last_sold_date = lastSold.date;
+    out.last_sold_price = lastSold.price;
+  } else {
+    out.last_sold_date = null;
+    out.last_sold_price = null;
+  }
+
+  // zest_vs_list_pct: (list - zest) / zest * 100, one decimal.
+  // (Issue #57.) Null when either input is missing/zero.
+  if (
+    typeof raw.price === 'number' &&
+    typeof raw.zestimate === 'number' &&
+    raw.zestimate > 0
+  ) {
+    out.zest_vs_list_pct =
+      Math.round(((raw.price - raw.zestimate) / raw.zestimate) * 1000) / 10;
+  } else {
+    out.zest_vs_list_pct = null;
+  }
+
+  return out;
 }
 
 export function registerPropertyTools(

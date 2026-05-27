@@ -65,7 +65,7 @@ export function registerCompareTools(
     {
       title: 'Compare multiple Zillow properties side-by-side',
       description:
-        "Fetch and compare 2 or more Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns a compact summary table aligned by field (price, beds/baths, sqft, year built, Zestimate, etc.) plus the full per-property record. Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent.",
+        "Fetch and compare 2 or more Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row. Pass `include_summary: true` for an extra pivoted summary table (one row per field). Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent.",
       annotations: {
         title: 'Compare multiple Zillow properties side-by-side',
         readOnlyHint: true,
@@ -89,9 +89,15 @@ export function registerCompareTools(
           .describe(
             'Array of 2–8 Zillow homedetails URLs/paths to compare. Provide either zpids or urls.'
           ),
+        include_summary: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the pivoted `summary` table (one row per compared field, one column per listing). Defaults to `false` because `results[].property.*` already carries everything — the summary roughly doubles response weight and is mainly useful for human-readable rendering.'
+          ),
       },
     },
-    async ({ zpids, urls }) => {
+    async ({ zpids, urls, include_summary }) => {
       const targets =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))
@@ -117,11 +123,16 @@ export function registerCompareTools(
           }
         })
       );
-      return textResult({
+      const body: {
+        count: number;
+        summary?: CompareSummaryRow[];
+        results: ComparePerProperty[];
+      } = {
         count: results.length,
-        summary: buildSummary(results),
         results,
-      });
+      };
+      if (include_summary === true) body.summary = buildSummary(results);
+      return textResult(body);
     }
   );
 }
