@@ -29,7 +29,7 @@ import { registerPhotosTools } from './tools/photos.js';
 import { registerHealthcheckTools } from './tools/healthcheck.js';
 import { registerGetByAddressTools } from './tools/get-by-address.js';
 
-const VERSION = '0.4.5'; // x-release-please-version
+const VERSION = '0.5.0'; // x-release-please-version
 
 const port = process.env.ZILLOW_WS_PORT
   ? Number(process.env.ZILLOW_WS_PORT)
