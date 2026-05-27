@@ -9,6 +9,21 @@ import {
   loadCommunities,
   type ExtractedFeatures,
 } from '../features.js';
+import {
+  formatPriceEvent,
+  formatTaxEvent,
+  normalizePriceEvent,
+  type FormattedPriceEvent,
+  type FormattedTaxEvent,
+  type NormalizedPriceEvent,
+  type RawPriceHistoryEntry,
+  type RawTaxHistoryEntry,
+} from './history-format.js';
+// Re-export raw history-entry types so existing `from './properties'` imports keep working.
+export type {
+  RawPriceHistoryEntry,
+  RawTaxHistoryEntry,
+} from './history-format.js';
 
 /**
  * Zillow's homedetails pages are SSR Next.js. The full property object
@@ -17,29 +32,6 @@ import {
  * blob keyed by an Apollo cache id. Picking the first entry whose value
  * has a `property` field gives us the property record.
  */
-
-export interface RawPriceHistoryEntry {
-  date?: string;
-  time?: number;
-  event?: string;
-  price?: number;
-  priceChangeRate?: number;
-  pricePerSquareFoot?: number;
-  source?: string;
-  attributeSource?: {
-    infoString1?: string;
-    infoString2?: string;
-    infoString3?: string;
-  };
-}
-
-export interface RawTaxHistoryEntry {
-  time?: number;
-  taxPaid?: number;
-  taxIncreaseRate?: number;
-  value?: number;
-  valueIncreaseRate?: number;
-}
 
 export interface RawResoFacts {
   yearBuilt?: number;
@@ -191,7 +183,6 @@ export interface FormattedProperty {
   tax_status?: 'actual' | 'not_yet_assessed';
   tax_assessed_value?: number;
   tax_assessed_year?: number;
-  price_history?: RawProperty['priceHistory'];
   schools?: RawProperty['schools'];
   /** Most recent `Sold` event date (YYYY-MM-DD) from the price history. (Issue #57.) */
   last_sold_date?: string | null;
@@ -203,6 +194,13 @@ export interface FormattedProperty {
    * is missing. (Issue #57.)
    */
   zest_vs_list_pct?: number | null;
+  // Present only when `include_price_history: true`; mirrors `zillow_get_price_history`.
+  price_history?: {
+    events: FormattedPriceEvent[];
+    events_normalized: NormalizedPriceEvent[];
+  };
+  // Present only when `include_tax_history: true`; mirrors `zillow_get_tax_history`.
+  tax_history?: FormattedTaxEvent[];
   /**
    * Server-side keyword extraction from the description (issue #41).
    * Always populated — the five binary/categorical fields are present
@@ -217,12 +215,12 @@ export interface FormattedProperty {
 }
 
 export interface FormatOptions {
-  /**
-   * Include the raw `description` in the output. Defaults to `false`
-   * (issue #40) because callers usually keyword-parse and discard it
-   * on receipt — `extracted_features` covers the common needs.
-   */
+  // Include the raw `description`; defaults false (callers usually rely on `extracted_features`).
   includeDescription?: boolean;
+  // Bundle the same payload `zillow_get_price_history` would return under `price_history`.
+  includePriceHistory?: boolean;
+  // Bundle the same payload `zillow_get_tax_history` would return under `tax_history`.
+  includeTaxHistory?: boolean;
 }
 
 /**
@@ -499,7 +497,6 @@ export function format(
     favorites: raw.favoriteCount,
     tax_assessed_value: raw.taxAssessedValue,
     tax_assessed_year: raw.taxAssessedYear,
-    price_history: raw.priceHistory,
     schools: raw.schools,
     // Always populate extracted_features — even when the listing has no
     // description, the five binary/categorical fields are present with
@@ -592,6 +589,17 @@ export function format(
   if (opts.includeDescription === true && raw.description) {
     out.description = raw.description;
   }
+  // Bundled history opt-in; saves a round trip when the caller wants both.
+  if (opts.includePriceHistory === true) {
+    const events = (raw.priceHistory ?? []).map(formatPriceEvent);
+    out.price_history = {
+      events,
+      events_normalized: events.map(normalizePriceEvent),
+    };
+  }
+  if (opts.includeTaxHistory === true) {
+    out.tax_history = (raw.taxHistory ?? []).map(formatTaxEvent);
+  }
   return out;
 }
 
@@ -604,7 +612,7 @@ export function registerPropertyTools(
     {
       title: 'Get Zillow property details',
       description:
-        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, price history, and an `extracted_features` block (lake_front, hot_tub, basement, furnished, dock, community) keyword-parsed from the description. The raw `description` is omitted by default — pass `include_description: true` to keep it; in most cases the extracted features cover what callers need. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
+        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, and an `extracted_features` block (lake_front, hot_tub, basement, furnished, dock, community) keyword-parsed from the description. The raw `description` is omitted by default — pass `include_description: true` to keep it; in most cases the extracted features cover what callers need. Price-history and tax-history are also opt-in (`include_price_history: true` / `include_tax_history: true`) — bundle them in to skip a separate call. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get Zillow property details',
         readOnlyHint: true,
@@ -626,11 +634,29 @@ export function registerPropertyTools(
           .describe(
             'Include the raw `description` in the response. Defaults to `false` — `extracted_features` is always populated and usually sufficient.'
           ),
+        include_price_history: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the price-history series (mirrors `zillow_get_price_history`) on the response under `price_history`. Defaults to `false`. Saves a round trip when you already know you want the full picture.'
+          ),
+        include_tax_history: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the tax-history series (mirrors `zillow_get_tax_history`) on the response under `tax_history`. Defaults to `false`.'
+          ),
       },
     },
-    async ({ zpid, url, include_description }) => {
+    async ({ zpid, url, include_description, include_price_history, include_tax_history }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
-      return textResult(format(raw, { includeDescription: include_description }));
+      return textResult(
+        format(raw, {
+          includeDescription: include_description,
+          includePriceHistory: include_price_history,
+          includeTaxHistory: include_tax_history,
+        })
+      );
     }
   );
 }
