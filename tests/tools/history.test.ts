@@ -140,7 +140,7 @@ describe('history tools — MCP integration', () => {
   });
 });
 
-describe('normalizePriceEvent (issue #55)', () => {
+describe('normalizePriceEvent', () => {
   const make = (event: string): FormattedPriceEvent => ({
     date: '2025-01-15',
     event,
@@ -178,10 +178,7 @@ describe('normalizePriceEvent (issue #55)', () => {
     expect(typeOf('Listing delisted')).toBe('Delisted');
   });
   it('falls back to Listed for an unrecognized event (best-effort)', () => {
-    // Zillow has used a number of historical variants; we err on the
-    // side of preserving the price-point data even when the label is
-    // novel. Callers can still inspect raw `event` from the parallel
-    // `events` array if they care about disambiguation.
+    // Unknown labels default to Listed; raw event is still on the parallel `events` array.
     expect(typeOf('Some weird future event')).toBe('Listed');
   });
 
@@ -204,7 +201,7 @@ describe('normalizePriceEvent (issue #55)', () => {
   });
 });
 
-describe('zillow_get_price_history — events_normalized (issue #55)', () => {
+describe('zillow_get_price_history — events_normalized', () => {
   it('attaches events_normalized alongside the raw events series', async () => {
     mockFetchHtml.mockResolvedValueOnce(
       htmlWith({
@@ -232,7 +229,7 @@ describe('zillow_get_price_history — events_normalized (issue #55)', () => {
   });
 });
 
-describe('zillow_get_property — bundled history flags (issue #56)', () => {
+describe('zillow_get_property — bundled history flags', () => {
   it('omits price_history and tax_history by default', async () => {
     mockFetchHtml.mockResolvedValueOnce(
       htmlWith({

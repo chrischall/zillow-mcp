@@ -16,8 +16,13 @@ import {
   type FormattedPriceEvent,
   type FormattedTaxEvent,
   type NormalizedPriceEvent,
-  type RawPriceHistoryEntry as _SharedRawPriceHistoryEntry,
-  type RawTaxHistoryEntry as _SharedRawTaxHistoryEntry,
+  type RawPriceHistoryEntry,
+  type RawTaxHistoryEntry,
+} from './history-format.js';
+// Re-export raw history-entry types so existing `from './properties'` imports keep working.
+export type {
+  RawPriceHistoryEntry,
+  RawTaxHistoryEntry,
 } from './history-format.js';
 
 /**
@@ -27,11 +32,6 @@ import {
  * blob keyed by an Apollo cache id. Picking the first entry whose value
  * has a `property` field gives us the property record.
  */
-
-// Raw history entry types now live in `history-format.ts`; re-exported here
-// so existing import paths (e.g. `from './properties'`) keep working.
-export type RawPriceHistoryEntry = _SharedRawPriceHistoryEntry;
-export type RawTaxHistoryEntry = _SharedRawTaxHistoryEntry;
 
 export interface RawResoFacts {
   yearBuilt?: number;
@@ -589,8 +589,7 @@ export function format(
   if (opts.includeDescription === true && raw.description) {
     out.description = raw.description;
   }
-  // Bundled history — opt-in (issue #56). Saves a round trip per
-  // property when the caller already knows they want the full picture.
+  // Bundled history opt-in; saves a round trip when the caller wants both.
   if (opts.includePriceHistory === true) {
     const events = (raw.priceHistory ?? []).map(formatPriceEvent);
     out.price_history = {
