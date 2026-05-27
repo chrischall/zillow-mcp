@@ -61,7 +61,7 @@ describe('zillow_compare_properties tool', () => {
     );
   });
 
-  it('fetches each zpid concurrently and returns aligned summary + results', async () => {
+  it('fetches each zpid concurrently and returns aligned results (summary opt-in)', async () => {
     mockFetchHtml.mockImplementation(async (path: string) => {
       const m = /\/homedetails\/(\d+)_zpid/.exec(path);
       const zpid = m ? parseInt(m[1], 10) : 0;
@@ -76,19 +76,38 @@ describe('zillow_compare_properties tool', () => {
 
     const r = await harness.callTool('zillow_compare_properties', {
       zpids: [1, 2, 3],
+      include_summary: true,
     });
     expect(r.isError).toBeFalsy();
     const parsed = parseToolResult<{
       count: number;
-      summary: Array<{ field: string; values: unknown[] }>;
+      summary?: Array<{ field: string; values: unknown[] }>;
       results: Array<{ zpid: string; property?: { price?: number }; error?: string }>;
     }>(r);
     expect(parsed.count).toBe(3);
     expect(parsed.results.map((res) => res.property?.price)).toEqual([
       100_000, 200_000, 300_000,
     ]);
-    const summaryPrices = parsed.summary.find((s) => s.field === 'price')!;
+    expect(parsed.summary).toBeDefined();
+    const summaryPrices = parsed.summary!.find((s) => s.field === 'price')!;
     expect(summaryPrices.values).toEqual([100_000, 200_000, 300_000]);
+  });
+
+  it('omits summary by default (issue #45)', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      const zpid = m ? parseInt(m[1], 10) : 0;
+      return htmlWith({ zpid, price: zpid * 100_000 });
+    });
+    const r = await harness.callTool('zillow_compare_properties', {
+      zpids: [1, 2],
+    });
+    const parsed = parseToolResult<{
+      summary?: Array<{ field: string; values: unknown[] }>;
+      results: unknown[];
+    }>(r);
+    expect(parsed.summary).toBeUndefined();
+    expect(parsed.results).toHaveLength(2);
   });
 
   it('captures per-property errors without failing the whole call', async () => {
@@ -111,6 +130,24 @@ describe('zillow_compare_properties tool', () => {
 
   it('errors when fewer than 2 ids provided', async () => {
     const r = await harness.callTool('zillow_compare_properties', { zpids: [1] });
+    expect(r.isError).toBeTruthy();
+  });
+
+  it('accepts up to 25 zpids per call (issue #60 — cap raised from 8 to 25)', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      const zpid = m ? parseInt(m[1], 10) : 0;
+      return htmlWith({ zpid, price: zpid });
+    });
+    const zpids = Array.from({ length: 25 }, (_, i) => i + 1);
+    const r = await harness.callTool('zillow_compare_properties', { zpids });
+    const parsed = parseToolResult<{ count: number }>(r);
+    expect(parsed.count).toBe(25);
+  });
+
+  it('rejects more than 25 zpids per call (cap enforced)', async () => {
+    const zpids = Array.from({ length: 26 }, (_, i) => i + 1);
+    const r = await harness.callTool('zillow_compare_properties', { zpids });
     expect(r.isError).toBeTruthy();
   });
 

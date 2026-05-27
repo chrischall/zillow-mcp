@@ -270,7 +270,7 @@ export function registerGetByAddressTools(
     {
       title: 'Resolve an address to its Zillow canonical URL + zpid',
       description:
-        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. Tries up to 3 strategies: (1) direct resolver hit, (2) abbreviated-suffix expansion (\"Rd\" <-> \"Road\", \"Ln\" <-> \"Lane\", etc.), (3) city/state search fallback bounded by an optional price band. Returns `via: \"direct\" | \"suffix_expansion\" | \"search_fallback\"` so the caller knows how the match was made. Degrades to `{ resolved: false }` when ALL strategies miss — does not throw. Read-only, no auth required.",
+        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. Tries up to 3 strategies: (1) direct resolver hit, (2) abbreviated-suffix expansion (\"Rd\" <-> \"Road\", \"Ln\" <-> \"Lane\", etc.), (3) city/state search fallback bounded by an optional price band. Returns `via: \"direct\" | \"suffix_expansion\" | \"search_fallback\"` so the caller knows how the match was made. Degrades to `{ resolved: false }` when ALL strategies miss — does not throw. When the resolved address comes back, callers should sanity-check it against the input — Zillow's address can also occasionally disagree with the MLS address (see `mls_street_address` on get_property). Read-only, no auth required.",
       annotations: {
         title: 'Resolve an address to its Zillow canonical URL + zpid',
         readOnlyHint: true,
