@@ -3,8 +3,9 @@ import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import {
   FetchproxyBridgeDownError,
+  FetchproxyProtocolError,
   FetchproxyTimeoutError,
-} from '../transport-fetchproxy.js';
+} from '@fetchproxy/server';
 
 /**
  * Round-trip a no-op request through the full bridge so the user can
@@ -40,6 +41,8 @@ interface HealthcheckResult {
     last_failure_reason: string | null;
     /** Count of failures since the last success (or process start, if none). */
     consecutive_failures: number;
+    /** 0.8.0+: timestamp of last inner frame from the extension — liveness regardless of success/failure. */
+    last_extension_message_at: number | null;
   };
   probe: {
     url: string;
@@ -128,19 +131,21 @@ export function registerHealthcheckTools(
         ok = true;
       } catch (e) {
         const elapsedMs = Date.now() - start;
+        // Capture role at the moment of failure for the typed-error branches.
+        const roleAtFailure = client.bridgeStatus().role;
         if (e instanceof FetchproxyTimeoutError) {
           error = {
             kind: 'timeout',
             message: e.message,
-            role_at_failure: e.role,
+            role_at_failure: roleAtFailure,
           };
         } else if (e instanceof FetchproxyBridgeDownError) {
           error = {
             kind: 'bridge_down',
             message: e.message,
-            role_at_failure: e.role,
+            role_at_failure: roleAtFailure,
           };
-        } else if (e instanceof Error && /fetchproxy transport error/.test(e.message)) {
+        } else if (e instanceof FetchproxyProtocolError) {
           error = { kind: 'transport', message: e.message };
         } else {
           error = {
@@ -165,6 +170,7 @@ export function registerHealthcheckTools(
           last_failure_at: postProbeBridge.lastFailureAt,
           last_failure_reason: postProbeBridge.lastFailureReason,
           consecutive_failures: postProbeBridge.consecutiveFailures,
+          last_extension_message_at: postProbeBridge.lastExtensionMessageAt,
         },
         probe,
         ...(error ? { error } : {}),
