@@ -133,8 +133,12 @@ export interface FormattedProperty {
    * Always populated — the five binary/categorical fields are present
    * regardless of whether the listing has a description (they default
    * to false/null). Callers can rely on the field being there.
+   *
+   * Typed as required (not optional) so TypeScript consumers don't
+   * need `!` assertions; matches the wire contract documented in #41
+   * and the always-populated behavior of `format()` (PR #61 nit).
    */
-  extracted_features?: ExtractedFeatures;
+  extracted_features: ExtractedFeatures;
 }
 
 export interface FormatOptions {
