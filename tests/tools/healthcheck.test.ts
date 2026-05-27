@@ -148,7 +148,7 @@ describe('zillow_healthcheck tool', () => {
     expect(parsed.hint).toMatch(/never bound a role/);
   });
 
-  it('classifies a generic FetchproxyProtocolError as kind=transport', async () => {
+  it('classifies a generic FetchproxyProtocolError as kind=protocol (0.8.0 classifyBridgeError vocabulary)', async () => {
     const client = stubClient({
       fetchHtml: vi
         .fn()
@@ -164,7 +164,9 @@ describe('zillow_healthcheck tool', () => {
     const r = await harness.callTool('zillow_healthcheck', {});
     const parsed = parseToolResult<{ ok: boolean; error: { kind: string }; hint: string }>(r);
     expect(parsed.ok).toBe(false);
-    expect(parsed.error.kind).toBe('transport');
+    // 0.8.0 vocabulary: 'protocol' (from classifyBridgeError) replaces the
+    // legacy 'transport' label.
+    expect(parsed.error.kind).toBe('protocol');
     expect(parsed.hint).toMatch(/no zillow\.com tab is open/i);
   });
 
@@ -237,5 +239,71 @@ describe('zillow_healthcheck tool', () => {
     const parsed = parseToolResult<{ ok: boolean; error: { kind: string } }>(r);
     expect(parsed.ok).toBe(false);
     expect(parsed.error.kind).toBe('other');
+  });
+
+  // 0.8.0+: FetchproxyBridgeDownError carries an actionable `.hint` string
+  // ("click the extension icon …"). Surface it in the response so the LLM
+  // can show the user concrete recovery guidance instead of paraphrasing
+  // the bare error message.
+  it("surfaces the bridge-down error's .hint in the response's top-level hint", async () => {
+    const BRIDGE_HINT =
+      'Click the fetchproxy extension icon to wake its service worker, then retry.';
+    const err = new FetchproxyBridgeDownError({
+      originalError: 'Could not establish connection.',
+      retryAttempted: true,
+    });
+    // Override `.hint` so the test pins behavior to the surfaced value
+    // rather than the package's current default copy.
+    Object.defineProperty(err, 'hint', { value: BRIDGE_HINT, writable: false });
+    const client = stubClient({
+      status: { role: 'peer', port: 37149, serverVersion: '0.5.0' },
+      fetchHtml: vi.fn().mockRejectedValue(err),
+    });
+    harness = await createTestHarness((server) =>
+      registerHealthcheckTools(server, client)
+    );
+    const r = await harness.callTool('zillow_healthcheck', {});
+    const parsed = parseToolResult<{
+      error: { kind: string; detail?: { hint?: string; retry_attempted?: boolean } };
+      hint: string;
+    }>(r);
+    expect(parsed.error.kind).toBe('bridge_down');
+    // Top-level hint includes the error's hint verbatim.
+    expect(parsed.hint).toContain(BRIDGE_HINT);
+    // The error's hint + retry_attempted are also exposed under error.detail
+    // for structured consumers.
+    expect(parsed.error.detail?.hint).toBe(BRIDGE_HINT);
+    expect(parsed.error.detail?.retry_attempted).toBe(true);
+  });
+
+  // 0.8.0+: FetchproxyTimeoutError carries the actual `.elapsedMs` (the
+  // moment the timer won the race). Surface it under error.detail so the
+  // LLM can tell "barely missed" from "hung for the full window".
+  it("surfaces the timeout error's .elapsedMs in error.detail", async () => {
+    const client = stubClient({
+      status: {
+        role: 'host',
+        port: 37149,
+        serverVersion: '0.5.0',
+        fetchTimeoutMs: 30_000,
+      },
+      fetchHtml: vi.fn().mockRejectedValue(
+        new FetchproxyTimeoutError({
+          url: 'https://www.zillow.com/robots.txt',
+          timeoutMs: 30_000,
+          elapsedMs: 30_004,
+        })
+      ),
+    });
+    harness = await createTestHarness((server) =>
+      registerHealthcheckTools(server, client)
+    );
+    const r = await harness.callTool('zillow_healthcheck', {});
+    const parsed = parseToolResult<{
+      error: { kind: string; detail?: { elapsed_ms?: number; timeout_ms?: number } };
+    }>(r);
+    expect(parsed.error.kind).toBe('timeout');
+    expect(parsed.error.detail?.elapsed_ms).toBe(30_004);
+    expect(parsed.error.detail?.timeout_ms).toBe(30_000);
   });
 });
