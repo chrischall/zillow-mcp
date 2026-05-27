@@ -65,7 +65,7 @@ export function registerCompareTools(
     {
       title: 'Compare multiple Zillow properties side-by-side',
       description:
-        "Fetch and compare 2 or more Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row. Pass `include_summary: true` for an extra pivoted summary table (one row per field). Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent.",
+        "Fetch and compare 2 or more Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent.",
       annotations: {
         title: 'Compare multiple Zillow properties side-by-side',
         readOnlyHint: true,
@@ -95,9 +95,15 @@ export function registerCompareTools(
           .describe(
             'Include the pivoted `summary` table (one row per compared field, one column per listing). Defaults to `false` because `results[].property.*` already carries everything — the summary roughly doubles response weight and is mainly useful for human-readable rendering.'
           ),
+        include_description: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the raw `description` on each row. Defaults to `false`.'
+          ),
       },
     },
-    async ({ zpids, urls, include_summary }) => {
+    async ({ zpids, urls, include_summary, include_description }) => {
       const targets =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))
@@ -116,7 +122,7 @@ export function registerCompareTools(
             const { raw } = await fetchPropertyRecord(client, t);
             return {
               zpid: String(raw.zpid ?? fallbackZpid),
-              property: format(raw),
+              property: format(raw, { includeDescription: include_description }),
             };
           } catch (e) {
             return { zpid: fallbackZpid, error: (e as Error).message };

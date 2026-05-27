@@ -5,10 +5,12 @@ import {
   buildPath,
   extractZpidFromUrl,
   findPropertyInPageProps,
+  format,
   registerPropertyTools,
   type RawProperty,
 } from '../../src/tools/properties.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
+import type { ExtractedFeatures } from '../../src/features.js';
 
 const mockFetchHtml = vi.fn();
 const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
@@ -164,6 +166,36 @@ describe('findPropertyInPageProps', () => {
       gdpClientCache: JSON.stringify(cache),
     });
     expect(property?.zpid).toBe(5);
+  });
+});
+
+describe('format() — FormattedProperty contract', () => {
+  // PR #61 polish nit: the FormattedProperty contract guarantees
+  // extracted_features is always populated by format(). The interface
+  // should reflect that — i.e. the field is non-optional. This test
+  // asserts the source-level type by destructuring into a non-optional
+  // local (which only typechecks if FormattedProperty.extracted_features
+  // is declared as required, not `?:`).
+  it('declares extracted_features as a required (non-optional) field', () => {
+    const out = format({ zpid: 1, description: 'Lakefront cabin' } as RawProperty);
+    // Force the type-system to demand a present-and-typed value. If
+    // FormattedProperty regresses to `extracted_features?: ...`, this
+    // assignment errors at `tsc --noEmit`.
+    const features: ExtractedFeatures = out.extracted_features;
+    expect(features.lake_front).toBe(true);
+  });
+
+  it('still populates extracted_features when description is absent', () => {
+    const out = format({ zpid: 1 } as RawProperty);
+    const features: ExtractedFeatures = out.extracted_features;
+    expect(features).toEqual({
+      lake_front: false,
+      hot_tub: false,
+      basement: null,
+      furnished: null,
+      dock: null,
+      community: null,
+    });
   });
 });
 
@@ -622,6 +654,87 @@ describe('zillow_get_property tool', () => {
       const result = await harness.callTool('zillow_get_property', { zpid: 1 });
       const parsed = parseToolResult<{ zest_vs_list_pct: number | null }>(result);
       expect(parsed.zest_vs_list_pct).toBeNull();
+    });
+  });
+
+  it('omits the raw description by default (issue #40)', async () => {
+    // Per-listing context-saving: callers usually keyword-parse and
+    // discard the description on receipt.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 5,
+        description: 'Lakefront with hot tub. Finished basement.',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    const parsed = parseToolResult<{ description?: string }>(result);
+    expect(parsed.description).toBeUndefined();
+  });
+
+  it('keeps the description when include_description: true', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 5,
+        description: 'Lakefront with hot tub.',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: 5,
+      include_description: true,
+    });
+    const parsed = parseToolResult<{ description?: string }>(result);
+    expect(parsed.description).toBe('Lakefront with hot tub.');
+  });
+
+  it('always populates extracted_features when a description exists (issue #41)', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 5,
+        description: 'Lakefront with private dock and hot tub. Finished basement.',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    // Typed non-optional — PR #61 polish nit: the FormattedProperty
+    // contract guarantees extracted_features is always present, so the
+    // type shouldn't make callers thread `!` assertions.
+    const parsed = parseToolResult<{
+      extracted_features: {
+        lake_front: boolean;
+        hot_tub: boolean;
+        basement: string | null;
+        dock: string | null;
+      };
+    }>(result);
+    expect(parsed.extracted_features).toBeDefined();
+    expect(parsed.extracted_features.lake_front).toBe(true);
+    expect(parsed.extracted_features.hot_tub).toBe(true);
+    expect(parsed.extracted_features.basement).toBe('finished');
+    expect(parsed.extracted_features.dock).toBe('private');
+  });
+
+  it('populates extracted_features with the five-field schema even on empty descriptions', async () => {
+    // Issue #41 calls out that all five binary/categorical features
+    // should always be present (populated when possible). We surface
+    // them whether or not the listing has a description.
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 5 } as RawProperty));
+    const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    const parsed = parseToolResult<{
+      extracted_features: {
+        lake_front: boolean;
+        hot_tub: boolean;
+        basement: string | null;
+        furnished: string | null;
+        dock: string | null;
+        community: string | null;
+      };
+    }>(result);
+    expect(parsed.extracted_features).toEqual({
+      lake_front: false,
+      hot_tub: false,
+      basement: null,
+      furnished: null,
+      dock: null,
+      community: null,
     });
   });
 });

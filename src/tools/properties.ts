@@ -4,6 +4,11 @@ import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
+import {
+  extractFeatures,
+  loadCommunities,
+  type ExtractedFeatures,
+} from '../features.js';
 
 /**
  * Zillow's homedetails pages are SSR Next.js. The full property object
@@ -198,6 +203,26 @@ export interface FormattedProperty {
    * is missing. (Issue #57.)
    */
   zest_vs_list_pct?: number | null;
+  /**
+   * Server-side keyword extraction from the description (issue #41).
+   * Always populated — the five binary/categorical fields are present
+   * regardless of whether the listing has a description (they default
+   * to false/null). Callers can rely on the field being there.
+   *
+   * Typed as required (not optional) so TypeScript consumers don't
+   * need `!` assertions; matches the wire contract documented in #41
+   * and the always-populated behavior of `format()` (PR #61 nit).
+   */
+  extracted_features: ExtractedFeatures;
+}
+
+export interface FormatOptions {
+  /**
+   * Include the raw `description` in the output. Defaults to `false`
+   * (issue #40) because callers usually keyword-parse and discard it
+   * on receipt — `extracted_features` covers the common needs.
+   */
+  includeDescription?: boolean;
 }
 
 /**
@@ -439,14 +464,16 @@ export function findLastSold(
   return best ? { date: best.date, price: best.price } : null;
 }
 
-export function format(raw: RawProperty): FormattedProperty {
+export function format(
+  raw: RawProperty,
+  opts: FormatOptions = {}
+): FormattedProperty {
   const zpid = String(raw.zpid ?? '');
   const url = raw.hdpUrl
     ? raw.hdpUrl.startsWith('http')
       ? raw.hdpUrl
       : `https://www.zillow.com${raw.hdpUrl}`
     : `https://www.zillow.com/homedetails/${zpid}_zpid/`;
-
   const out: FormattedProperty = {
     zpid,
     url,
@@ -465,7 +492,6 @@ export function format(raw: RawProperty): FormattedProperty {
     year_built: raw.yearBuilt ?? raw.resoFacts?.yearBuilt,
     home_type: raw.homeType,
     status: raw.homeStatus,
-    description: raw.description,
     latitude: raw.latitude,
     longitude: raw.longitude,
     days_on_zillow: raw.daysOnZillow,
@@ -475,6 +501,10 @@ export function format(raw: RawProperty): FormattedProperty {
     tax_assessed_year: raw.taxAssessedYear,
     price_history: raw.priceHistory,
     schools: raw.schools,
+    // Always populate extracted_features — even when the listing has no
+    // description, the five binary/categorical fields are present with
+    // default values so callers can rely on the schema (issue #41).
+    extracted_features: extractFeatures(raw.description, loadCommunities()),
   };
 
   // address_alternates: alternate flat-string addresses that disagree
@@ -557,6 +587,11 @@ export function format(raw: RawProperty): FormattedProperty {
     out.zest_vs_list_pct = null;
   }
 
+  // description opt-in. Defaults to omitted (issue #40); pass
+  // `includeDescription: true` to keep it.
+  if (opts.includeDescription === true && raw.description) {
+    out.description = raw.description;
+  }
   return out;
 }
 
@@ -569,7 +604,7 @@ export function registerPropertyTools(
     {
       title: 'Get Zillow property details',
       description:
-        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, and price history. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
+        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, price history, and an `extracted_features` block (lake_front, hot_tub, basement, furnished, dock, community) keyword-parsed from the description. The raw `description` is omitted by default — pass `include_description: true` to keep it; in most cases the extracted features cover what callers need. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get Zillow property details',
         readOnlyHint: true,
@@ -585,11 +620,17 @@ export function registerPropertyTools(
           .string()
           .optional()
           .describe('A Zillow homedetails URL (or path beginning with /homedetails/)'),
+        include_description: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the raw `description` in the response. Defaults to `false` — `extracted_features` is always populated and usually sufficient.'
+          ),
       },
     },
-    async ({ zpid, url }) => {
+    async ({ zpid, url, include_description }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
-      return textResult(format(raw));
+      return textResult(format(raw, { includeDescription: include_description }));
     }
   );
 }
