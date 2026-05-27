@@ -48,28 +48,45 @@ export const DEFAULT_COMMUNITIES: string[] = [
 
 let cachedCommunities: string[] | null = null;
 let cachedPath: string | null = null;
+// Negative cache: remembers a path we've already failed to load from so
+// we don't re-stat / re-read the filesystem on every call when the
+// configured file is missing or malformed (PR #61 polish nit). Cleared
+// whenever the env-var path changes or is unset, so a misconfiguration
+// can be corrected by updating ZILLOW_COMMUNITIES_FILE.
+let cachedFailurePath: string | null = null;
 
 /**
  * Resolve the active community vocabulary. Reads `ZILLOW_COMMUNITIES_FILE`
  * (expects a JSON string array). Falls back to `DEFAULT_COMMUNITIES`
  * when unset, the file is missing, or the JSON is malformed (with a
  * stderr warning so misconfiguration is visible). Cached per process
- * keyed by the env-var value.
+ * keyed by the env-var value — both the positive AND negative result.
  */
 export function loadCommunities(): string[] {
   const path = process.env.ZILLOW_COMMUNITIES_FILE?.trim();
   if (!path) {
     cachedCommunities = null;
     cachedPath = null;
+    cachedFailurePath = null;
     return DEFAULT_COMMUNITIES;
   }
   if (cachedCommunities && cachedPath === path) {
     return cachedCommunities;
   }
+  if (cachedFailurePath === path) {
+    // Already tried this path and it failed — keep serving the default
+    // until the env-var changes. Avoids re-statting / re-reading the
+    // disk on every extraction call in a high-volume session.
+    return DEFAULT_COMMUNITIES;
+  }
+  // Path changed since the last call — drop any stale positive cache.
+  cachedCommunities = null;
+  cachedPath = null;
   if (!existsSync(path)) {
     console.error(
       `[zillow-mcp] ZILLOW_COMMUNITIES_FILE="${path}" not found — falling back to DEFAULT_COMMUNITIES.`
     );
+    cachedFailurePath = path;
     return DEFAULT_COMMUNITIES;
   }
   try {
@@ -79,10 +96,12 @@ export function loadCommunities(): string[] {
       console.error(
         `[zillow-mcp] ZILLOW_COMMUNITIES_FILE="${path}" must be a JSON string array — falling back to DEFAULT_COMMUNITIES.`
       );
+      cachedFailurePath = path;
       return DEFAULT_COMMUNITIES;
     }
     cachedCommunities = parsed;
     cachedPath = path;
+    cachedFailurePath = null;
     return cachedCommunities;
   } catch (err) {
     console.error(
@@ -90,6 +109,7 @@ export function loadCommunities(): string[] {
         err instanceof Error ? err.message : String(err)
       } — falling back to DEFAULT_COMMUNITIES.`
     );
+    cachedFailurePath = path;
     return DEFAULT_COMMUNITIES;
   }
 }
@@ -111,7 +131,12 @@ const BASEMENT_PARTIAL_RE =
 const BASEMENT_MENTIONED_RE = /\bbasement\b/i;
 
 const FURNISHED_FULLY_RE = /\b(?:fully furnished|sold furnished|turnkey)\b/i;
-const FURNISHED_PARTIAL_RE = /\b(?:almost furnished|furnished with exceptions|with exceptions)\b/i;
+// PARTIAL alternatives MUST anchor on the `furnished` token. The bare
+// `with exceptions` form false-positives on title / survey / HOA /
+// disclosure prose ("sold with exceptions per title report",
+// "HOA documents available with exceptions noted") — see PR #61 nit.
+// Mirrors onehome-mcp PR #28 commit bada4e5.
+const FURNISHED_PARTIAL_RE = /\b(?:almost furnished|furnished with exceptions)\b/i;
 const FURNISHED_NEGOTIABLE_RE = /\bfurnishings (?:are )?negotiable\b/i;
 
 const DOCK_PRIVATE_RE = /\bprivate (?:boat )?dock\b/i;
