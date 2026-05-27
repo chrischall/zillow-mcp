@@ -71,7 +71,7 @@ export function registerGetByAddressTools(
     {
       title: 'Resolve an address to its Zillow canonical URL + zpid',
       description:
-        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. Hits Zillow's search resolver once and returns the first matching listing's zpid + URL. Degrades to `resolved: false` when no listing is found — does not throw. Use this when you have a property address and need its zpid for follow-on calls (e.g. `zillow_get_property`, `zillow_get_zestimate_history`). Read-only, no auth required.",
+        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. Hits Zillow's search resolver once and returns the first matching listing's zpid + URL. Known failure modes (degrades to `resolved: false`, never throws): (a) Zillow's geocoder is fussier about street suffix abbreviation than MLS feeds (\"Rd\" vs \"Road\" can miss); (b) silent fallback to the user's default region. When the resolved address comes back, callers should sanity-check it against the input — Zillow's address can also occasionally disagree with the MLS address (see `mls_street_address` on get_property). Use this when you have a property address and need its zpid for follow-on calls (e.g. `zillow_get_property`, `zillow_get_zestimate_history`). Read-only, no auth required.",
       annotations: {
         title: 'Resolve an address to its Zillow canonical URL + zpid',
         readOnlyHint: true,
