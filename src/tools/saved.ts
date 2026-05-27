@@ -1,8 +1,10 @@
+import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findArrayByShape } from '../page-props.js';
+import type { SessionRegistry } from '../sessions.js';
 
 /**
  * Signed-in-user surfaces. These are the unique value zillow-mcp delivers
@@ -156,23 +158,45 @@ function formatHome(raw: RawSavedHome) {
 
 export function registerSavedTools(
   server: McpServer,
-  client: ZillowClient
+  client: ZillowClient,
+  registry?: SessionRegistry
 ): void {
+  /**
+   * Routing shim: validate the caller-provided `session_id` against the
+   * registry (when one exists). Today every call still flows through
+   * the same bridge, so this is bookkeeping that surfaces a clean
+   * error for unknown ids instead of silently using the active session
+   * — once multi-browser routing lands upstream, the bridge selection
+   * will happen here too. (Issue #47.)
+   */
+  const resolveSession = (sessionId: string | undefined): string | null => {
+    if (!registry) return null;
+    return registry.resolve(sessionId);
+  };
+
   server.registerTool(
     'zillow_get_saved_searches',
     {
       title: 'Get my saved Zillow searches',
       description:
-        "The signed-in user's saved searches on zillow.com (name, filters, new-listing count, notification frequency). Requires the user to be signed in at zillow.com in the bridged browser tab — throws SessionNotAuthenticatedError otherwise. Read-only; safe to call repeatedly.",
+        "The signed-in user's saved searches on zillow.com (name, filters, new-listing count, notification frequency). Requires the user to be signed in at zillow.com in the bridged browser tab — throws SessionNotAuthenticatedError otherwise. Pass an optional `session_id` (from `zillow_register_session`) to target a specific signed-in account; defaults to the active session. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get my saved Zillow searches',
         readOnlyHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {},
+      inputSchema: {
+        session_id: z
+          .string()
+          .optional()
+          .describe(
+            'Optional registered session id (from `zillow_register_session`). Defaults to the active session.'
+          ),
+      },
     },
-    async () => {
+    async ({ session_id }) => {
+      resolveSession(session_id);
       // Note: path is case-sensitive (Zillow's web app uses capital S)
       const html = await client.fetchHtml('/myzillow/SavedSearches');
       const nextData = extractNextData(html);
@@ -187,16 +211,24 @@ export function registerSavedTools(
     {
       title: 'Get my saved (favorited) Zillow homes',
       description:
-        "The signed-in user's saved (favorited) homes on zillow.com, flattened across all of the user's collections. Returns address, price, Zestimate, status, and when each home was saved. Requires the user to be signed in. Read-only; safe to call repeatedly.",
+        "The signed-in user's saved (favorited) homes on zillow.com, flattened across all of the user's collections. Returns address, price, Zestimate, status, and when each home was saved. Pass an optional `session_id` (from `zillow_register_session`) to target a specific signed-in account; defaults to the active session. Requires the user to be signed in. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get my saved (favorited) Zillow homes',
         readOnlyHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {},
+      inputSchema: {
+        session_id: z
+          .string()
+          .optional()
+          .describe(
+            'Optional registered session id (from `zillow_register_session`). Defaults to the active session.'
+          ),
+      },
     },
-    async () => {
+    async ({ session_id }) => {
+      resolveSession(session_id);
       const html = await client.fetchHtml('/myzillow/favorites');
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);

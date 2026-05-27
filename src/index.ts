@@ -30,6 +30,8 @@ import { registerHealthcheckTools } from './tools/healthcheck.js';
 import { registerGetByAddressTools } from './tools/get-by-address.js';
 import { registerBulkGetTools } from './tools/bulk-get.js';
 import { registerResolveAddressesTools } from './tools/resolve-addresses.js';
+import { SessionRegistry } from './sessions.js';
+import { registerSessionTools } from './tools/sessions.js';
 
 const VERSION = '0.5.0'; // x-release-please-version
 
@@ -43,11 +45,12 @@ const client = new ZillowClient({ transport });
 await client.start();
 
 const server = new McpServer({ name: 'zillow-mcp', version: VERSION });
+const sessions = new SessionRegistry();
 
 registerSearchTools(server, client);
 registerPropertyTools(server, client);
 registerZestimateTools(server, client);
-registerSavedTools(server, client);
+registerSavedTools(server, client, sessions);
 registerMarketTools(server, client);
 registerMortgageTools(server);
 registerHistoryTools(server, client);
@@ -58,6 +61,7 @@ registerHealthcheckTools(server, client);
 registerGetByAddressTools(server, client);
 registerBulkGetTools(server, client);
 registerResolveAddressesTools(server, client);
+registerSessionTools(server, sessions);
 
 console.error(
   `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${port ?? 37149}. ` +
