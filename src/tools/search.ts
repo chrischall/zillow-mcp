@@ -156,6 +156,13 @@ export interface SearchInput {
   baths_min?: number;
   home_types?: HomeType[];
   limit?: number;
+  /**
+   * Internal: when paginating server-side (issue #54), the second and
+   * subsequent filter calls pin `pagination.currentPage` in the sqs.
+   * Not surfaced on the tool input — see the registerSearchTools
+   * handler for the public `auto_paginate` flag.
+   */
+  page?: number;
 }
 
 export interface RegionSelection {
@@ -301,6 +308,9 @@ export function buildSearchQueryState(
   if (region) {
     sqs.regionSelection = region.regionSelection;
     sqs.mapBounds = region.mapBounds;
+  }
+  if (input.page !== undefined && input.page > 1) {
+    sqs.pagination = { currentPage: input.page };
   }
   return sqs;
 }
@@ -490,11 +500,20 @@ export function registerSearchTools(
           .int()
           .positive()
           .optional()
-          .describe('Max listings to return (default 40).'),
+          .describe(
+            'Max listings to return (default 40). When > 40 and `auto_paginate` is true (the default), the tool walks Zillow\'s pagination server-side and aggregates pages until either `limit` is reached or an empty page is returned. Zillow caps each search response at ~40 listings (issue #54).'
+          ),
+        auto_paginate: z
+          .boolean()
+          .optional()
+          .describe(
+            'When true (default), aggregate across Zillow\'s paginated search responses until `limit` is reached. Pass `false` to disable pagination — only one Zillow page is fetched (~40 listings).'
+          ),
       },
     },
     async (input) => {
       const limit = input.limit ?? 40;
+      const autoPaginate = input.auto_paginate !== false;
       // Step 1: resolve. Either we got a region we can pin into a
       // filtered second request, or we got an address-shaped match
       // where Zillow's resolver returned the listing directly.
@@ -512,16 +531,36 @@ export function registerSearchTools(
           .slice(0, limit);
         return textResult(formatted);
       }
-      // Step 2: filtered search with the region pinned in.
-      const sqs = buildSearchQueryState(input, resolved.region);
-      const html = await client.fetchHtml(buildSearchPath(input.location, sqs));
-      const sps = extractSearchPageState(html);
-      const raw = sps?.cat1?.searchResults?.listResults ?? [];
-      const formatted = raw
-        .map(formatListing)
-        .filter((x): x is FormattedListing => x !== null)
-        .slice(0, limit);
-      return textResult(formatted);
+      // Step 2: filtered search with the region pinned in. When the
+      // caller asks for more than fits on one Zillow page (default ~40
+      // results), walk `pagination.currentPage` and aggregate until
+      // either the limit is met or Zillow returns an empty page (the
+      // natural terminator). The single-page path is preserved when
+      // `limit` is at or below the default — pagination only kicks in
+      // for callers that explicitly asked for more. (Issue #54.)
+      const aggregated: FormattedListing[] = [];
+      // Safety net so a misbehaving Zillow that never returns an empty
+      // page can't run away with our request budget.
+      const MAX_PAGES = 25;
+      // First page: always fetched. Subsequent pages: only if the
+      // caller wants more than one page worth AND opted into auto-pagination.
+      const ZILLOW_PAGE_SIZE = 40;
+      const wantsMore = autoPaginate && limit > ZILLOW_PAGE_SIZE;
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const sqs = buildSearchQueryState({ ...input, page }, resolved.region);
+        const html = await client.fetchHtml(buildSearchPath(input.location, sqs));
+        const sps = extractSearchPageState(html);
+        const raw = sps?.cat1?.searchResults?.listResults ?? [];
+        if (raw.length === 0) break; // natural terminator
+        for (const r of raw) {
+          const f = formatListing(r);
+          if (f) aggregated.push(f);
+          if (aggregated.length >= limit) break;
+        }
+        if (!wantsMore) break;
+        if (aggregated.length >= limit) break;
+      }
+      return textResult(aggregated.slice(0, limit));
     }
   );
 }

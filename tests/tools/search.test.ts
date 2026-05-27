@@ -553,6 +553,111 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     expect(text).toMatch(/could not resolve location/i);
   });
 
+  it('auto-paginates server-side when the requested limit exceeds one Zillow page (issue #54)', async () => {
+    // Resolve the region, then receive 3 listings on page 1, 3 on page 2,
+    // 0 on page 3 (the terminator). The tool should aggregate them and
+    // return all 6 — not silently cap at the per-page count.
+    const region = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+    const pages: RawListing[][] = [
+      [lakeLureListing(1), lakeLureListing(2), lakeLureListing(3)],
+      [lakeLureListing(4), lakeLureListing(5), lakeLureListing(6)],
+      [],
+    ];
+    let filterCall = 0;
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (!path.includes('searchQueryState=')) {
+        // Resolve step
+        return htmlWithState({
+          ...region,
+          listResults: [lakeLureListing(1)],
+        });
+      }
+      // Filter step — paginated. Read pagination.currentPage from the sqs.
+      const sqsRaw = path.split('searchQueryState=')[1]!;
+      const sqs = JSON.parse(decodeURIComponent(sqsRaw)) as Record<
+        string,
+        unknown
+      >;
+      const page =
+        (sqs.pagination as { currentPage?: number } | undefined)?.currentPage ?? 1;
+      filterCall++;
+      return htmlWithState({
+        ...region,
+        listResults: pages[page - 1] ?? [],
+      });
+    });
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 200,
+    });
+    const parsed = parseToolResult<unknown[]>(r);
+    expect(parsed).toHaveLength(6);
+    // Three filter calls: page 1 (3), page 2 (3), page 3 (0 → stop).
+    expect(filterCall).toBe(3);
+  });
+
+  it('stops paginating once the cumulative count hits the limit (issue #54)', async () => {
+    const region = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+    let filterCall = 0;
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (!path.includes('searchQueryState=')) {
+        return htmlWithState({
+          ...region,
+          listResults: [lakeLureListing(1)],
+        });
+      }
+      filterCall++;
+      // 40 per page; caller asked for 50 — should stop after 2 pages
+      // (page 1 + part of page 2 = 50 total).
+      const listings = Array.from({ length: 40 }, (_, i) =>
+        lakeLureListing(filterCall * 1000 + i)
+      );
+      return htmlWithState({ ...region, listResults: listings });
+    });
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 50,
+    });
+    const parsed = parseToolResult<unknown[]>(r);
+    expect(parsed).toHaveLength(50);
+    expect(filterCall).toBe(2);
+  });
+
+  it('opts out of pagination when auto_paginate: false (issue #54)', async () => {
+    const region = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+    let filterCall = 0;
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (!path.includes('searchQueryState=')) {
+        return htmlWithState({
+          ...region,
+          listResults: [lakeLureListing(1)],
+        });
+      }
+      filterCall++;
+      return htmlWithState({
+        ...region,
+        listResults: [lakeLureListing(1), lakeLureListing(2)],
+      });
+    });
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 200,
+      auto_paginate: false,
+    });
+    const parsed = parseToolResult<unknown[]>(r);
+    expect(parsed).toHaveLength(2);
+    expect(filterCall).toBe(1); // exactly one filter call
+  });
+
   it('respects the limit param on the address-path result', async () => {
     const lots = Array.from({ length: 10 }, (_, i) =>
       ({
