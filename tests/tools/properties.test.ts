@@ -5,10 +5,12 @@ import {
   buildPath,
   extractZpidFromUrl,
   findPropertyInPageProps,
+  format,
   registerPropertyTools,
   type RawProperty,
 } from '../../src/tools/properties.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
+import type { ExtractedFeatures } from '../../src/features.js';
 
 const mockFetchHtml = vi.fn();
 const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
@@ -164,6 +166,36 @@ describe('findPropertyInPageProps', () => {
       gdpClientCache: JSON.stringify(cache),
     });
     expect(property?.zpid).toBe(5);
+  });
+});
+
+describe('format() — FormattedProperty contract', () => {
+  // PR #61 polish nit: the FormattedProperty contract guarantees
+  // extracted_features is always populated by format(). The interface
+  // should reflect that — i.e. the field is non-optional. This test
+  // asserts the source-level type by destructuring into a non-optional
+  // local (which only typechecks if FormattedProperty.extracted_features
+  // is declared as required, not `?:`).
+  it('declares extracted_features as a required (non-optional) field', () => {
+    const out = format({ zpid: 1, description: 'Lakefront cabin' } as RawProperty);
+    // Force the type-system to demand a present-and-typed value. If
+    // FormattedProperty regresses to `extracted_features?: ...`, this
+    // assignment errors at `tsc --noEmit`.
+    const features: ExtractedFeatures = out.extracted_features;
+    expect(features.lake_front).toBe(true);
+  });
+
+  it('still populates extracted_features when description is absent', () => {
+    const out = format({ zpid: 1 } as RawProperty);
+    const features: ExtractedFeatures = out.extracted_features;
+    expect(features).toEqual({
+      lake_front: false,
+      hot_tub: false,
+      basement: null,
+      furnished: null,
+      dock: null,
+      community: null,
+    });
   });
 });
 
@@ -366,6 +398,265 @@ describe('zillow_get_property tool', () => {
     expect(parsed.year_built).toBeUndefined();
   });
 
+  describe('P1 schema (issues #42–#50, #57)', () => {
+    it('derives hoa_monthly_usd from monthlyHoaFee directly when present (issue #42)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          monthlyHoaFee: 414,
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ hoa_monthly_usd: number | null }>(result);
+      expect(parsed.hoa_monthly_usd).toBe(414);
+    });
+
+    it('derives hoa_monthly_usd from associationFee + Annually frequency (issue #42)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          resoFacts: {
+            associationFee: 4967,
+            associationFeeFrequency: 'Annually',
+          },
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ hoa_monthly_usd: number | null }>(result);
+      expect(parsed.hoa_monthly_usd).toBe(414);
+    });
+
+    it('hoa_monthly_usd is null when no HOA info is present', async () => {
+      mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 1 } as RawProperty));
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ hoa_monthly_usd: number | null }>(result);
+      expect(parsed.hoa_monthly_usd).toBeNull();
+    });
+
+    it('hoa_monthly_usd is null when frequency is unrecognized', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          resoFacts: { associationFee: 100, associationFeeFrequency: 'EveryFortnight' },
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ hoa_monthly_usd: number | null }>(result);
+      expect(parsed.hoa_monthly_usd).toBeNull();
+    });
+
+    it('computes price_drop_* from price + previousPrice (issue #43)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          price: 480_000,
+          previousPrice: 500_000,
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        price_drop_amount: number | null;
+        price_drop_percent: number | null;
+      }>(result);
+      expect(parsed.price_drop_amount).toBe(20_000);
+      expect(parsed.price_drop_percent).toBe(4.0);
+    });
+
+    it('price_drop_* are null when previousPrice is missing', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, price: 500_000 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        price_drop_amount: number | null;
+        price_drop_percent: number | null;
+      }>(result);
+      expect(parsed.price_drop_amount).toBeNull();
+      expect(parsed.price_drop_percent).toBeNull();
+    });
+
+    it('surfaces days_on_market (alias for daysOnZillow) (issue #43)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, daysOnZillow: 30 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ days_on_market: number | null }>(result);
+      expect(parsed.days_on_market).toBe(30);
+    });
+
+    it('days_on_market is null when neither daysOnZillow nor timeOnZillow present', async () => {
+      mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 1 } as RawProperty));
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ days_on_market: number | null }>(result);
+      expect(parsed.days_on_market).toBeNull();
+    });
+
+    it('nulls out the placeholder tax_annual: 1 (issue #44)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, taxAnnualAmount: 1 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBeNull();
+      expect(parsed.tax_status).toBe('not_yet_assessed');
+    });
+
+    it('nulls out the placeholder tax_annual: 0 (issue #44)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, taxAnnualAmount: 0 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBeNull();
+      expect(parsed.tax_status).toBe('not_yet_assessed');
+    });
+
+    it('keeps a real tax_annual and sets tax_status="actual"', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, taxAnnualAmount: 5432 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBe(5432);
+      expect(parsed.tax_status).toBe('actual');
+    });
+
+    it('reads tax_annual from resoFacts when top-level is missing (issue #44 fallback)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          resoFacts: { taxAnnualAmount: 8200 },
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ tax_annual: number | null }>(result);
+      expect(parsed.tax_annual).toBe(8200);
+    });
+
+    it('always emits portal_url_hyperlink as a Sheets HYPERLINK formula (issue #49)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 12345 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 12345 });
+      const parsed = parseToolResult<{ portal_url_hyperlink: string; url: string }>(result);
+      expect(parsed.portal_url_hyperlink).toMatch(/^=HYPERLINK\(/);
+      expect(parsed.portal_url_hyperlink).toContain(parsed.url);
+      expect(parsed.portal_url_hyperlink).toContain('"Zillow"');
+    });
+
+    it('surfaces address_alternates when mlsStreetAddress differs from streetAddress (issue #50)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 248872078,
+          address: { streetAddress: '109 Overlook Point Ln' },
+          mlsStreetAddress: '169 Overlook Point Ln',
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 248872078 });
+      const parsed = parseToolResult<{ address_alternates?: string[] }>(result);
+      expect(parsed.address_alternates).toContain('169 Overlook Point Ln');
+    });
+
+    it('omits address_alternates when no alternates differ from the primary (issue #50)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          address: { streetAddress: '1 Main St' },
+          mlsStreetAddress: '1 Main St',
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ address_alternates?: string[] }>(result);
+      expect(parsed.address_alternates).toBeUndefined();
+    });
+
+    it('picks up altAddresses[] from raw payload (issue #50)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          address: { streetAddress: '1 Main St' },
+          altAddresses: ['1 Main Street', '1 Main St.'],
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ address_alternates?: string[] }>(result);
+      // Both variants differ from "1 Main St" after normalization? "1 Main Street" yes, "1 Main St." normalizes to same.
+      expect(parsed.address_alternates).toContain('1 Main Street');
+    });
+
+    it('extracts last_sold_* from priceHistory (issue #57)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          priceHistory: [
+            { date: '2025-01-15', event: 'Listed for sale', price: 800_000 },
+            { date: '2023-06-01', event: 'Sold', price: 750_000 },
+            { date: '2020-01-01', event: 'Sold', price: 500_000 },
+          ],
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        last_sold_date: string | null;
+        last_sold_price: number | null;
+      }>(result);
+      expect(parsed.last_sold_date).toBe('2023-06-01');
+      expect(parsed.last_sold_price).toBe(750_000);
+    });
+
+    it('last_sold_* are null when no Sold event in history (issue #57)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          priceHistory: [{ date: '2025-01-01', event: 'Listed for sale', price: 1 }],
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        last_sold_date: string | null;
+        last_sold_price: number | null;
+      }>(result);
+      expect(parsed.last_sold_date).toBeNull();
+      expect(parsed.last_sold_price).toBeNull();
+    });
+
+    it('computes zest_vs_list_pct = (list - zest) / zest * 100 (issue #57)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, price: 550_000, zestimate: 500_000 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ zest_vs_list_pct: number | null }>(result);
+      expect(parsed.zest_vs_list_pct).toBe(10.0);
+    });
+
+    it('zest_vs_list_pct is negative when listed below zestimate (issue #57)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, price: 450_000, zestimate: 500_000 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ zest_vs_list_pct: number | null }>(result);
+      expect(parsed.zest_vs_list_pct).toBe(-10.0);
+    });
+
+    it('zest_vs_list_pct is null when zestimate is missing (issue #57)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, price: 500_000 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{ zest_vs_list_pct: number | null }>(result);
+      expect(parsed.zest_vs_list_pct).toBeNull();
+    });
+  });
+
   it('omits the raw description by default (issue #40)', async () => {
     // Per-listing context-saving: callers usually keyword-parse and
     // discard the description on receipt.
@@ -403,8 +694,11 @@ describe('zillow_get_property tool', () => {
       } as RawProperty)
     );
     const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    // Typed non-optional — PR #61 polish nit: the FormattedProperty
+    // contract guarantees extracted_features is always present, so the
+    // type shouldn't make callers thread `!` assertions.
     const parsed = parseToolResult<{
-      extracted_features?: {
+      extracted_features: {
         lake_front: boolean;
         hot_tub: boolean;
         basement: string | null;
@@ -412,10 +706,10 @@ describe('zillow_get_property tool', () => {
       };
     }>(result);
     expect(parsed.extracted_features).toBeDefined();
-    expect(parsed.extracted_features!.lake_front).toBe(true);
-    expect(parsed.extracted_features!.hot_tub).toBe(true);
-    expect(parsed.extracted_features!.basement).toBe('finished');
-    expect(parsed.extracted_features!.dock).toBe('private');
+    expect(parsed.extracted_features.lake_front).toBe(true);
+    expect(parsed.extracted_features.hot_tub).toBe(true);
+    expect(parsed.extracted_features.basement).toBe('finished');
+    expect(parsed.extracted_features.dock).toBe('private');
   });
 
   it('populates extracted_features with the five-field schema even on empty descriptions', async () => {
@@ -425,7 +719,7 @@ describe('zillow_get_property tool', () => {
     mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 5 } as RawProperty));
     const result = await harness.callTool('zillow_get_property', { zpid: 5 });
     const parsed = parseToolResult<{
-      extracted_features?: {
+      extracted_features: {
         lake_front: boolean;
         hot_tub: boolean;
         basement: string | null;
