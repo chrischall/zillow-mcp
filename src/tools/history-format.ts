@@ -1,6 +1,4 @@
-// Shared types + format/normalize helpers for price + tax history.
-// Lives in its own module so `tools/properties.ts` and `tools/history.ts`
-// can both depend on it without creating an import cycle between them.
+// Shared types + format/normalize helpers for price + tax history; breaks the properties <-> history cycle.
 
 export interface RawPriceHistoryEntry {
   date?: string;
