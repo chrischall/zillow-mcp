@@ -65,7 +65,7 @@ export function registerCompareTools(
     {
       title: 'Compare multiple Zillow properties side-by-side',
       description:
-        "Fetch and compare 2-25 Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. For unbounded structured fetch without the summary, use `zillow_bulk_get`.",
+        "Fetch and compare 2-25 Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent. For larger batches, use `zillow_bulk_get`.",
       annotations: {
         title: 'Compare multiple Zillow properties side-by-side',
         readOnlyHint: true,
@@ -89,6 +89,12 @@ export function registerCompareTools(
           .describe(
             'Array of 2-25 Zillow homedetails URLs/paths to compare. Provide either zpids or urls.'
           ),
+        include_summary: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include the pivoted `summary` table (one row per compared field, one column per listing). Defaults to `false` because `results[].property.*` already carries everything — the summary roughly doubles response weight and is mainly useful for human-readable rendering.'
+          ),
         include_description: z
           .boolean()
           .optional()
@@ -97,7 +103,7 @@ export function registerCompareTools(
           ),
       },
     },
-    async ({ zpids, urls, include_description }) => {
+    async ({ zpids, urls, include_summary, include_description }) => {
       const targets =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))
@@ -123,11 +129,16 @@ export function registerCompareTools(
           }
         })
       );
-      return textResult({
+      const body: {
+        count: number;
+        summary?: CompareSummaryRow[];
+        results: ComparePerProperty[];
+      } = {
         count: results.length,
-        summary: buildSummary(results),
         results,
-      });
+      };
+      if (include_summary === true) body.summary = buildSummary(results);
+      return textResult(body);
     }
   );
 }

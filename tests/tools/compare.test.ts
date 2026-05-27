@@ -61,7 +61,7 @@ describe('zillow_compare_properties tool', () => {
     );
   });
 
-  it('fetches each zpid concurrently and returns aligned summary + results', async () => {
+  it('fetches each zpid concurrently and returns aligned results (summary opt-in)', async () => {
     mockFetchHtml.mockImplementation(async (path: string) => {
       const m = /\/homedetails\/(\d+)_zpid/.exec(path);
       const zpid = m ? parseInt(m[1], 10) : 0;
@@ -76,19 +76,38 @@ describe('zillow_compare_properties tool', () => {
 
     const r = await harness.callTool('zillow_compare_properties', {
       zpids: [1, 2, 3],
+      include_summary: true,
     });
     expect(r.isError).toBeFalsy();
     const parsed = parseToolResult<{
       count: number;
-      summary: Array<{ field: string; values: unknown[] }>;
+      summary?: Array<{ field: string; values: unknown[] }>;
       results: Array<{ zpid: string; property?: { price?: number }; error?: string }>;
     }>(r);
     expect(parsed.count).toBe(3);
     expect(parsed.results.map((res) => res.property?.price)).toEqual([
       100_000, 200_000, 300_000,
     ]);
-    const summaryPrices = parsed.summary.find((s) => s.field === 'price')!;
+    expect(parsed.summary).toBeDefined();
+    const summaryPrices = parsed.summary!.find((s) => s.field === 'price')!;
     expect(summaryPrices.values).toEqual([100_000, 200_000, 300_000]);
+  });
+
+  it('omits summary by default (issue #45)', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      const zpid = m ? parseInt(m[1], 10) : 0;
+      return htmlWith({ zpid, price: zpid * 100_000 });
+    });
+    const r = await harness.callTool('zillow_compare_properties', {
+      zpids: [1, 2],
+    });
+    const parsed = parseToolResult<{
+      summary?: Array<{ field: string; values: unknown[] }>;
+      results: unknown[];
+    }>(r);
+    expect(parsed.summary).toBeUndefined();
+    expect(parsed.results).toHaveLength(2);
   });
 
   it('captures per-property errors without failing the whole call', async () => {
