@@ -157,8 +157,16 @@ describe('FetchproxyTransport', () => {
       kind: 'content_script_unreachable',
     });
     installInner(t, inner);
-    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBeInstanceOf(
-      FetchproxyBridgeDownError
+    const err = await t
+      .fetch({ path: '/x', method: 'GET' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetchproxyBridgeDownError);
+    // Retry disabled — hint must reflect that no retry happened.
+    expect((err as FetchproxyBridgeDownError).hint).toMatch(
+      /bridgeReviveDelayMs=0/
+    );
+    expect((err as FetchproxyBridgeDownError).hint).not.toMatch(
+      /already tried a one-shot lazy-revive retry/
     );
     const s = t.status();
     expect(s.lastFailureAt).toBeGreaterThan(0);
@@ -222,9 +230,14 @@ describe('FetchproxyTransport', () => {
       kind: 'content_script_unreachable',
     });
     installInner(t, inner);
-    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBeInstanceOf(
-      FetchproxyBridgeDownError
-    );
+    const err = await t
+      .fetch({ path: '/x', method: 'GET' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetchproxyBridgeDownError);
     expect(inner.fetch).toHaveBeenCalledTimes(2);
+    // Retry actually fired before this error surfaced — hint must say so.
+    expect((err as FetchproxyBridgeDownError).hint).toMatch(
+      /already tried a one-shot lazy-revive retry/
+    );
   });
 });
