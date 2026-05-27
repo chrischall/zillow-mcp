@@ -67,14 +67,22 @@ export class FetchproxyBridgeDownError extends Error {
     role: 'host' | 'peer' | null;
     port: number;
     originalError: string;
+    /** Whether zillow-mcp's one-shot lazy-revive retry already fired before this error surfaced. */
+    retryAttempted?: boolean;
   }) {
+    const retryClause = args.retryAttempted
+      ? `zillow-mcp already tried a one-shot lazy-revive retry before surfacing this error, so the worker is still down. `
+      : `zillow-mcp's one-shot lazy-revive retry was disabled (bridgeReviveDelayMs=0) so this error fired on the first attempt. `;
     const hint =
       `the fetchproxy browser extension's service worker is not ` +
       `responding ("${args.originalError}"). Chrome evicts extension ` +
-      `service workers after ~30s idle by default. Wake it by clicking ` +
-      `the fetchproxy extension icon (or by opening any zillow.com tab ` +
-      `and reloading), then retry. If it keeps happening, the extension ` +
-      `may need to be reloaded from chrome://extensions.`;
+      `service workers after ~30s idle by default. ` +
+      retryClause +
+      `To recover: click the fetchproxy ` +
+      `extension icon in Chrome's toolbar to wake it (or open any ` +
+      `zillow.com tab and reload). If it keeps happening, reload the ` +
+      `extension from chrome://extensions/ — the extension may have ` +
+      `crashed or been disabled.`;
     super(
       `fetchproxy bridge down: ${args.url} after ${args.elapsedMs}ms ` +
         `(role=${args.role ?? 'null'} port=${args.port}). ${hint}`
@@ -138,11 +146,20 @@ export interface FetchproxyTransportOptions {
   version: string;
   /** Per-request timeout in ms. Default 30s. */
   fetchTimeoutMs?: number;
+  /**
+   * Lazy-revive delay (ms) before retrying once on a
+   * `content_script_unreachable` failure. Chrome MV3 evicts extension
+   * service workers after ~30s idle; this gives the worker time to
+   * wake. Default 2_000 ms. Set to 0 to disable lazy-revive.
+   * (Issue #58.)
+   */
+  bridgeReviveDelayMs?: number;
 }
 
 export class FetchproxyTransport implements ZillowTransport {
   private readonly inner: FetchproxyServer;
   private readonly fetchTimeoutMs: number;
+  private readonly bridgeReviveDelayMs: number;
   private readonly port: number;
   private readonly serverVersion: string;
   // Freshness counters surfaced through `status()` so `zillow_healthcheck`
@@ -165,6 +182,7 @@ export class FetchproxyTransport implements ZillowTransport {
     };
     this.inner = new FetchproxyServer(options);
     this.fetchTimeoutMs = opts.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    this.bridgeReviveDelayMs = opts.bridgeReviveDelayMs ?? 2_000;
   }
 
   async start(): Promise<void> {
@@ -212,6 +230,33 @@ export class FetchproxyTransport implements ZillowTransport {
   }
 
   async fetch(init: FetchInit): Promise<FetchResult> {
+    // Lazy-revive (issue #58): when the first attempt fails with
+    // `content_script_unreachable` — Chrome's signal that the
+    // extension service worker has been evicted — wait a couple of
+    // seconds for the SW to wake and retry exactly once. Turns a
+    // hard failure into a ~2s slowdown for the common eviction case.
+    try {
+      return await this.fetchOnce(init);
+    } catch (err) {
+      if (
+        err instanceof FetchproxyBridgeDownError &&
+        this.bridgeReviveDelayMs > 0
+      ) {
+        log('fetch:lazy-revive', { delayMs: this.bridgeReviveDelayMs });
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.bridgeReviveDelayMs)
+        );
+        // Mark the retry's error (if any) so the hint accurately reports a retry happened.
+        return this.fetchOnce(init, { retryAttempted: true });
+      }
+      throw err;
+    }
+  }
+
+  private async fetchOnce(
+    init: FetchInit,
+    flags: { retryAttempted?: boolean } = {}
+  ): Promise<FetchResult> {
     const url = init.path.startsWith('http')
       ? init.path
       : `${ZILLOW_ORIGIN}${init.path}`;
@@ -268,12 +313,18 @@ export class FetchproxyTransport implements ZillowTransport {
       // unreachable case as a typed FetchproxyBridgeDownError so
       // callers + zillow_healthcheck can give actionable hints.
       if (result.kind === 'content_script_unreachable') {
+        // `retryAttempted` is true only when this is the second pass
+        // (after a lazy-revive sleep); on the first pass — or when
+        // `bridgeReviveDelayMs === 0` disables the retry entirely —
+        // it's effectively false (no retry has happened yet).
+        const retryAttempted = flags.retryAttempted === true;
         throw new FetchproxyBridgeDownError({
           url,
           elapsedMs: elapsed,
           role: this.inner.role,
           port: this.port,
           originalError: result.error,
+          retryAttempted,
         });
       }
       throw new Error(
