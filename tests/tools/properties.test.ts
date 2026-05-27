@@ -365,4 +365,82 @@ describe('zillow_get_property tool', () => {
     const parsed = parseToolResult<{ year_built?: number }>(result);
     expect(parsed.year_built).toBeUndefined();
   });
+
+  it('omits the raw description by default (issue #40)', async () => {
+    // Per-listing context-saving: callers usually keyword-parse and
+    // discard the description on receipt.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 5,
+        description: 'Lakefront with hot tub. Finished basement.',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    const parsed = parseToolResult<{ description?: string }>(result);
+    expect(parsed.description).toBeUndefined();
+  });
+
+  it('keeps the description when include_description: true', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 5,
+        description: 'Lakefront with hot tub.',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: 5,
+      include_description: true,
+    });
+    const parsed = parseToolResult<{ description?: string }>(result);
+    expect(parsed.description).toBe('Lakefront with hot tub.');
+  });
+
+  it('always populates extracted_features when a description exists (issue #41)', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 5,
+        description: 'Lakefront with private dock and hot tub. Finished basement.',
+      } as RawProperty)
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    const parsed = parseToolResult<{
+      extracted_features?: {
+        lake_front: boolean;
+        hot_tub: boolean;
+        basement: string | null;
+        dock: string | null;
+      };
+    }>(result);
+    expect(parsed.extracted_features).toBeDefined();
+    expect(parsed.extracted_features!.lake_front).toBe(true);
+    expect(parsed.extracted_features!.hot_tub).toBe(true);
+    expect(parsed.extracted_features!.basement).toBe('finished');
+    expect(parsed.extracted_features!.dock).toBe('private');
+  });
+
+  it('populates extracted_features with the five-field schema even on empty descriptions', async () => {
+    // Issue #41 calls out that all five binary/categorical features
+    // should always be present (populated when possible). We surface
+    // them whether or not the listing has a description.
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 5 } as RawProperty));
+    const result = await harness.callTool('zillow_get_property', { zpid: 5 });
+    const parsed = parseToolResult<{
+      extracted_features?: {
+        lake_front: boolean;
+        hot_tub: boolean;
+        basement: string | null;
+        furnished: string | null;
+        dock: string | null;
+        community: string | null;
+      };
+    }>(result);
+    expect(parsed.extracted_features).toEqual({
+      lake_front: false,
+      hot_tub: false,
+      basement: null,
+      furnished: null,
+      dock: null,
+      community: null,
+    });
+  });
 });
