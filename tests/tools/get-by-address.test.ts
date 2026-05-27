@@ -340,6 +340,71 @@ describe('zillow_get_by_address tool', () => {
     expect(call).toBe(3);
   });
 
+  it('search fallback: takes the region branch + 4th filtered call when scope resolve returns a pinned region', async () => {
+    // Triggers the `kind === 'region'` path of searchFallback (lines
+    // 211-228 of get-by-address.ts): rung 3's resolveLocationOrListings
+    // gets a page with `regionSelection` + `mapBounds` and no listResults,
+    // forcing a 4th request — the filtered search pinned to that region —
+    // which finally yields the listing.
+    let call = 0;
+    mockFetchHtml.mockImplementation(async () => {
+      call++;
+      if (call <= 2) {
+        // direct + suffix-expansion both miss
+        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      }
+      if (call === 3) {
+        // scope resolve: region pinned but no listResults yet
+        const nextData = {
+          props: {
+            pageProps: {
+              searchPageState: {
+                queryState: {
+                  regionSelection: [{ regionId: 41568, regionType: 6 }],
+                  mapBounds: {
+                    north: 35.55,
+                    south: 35.4,
+                    east: -82.05,
+                    west: -82.25,
+                  },
+                },
+                cat1: { searchResults: { listResults: [] } },
+              },
+            },
+          },
+        };
+        return `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script>`;
+      }
+      // 4th call: the filtered search with the pinned region — return the match.
+      return htmlWithFirstListing({
+        zpid: 75_000,
+        detailUrl: '/homedetails/foo/75000_zpid/',
+        streetAddress: '99 Hidden Cove Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      });
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '99 Hidden Cove Ln',
+      city: 'Lake Lure',
+      state: 'NC',
+      zip: '28746',
+      price_min: 400_000,
+      price_max: 900_000,
+    });
+    const parsed = parseToolResult<{
+      resolved: boolean;
+      zpid?: string;
+      via?: string;
+    }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('75000');
+    expect(parsed.via).toBe('search_fallback');
+    // direct + expansion + scope-resolve + filtered-search = 4 calls
+    expect(call).toBe(4);
+  });
+
   it('still returns resolved=false when ALL retries fail', async () => {
     mockFetchHtml.mockResolvedValue(
       '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>'

@@ -19,7 +19,8 @@ import {
  * city/state/zip) to its Zillow canonical homedetails URL + zpid.
  *
  * Implementation ladder (each rung is tried only if the prior one
- * misses — total at most 3 round trips):
+ * misses — typically 1-3 round trips, worst case 4 when rung 3's
+ * scope resolve returns a region rather than listings directly):
  *
  *   1. Direct resolve — hit `/homes/<address-slug>_rb/` (the bare
  *      search-resolver path). When the address corresponds to a real
@@ -89,7 +90,6 @@ const SUFFIX_EXPANSIONS: Record<string, string> = {
   st: 'Street',
   ter: 'Terrace',
   trl: 'Trail',
-  way: 'Way',
 };
 // Reverse map (long form -> abbreviated) for the contract direction.
 const SUFFIX_CONTRACTIONS: Record<string, string> = Object.fromEntries(
@@ -111,11 +111,12 @@ function abbreviate(abbr: string): string {
  */
 export function expandStreetSuffix(address: string): string | null {
   // Match optional trailing period: "Rd" or "Rd."
-  const m = /(\s+)([A-Za-z]+)(\.?)\s*$/.exec(address.trim());
+  const trimmed = address.trim();
+  const m = /(\s+)([A-Za-z]+)(\.?)\s*$/.exec(trimmed);
   if (!m) return null;
   const [_full, lead, token] = m;
   const key = token.toLowerCase();
-  const head = address.slice(0, m.index);
+  const head = trimmed.slice(0, m.index);
   if (SUFFIX_EXPANSIONS[key]) {
     return `${head}${lead}${SUFFIX_EXPANSIONS[key]}`;
   }
