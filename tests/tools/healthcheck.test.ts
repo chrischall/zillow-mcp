@@ -3,8 +3,9 @@ import type { ZillowClient } from '../../src/client.js';
 import { registerHealthcheckTools } from '../../src/tools/healthcheck.js';
 import {
   FetchproxyBridgeDownError,
+  FetchproxyProtocolError,
   FetchproxyTimeoutError,
-} from '../../src/transport-fetchproxy.js';
+} from '@fetchproxy/server';
 import type { BridgeStatus } from '../../src/transport.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
@@ -17,6 +18,7 @@ const DEFAULT_STATUS: BridgeStatus = {
   lastFailureAt: null,
   lastFailureReason: null,
   consecutiveFailures: 0,
+  lastExtensionMessageAt: null,
 };
 
 function stubClient(args: {
@@ -72,9 +74,6 @@ describe('zillow_healthcheck tool', () => {
         new FetchproxyTimeoutError({
           url: 'https://www.zillow.com/robots.txt',
           timeoutMs: 25,
-          elapsedMs: 28,
-          role: 'peer',
-          port: 37200,
         })
       ),
     });
@@ -91,6 +90,7 @@ describe('zillow_healthcheck tool', () => {
     }>(r);
     expect(parsed.ok).toBe(false);
     expect(parsed.error.kind).toBe('timeout');
+    // 0.8.0+: role_at_failure comes from bridgeStatus() captured in catch.
     expect(parsed.error.role_at_failure).toBe('peer');
     expect(parsed.hint).toMatch(/extension popup/i);
   });
@@ -104,11 +104,8 @@ describe('zillow_healthcheck tool', () => {
       },
       fetchHtml: vi.fn().mockRejectedValue(
         new FetchproxyBridgeDownError({
-          url: 'https://www.zillow.com/robots.txt',
-          elapsedMs: 11,
-          role: null,
-          port: 37149,
           originalError: 'Could not establish connection.',
+          retryAttempted: true,
         })
       ),
     });
@@ -134,9 +131,6 @@ describe('zillow_healthcheck tool', () => {
         new FetchproxyTimeoutError({
           url: 'https://www.zillow.com/robots.txt',
           timeoutMs: 25,
-          elapsedMs: 28,
-          role: null,
-          port: 37149,
         })
       ),
     });
@@ -154,12 +148,12 @@ describe('zillow_healthcheck tool', () => {
     expect(parsed.hint).toMatch(/never bound a role/);
   });
 
-  it('classifies a plain "fetchproxy transport error" as kind=transport', async () => {
+  it('classifies a generic FetchproxyProtocolError as kind=protocol (0.8.0 classifyBridgeError vocabulary)', async () => {
     const client = stubClient({
       fetchHtml: vi
         .fn()
         .mockRejectedValue(
-          new Error(
+          new FetchproxyProtocolError(
             'fetchproxy transport error after 12ms (role=host): extension offline'
           )
         ),
@@ -170,7 +164,9 @@ describe('zillow_healthcheck tool', () => {
     const r = await harness.callTool('zillow_healthcheck', {});
     const parsed = parseToolResult<{ ok: boolean; error: { kind: string }; hint: string }>(r);
     expect(parsed.ok).toBe(false);
-    expect(parsed.error.kind).toBe('transport');
+    // 0.8.0 vocabulary: 'protocol' (from classifyBridgeError) replaces the
+    // legacy 'transport' label.
+    expect(parsed.error.kind).toBe('protocol');
     expect(parsed.hint).toMatch(/no zillow\.com tab is open/i);
   });
 
@@ -179,12 +175,9 @@ describe('zillow_healthcheck tool', () => {
       status: { role: 'peer', port: 37149, serverVersion: '0.5.0' },
       fetchHtml: vi.fn().mockRejectedValue(
         new FetchproxyBridgeDownError({
-          url: 'https://www.zillow.com/robots.txt',
-          elapsedMs: 14,
-          role: 'peer',
-          port: 37149,
           originalError:
             'tab fetch failed: Error: Could not establish connection. Receiving end does not exist.',
+          retryAttempted: true,
         })
       ),
     });
@@ -202,15 +195,17 @@ describe('zillow_healthcheck tool', () => {
     expect(parsed.hint).toMatch(/service worker/i);
   });
 
-  it('surfaces freshness counters (last_success_at, last_failure_at, consecutive_failures)', async () => {
+  it('surfaces freshness counters (last_success_at, last_failure_at, consecutive_failures, last_extension_message_at)', async () => {
     const SUCCESS_AT = Date.parse('2026-05-25T03:39:46Z');
     const FAILURE_AT = Date.parse('2026-05-25T03:40:00Z');
+    const EXT_MSG_AT = Date.parse('2026-05-25T03:40:01Z');
     const client = stubClient({
       status: {
         lastSuccessAt: SUCCESS_AT,
         lastFailureAt: FAILURE_AT,
         lastFailureReason: 'Could not establish connection.',
         consecutiveFailures: 3,
+        lastExtensionMessageAt: EXT_MSG_AT,
       },
     });
     harness = await createTestHarness((server) =>
@@ -223,12 +218,14 @@ describe('zillow_healthcheck tool', () => {
         last_failure_at: number | null;
         last_failure_reason: string | null;
         consecutive_failures: number;
+        last_extension_message_at: number | null;
       };
     }>(r);
     expect(parsed.bridge.last_success_at).toBe(SUCCESS_AT);
     expect(parsed.bridge.last_failure_at).toBe(FAILURE_AT);
     expect(parsed.bridge.last_failure_reason).toMatch(/Could not establish/);
     expect(parsed.bridge.consecutive_failures).toBe(3);
+    expect(parsed.bridge.last_extension_message_at).toBe(EXT_MSG_AT);
   });
 
   it('classifies an unrelated error as kind=other', async () => {
@@ -242,5 +239,71 @@ describe('zillow_healthcheck tool', () => {
     const parsed = parseToolResult<{ ok: boolean; error: { kind: string } }>(r);
     expect(parsed.ok).toBe(false);
     expect(parsed.error.kind).toBe('other');
+  });
+
+  // 0.8.0+: FetchproxyBridgeDownError carries an actionable `.hint` string
+  // ("click the extension icon …"). Surface it in the response so the LLM
+  // can show the user concrete recovery guidance instead of paraphrasing
+  // the bare error message.
+  it("surfaces the bridge-down error's .hint in the response's top-level hint", async () => {
+    const BRIDGE_HINT =
+      'Click the fetchproxy extension icon to wake its service worker, then retry.';
+    const err = new FetchproxyBridgeDownError({
+      originalError: 'Could not establish connection.',
+      retryAttempted: true,
+    });
+    // Override `.hint` so the test pins behavior to the surfaced value
+    // rather than the package's current default copy.
+    Object.defineProperty(err, 'hint', { value: BRIDGE_HINT, writable: false });
+    const client = stubClient({
+      status: { role: 'peer', port: 37149, serverVersion: '0.5.0' },
+      fetchHtml: vi.fn().mockRejectedValue(err),
+    });
+    harness = await createTestHarness((server) =>
+      registerHealthcheckTools(server, client)
+    );
+    const r = await harness.callTool('zillow_healthcheck', {});
+    const parsed = parseToolResult<{
+      error: { kind: string; detail?: { hint?: string; retry_attempted?: boolean } };
+      hint: string;
+    }>(r);
+    expect(parsed.error.kind).toBe('bridge_down');
+    // Top-level hint includes the error's hint verbatim.
+    expect(parsed.hint).toContain(BRIDGE_HINT);
+    // The error's hint + retry_attempted are also exposed under error.detail
+    // for structured consumers.
+    expect(parsed.error.detail?.hint).toBe(BRIDGE_HINT);
+    expect(parsed.error.detail?.retry_attempted).toBe(true);
+  });
+
+  // 0.8.0+: FetchproxyTimeoutError carries the actual `.elapsedMs` (the
+  // moment the timer won the race). Surface it under error.detail so the
+  // LLM can tell "barely missed" from "hung for the full window".
+  it("surfaces the timeout error's .elapsedMs in error.detail", async () => {
+    const client = stubClient({
+      status: {
+        role: 'host',
+        port: 37149,
+        serverVersion: '0.5.0',
+        fetchTimeoutMs: 30_000,
+      },
+      fetchHtml: vi.fn().mockRejectedValue(
+        new FetchproxyTimeoutError({
+          url: 'https://www.zillow.com/robots.txt',
+          timeoutMs: 30_000,
+          elapsedMs: 30_004,
+        })
+      ),
+    });
+    harness = await createTestHarness((server) =>
+      registerHealthcheckTools(server, client)
+    );
+    const r = await harness.callTool('zillow_healthcheck', {});
+    const parsed = parseToolResult<{
+      error: { kind: string; detail?: { elapsed_ms?: number; timeout_ms?: number } };
+    }>(r);
+    expect(parsed.error.kind).toBe('timeout');
+    expect(parsed.error.detail?.elapsed_ms).toBe(30_004);
+    expect(parsed.error.detail?.timeout_ms).toBe(30_000);
   });
 });

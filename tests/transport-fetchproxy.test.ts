@@ -1,18 +1,25 @@
 // Adapter-level tests for FetchproxyTransport. We don't bring up a real
-// WebSocket here — the protocol-level tests live in @fetchproxy/server.
-// What we verify is the path → URL prepending and the discriminated-
-// union mapping (ok:true → triple, ok:false → throw).
+// WebSocket here — the protocol-level tests (lazy-revive retry, request
+// timeout, content_script_unreachable mapping) live in @fetchproxy/server
+// 0.8.0+. What we verify is the path → URL prepending, the request()
+// delegation, the bridgeHealth() → status() projection, and the typed-
+// error re-exports.
 import { describe, it, expect, vi } from 'vitest';
 import {
   FetchproxyBridgeDownError,
   FetchproxyTimeoutError,
   FetchproxyTransport,
 } from '../src/transport-fetchproxy.js';
+import {
+  FetchproxyBridgeDownError as PkgBridgeDown,
+  FetchproxyTimeoutError as PkgTimeout,
+} from '@fetchproxy/server';
 
 type Inner = {
   listen: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
-  fetch: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn>;
+  bridgeHealth: ReturnType<typeof vi.fn>;
   role: 'host' | 'peer' | null;
 };
 
@@ -20,7 +27,16 @@ function stubInner(role: 'host' | 'peer' | null = 'host'): Inner {
   return {
     listen: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
-    fetch: vi.fn(),
+    request: vi.fn(),
+    bridgeHealth: vi.fn().mockReturnValue({
+      role,
+      port: 37149,
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      lastFailureReason: null,
+      consecutiveFailures: 0,
+      lastExtensionMessageAt: null,
+    }),
     role,
   };
 }
@@ -31,29 +47,36 @@ function installInner(t: FetchproxyTransport, inner: Inner): void {
 }
 
 describe('FetchproxyTransport', () => {
-  it('prepends https://www.zillow.com to relative paths', async () => {
+  it('re-exports the package typed errors so callers keep working', () => {
+    // The adapter re-exports the 0.8.0 package errors so existing callers
+    // (e.g. zillow_healthcheck imports from this module historically) stay
+    // wired up. Identity check confirms there's no shadowing class.
+    expect(FetchproxyBridgeDownError).toBe(PkgBridgeDown);
+    expect(FetchproxyTimeoutError).toBe(PkgTimeout);
+  });
+
+  it('delegates fetch() to inner.request() with subdomain=www', async () => {
     const t = new FetchproxyTransport({ version: '0.0.0' });
     const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: true,
+    inner.request.mockResolvedValue({
       status: 200,
       body: 'x',
-      url: 'https://www.zillow.com/x',
+      url: 'https://www.zillow.com/homedetails/1_zpid/',
     });
     installInner(t, inner);
 
     await t.fetch({ path: '/homedetails/1_zpid/', method: 'GET' });
-    expect(inner.fetch.mock.calls[0][0].url).toBe(
-      'https://www.zillow.com/homedetails/1_zpid/'
-    );
-    expect(inner.fetch.mock.calls[0][0].tabUrl).toBe('https://www.zillow.com/');
+    expect(inner.request).toHaveBeenCalledTimes(1);
+    const [method, path, opts] = inner.request.mock.calls[0];
+    expect(method).toBe('GET');
+    expect(path).toBe('/homedetails/1_zpid/');
+    expect(opts.subdomain).toBe('www');
   });
 
-  it('passes through absolute URLs', async () => {
+  it('passes through absolute URLs to inner.request()', async () => {
     const t = new FetchproxyTransport({ version: '0.0.0' });
     const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: true,
+    inner.request.mockResolvedValue({
       status: 200,
       body: '',
       url: 'https://photos.zillow.com/x',
@@ -64,14 +87,15 @@ describe('FetchproxyTransport', () => {
       path: 'https://photos.zillow.com/x',
       method: 'GET',
     });
-    expect(inner.fetch.mock.calls[0][0].url).toBe('https://photos.zillow.com/x');
+    // The server's request() handles absolute URLs as-is; we still pass
+    // the path positionally so 0.8.0's path-resolution rules apply.
+    expect(inner.request.mock.calls[0][1]).toBe('https://photos.zillow.com/x');
   });
 
-  it('returns the {status, body, url} triple on ok:true', async () => {
+  it('returns the {status, body, url} triple from inner.request()', async () => {
     const t = new FetchproxyTransport({ version: '0.0.0' });
     const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: true,
+    inner.request.mockResolvedValue({
       status: 200,
       body: 'hello',
       url: 'https://www.zillow.com/x',
@@ -86,18 +110,17 @@ describe('FetchproxyTransport', () => {
     });
   });
 
-  it('throws when fetchproxy returns ok:false', async () => {
+  it('propagates typed errors thrown by inner.request()', async () => {
     const t = new FetchproxyTransport({ version: '0.0.0' });
     const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: false,
-      error: 'extension offline',
+    const err = new PkgBridgeDown({
+      originalError: 'Could not establish connection.',
+      retryAttempted: true,
     });
+    inner.request.mockRejectedValue(err);
     installInner(t, inner);
 
-    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toThrow(
-      /extension offline/
-    );
+    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBe(err);
   });
 
   it('start/close delegate to the inner FetchproxyServer', async () => {
@@ -112,132 +135,72 @@ describe('FetchproxyTransport', () => {
     expect(inner.close).toHaveBeenCalledTimes(1);
   });
 
-  it('status() returns role, port, and freshness counters before any request', () => {
+  it('forwards headers and body through inner.request()', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    inner.request.mockResolvedValue({
+      status: 200,
+      body: '{}',
+      url: 'https://www.zillow.com/api',
+    });
+    installInner(t, inner);
+    await t.fetch({
+      path: '/api',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"q":"x"}',
+    });
+    const [, , opts] = inner.request.mock.calls[0];
+    expect(opts.headers).toEqual({ 'content-type': 'application/json' });
+    expect(opts.body).toBe('{"q":"x"}');
+  });
+
+  it('status() delegates directly to inner.bridgeHealth() (0.8.0+ collapsed the shim)', () => {
     const t = new FetchproxyTransport({ version: '0.0.0', port: 37200 });
     const inner = stubInner(null);
+    inner.bridgeHealth.mockReturnValue({
+      role: null,
+      port: 37200,
+      serverVersion: '0.0.0',
+      fetchTimeoutMs: 30_000,
+      bridgeReviveDelayMs: 2_000,
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      lastFailureReason: null,
+      consecutiveFailures: 0,
+      lastExtensionMessageAt: null,
+    });
     installInner(t, inner);
     const s = t.status();
     expect(s.role).toBeNull();
     expect(s.port).toBe(37200);
     expect(s.serverVersion).toBe('0.0.0');
     expect(s.fetchTimeoutMs).toBe(30_000);
+    expect(s.bridgeReviveDelayMs).toBe(2_000);
     expect(s.lastSuccessAt).toBeNull();
     expect(s.lastFailureAt).toBeNull();
     expect(s.consecutiveFailures).toBe(0);
+    expect(s.lastExtensionMessageAt).toBeNull();
   });
 
-  it('status() records lastSuccessAt and resets consecutiveFailures on success', async () => {
+  it('status() reflects freshness counters tracked by the server', () => {
     const t = new FetchproxyTransport({ version: '0.0.0' });
     const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: 'x',
-      url: 'https://www.zillow.com/x',
+    inner.bridgeHealth.mockReturnValue({
+      role: 'host',
+      port: 37149,
+      lastSuccessAt: 1_700_000_000_000,
+      lastFailureAt: 1_700_000_000_500,
+      lastFailureReason: 'timeout: https://www.zillow.com/x',
+      consecutiveFailures: 2,
+      lastExtensionMessageAt: 1_700_000_001_000,
     });
     installInner(t, inner);
-    await t.fetch({ path: '/x', method: 'GET' });
     const s = t.status();
-    expect(s.lastSuccessAt).toBeGreaterThan(0);
-    expect(s.consecutiveFailures).toBe(0);
-  });
-
-  it('throws FetchproxyBridgeDownError when kind=content_script_unreachable', async () => {
-    // bridgeReviveDelayMs: 0 disables the lazy-revive retry so this test
-    // exercises the original single-shot failure path. See the
-    // lazy-revive-recovery tests for the retry behavior.
-    const t = new FetchproxyTransport({
-      version: '0.0.0',
-      bridgeReviveDelayMs: 0,
-    });
-    const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: false,
-      error: 'Could not establish connection. Receiving end does not exist.',
-      kind: 'content_script_unreachable',
-    });
-    installInner(t, inner);
-    const err = await t
-      .fetch({ path: '/x', method: 'GET' })
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(FetchproxyBridgeDownError);
-    // Retry disabled — hint must reflect that no retry happened.
-    expect((err as FetchproxyBridgeDownError).hint).toMatch(
-      /bridgeReviveDelayMs=0/
-    );
-    expect((err as FetchproxyBridgeDownError).hint).not.toMatch(
-      /already tried a one-shot lazy-revive retry/
-    );
-    const s = t.status();
-    expect(s.lastFailureAt).toBeGreaterThan(0);
-    expect(s.consecutiveFailures).toBe(1);
-  });
-
-  it('FetchproxyTimeoutError fires when the inner fetch never resolves', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0', fetchTimeoutMs: 25 });
-    const inner = stubInner();
-    inner.fetch.mockReturnValue(new Promise(() => {})); // never resolves
-    installInner(t, inner);
-    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBeInstanceOf(
-      FetchproxyTimeoutError
-    );
-    const s = t.status();
+    expect(s.lastSuccessAt).toBe(1_700_000_000_000);
+    expect(s.lastFailureAt).toBe(1_700_000_000_500);
     expect(s.lastFailureReason).toMatch(/timeout/);
-    expect(s.consecutiveFailures).toBe(1);
-  });
-
-  it('lazy-revive: a single content_script_unreachable retries once and recovers (issue #58)', async () => {
-    // Simulates Chrome MV3 evicting the service worker — first call
-    // fails with content_script_unreachable; the second call (after
-    // a short delay to let the SW wake up) succeeds.
-    const t = new FetchproxyTransport({
-      version: '0.0.0',
-      bridgeReviveDelayMs: 1, // keep the test fast
-    });
-    const inner = stubInner();
-    let calls = 0;
-    inner.fetch.mockImplementation(async () => {
-      calls++;
-      if (calls === 1) {
-        return {
-          ok: false,
-          error: 'Could not establish connection. Receiving end does not exist.',
-          kind: 'content_script_unreachable',
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        body: 'x',
-        url: 'https://www.zillow.com/x',
-      };
-    });
-    installInner(t, inner);
-    const result = await t.fetch({ path: '/x', method: 'GET' });
-    expect(result.status).toBe(200);
-    expect(calls).toBe(2);
-  });
-
-  it('lazy-revive: only retries ONCE; second eviction surfaces FetchproxyBridgeDownError', async () => {
-    const t = new FetchproxyTransport({
-      version: '0.0.0',
-      bridgeReviveDelayMs: 1,
-    });
-    const inner = stubInner();
-    inner.fetch.mockResolvedValue({
-      ok: false,
-      error: 'Could not establish connection. Receiving end does not exist.',
-      kind: 'content_script_unreachable',
-    });
-    installInner(t, inner);
-    const err = await t
-      .fetch({ path: '/x', method: 'GET' })
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(FetchproxyBridgeDownError);
-    expect(inner.fetch).toHaveBeenCalledTimes(2);
-    // Retry actually fired before this error surfaced — hint must say so.
-    expect((err as FetchproxyBridgeDownError).hint).toMatch(
-      /already tried a one-shot lazy-revive retry/
-    );
+    expect(s.consecutiveFailures).toBe(2);
+    expect(s.lastExtensionMessageAt).toBe(1_700_000_001_000);
   });
 });
