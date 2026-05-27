@@ -27,6 +27,9 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | `zillow_calculate_affordability` | `tools/affordability.ts` | (local; no network) | read |
 | `zillow_calculate_rent_vs_buy` | `tools/affordability.ts` | (local; no network) | read |
 | `zillow_healthcheck` | `tools/healthcheck.ts` | GET `/robots.txt` round-trip + bridge status snapshot | read |
+| `zillow_register_session` | `tools/sessions.ts` | (local; no network) | write (registry) |
+| `zillow_set_active_session` | `tools/sessions.ts` | (local; no network) | write (registry) |
+| `zillow_get_session_context` | `tools/sessions.ts` | (local; no network) | read |
 
 All SSR tools parse `<script id="__NEXT_DATA__">` from the response. Zillow is a Next.js app; `__NEXT_DATA__.props.pageProps` is the canonical hydration root.
 

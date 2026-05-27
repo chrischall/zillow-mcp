@@ -51,9 +51,15 @@ export function registerSessionTools(
       },
     },
     async ({ account_identity, auth_expires_at }) => {
+      // Pass `auth_expires_at` through as-is: SessionRegistry.register()
+      // treats `undefined` as "keep existing" and `null` as "clear".
+      // Coercing with `?? null` would silently clear a previously-set
+      // expiry on re-registration. The Zod schema only emits string or
+      // undefined here (null is not in the schema), so this preserves
+      // the keep-existing semantics on re-registration.
       const sess = registry.register({
         account_identity,
-        auth_expires_at: auth_expires_at ?? null,
+        auth_expires_at,
       });
       return textResult({
         session: sess,

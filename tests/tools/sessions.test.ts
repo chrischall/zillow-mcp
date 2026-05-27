@@ -93,4 +93,29 @@ describe('session tools', () => {
     const parsed2 = parseToolResult<{ session: { session_id: string } }>(r2);
     expect(parsed2.session.session_id).toBe(parsed1.session.session_id);
   });
+
+  it('re-registering without auth_expires_at preserves the previously-set value', async () => {
+    // Regression test: the tool used to coerce `undefined` to `null`,
+    // which made `SessionRegistry.register()` treat an omitted field as
+    // an explicit clear instead of "keep existing." See PR #65 review.
+    registry.reset();
+    const r1 = await harness.callTool('zillow_register_session', {
+      account_identity: 'alice@example.com',
+      auth_expires_at: '2030-01-01T00:00:00Z',
+    });
+    const parsed1 = parseToolResult<{
+      session: { session_id: string; auth_expires_at: string | null };
+    }>(r1);
+    expect(parsed1.session.auth_expires_at).toBe('2030-01-01T00:00:00Z');
+
+    const r2 = await harness.callTool('zillow_register_session', {
+      account_identity: 'alice@example.com',
+      // intentionally omit auth_expires_at
+    });
+    const parsed2 = parseToolResult<{
+      session: { session_id: string; auth_expires_at: string | null };
+    }>(r2);
+    expect(parsed2.session.session_id).toBe(parsed1.session.session_id);
+    expect(parsed2.session.auth_expires_at).toBe('2030-01-01T00:00:00Z');
+  });
 });
