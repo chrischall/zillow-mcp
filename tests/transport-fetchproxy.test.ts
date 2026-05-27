@@ -143,7 +143,13 @@ describe('FetchproxyTransport', () => {
   });
 
   it('throws FetchproxyBridgeDownError when kind=content_script_unreachable', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
+    // bridgeReviveDelayMs: 0 disables the lazy-revive retry so this test
+    // exercises the original single-shot failure path. See the
+    // lazy-revive-recovery tests for the retry behavior.
+    const t = new FetchproxyTransport({
+      version: '0.0.0',
+      bridgeReviveDelayMs: 0,
+    });
     const inner = stubInner();
     inner.fetch.mockResolvedValue({
       ok: false,
@@ -170,5 +176,55 @@ describe('FetchproxyTransport', () => {
     const s = t.status();
     expect(s.lastFailureReason).toMatch(/timeout/);
     expect(s.consecutiveFailures).toBe(1);
+  });
+
+  it('lazy-revive: a single content_script_unreachable retries once and recovers (issue #58)', async () => {
+    // Simulates Chrome MV3 evicting the service worker — first call
+    // fails with content_script_unreachable; the second call (after
+    // a short delay to let the SW wake up) succeeds.
+    const t = new FetchproxyTransport({
+      version: '0.0.0',
+      bridgeReviveDelayMs: 1, // keep the test fast
+    });
+    const inner = stubInner();
+    let calls = 0;
+    inner.fetch.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          ok: false,
+          error: 'Could not establish connection. Receiving end does not exist.',
+          kind: 'content_script_unreachable',
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: 'x',
+        url: 'https://www.zillow.com/x',
+      };
+    });
+    installInner(t, inner);
+    const result = await t.fetch({ path: '/x', method: 'GET' });
+    expect(result.status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it('lazy-revive: only retries ONCE; second eviction surfaces FetchproxyBridgeDownError', async () => {
+    const t = new FetchproxyTransport({
+      version: '0.0.0',
+      bridgeReviveDelayMs: 1,
+    });
+    const inner = stubInner();
+    inner.fetch.mockResolvedValue({
+      ok: false,
+      error: 'Could not establish connection. Receiving end does not exist.',
+      kind: 'content_script_unreachable',
+    });
+    installInner(t, inner);
+    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBeInstanceOf(
+      FetchproxyBridgeDownError
+    );
+    expect(inner.fetch).toHaveBeenCalledTimes(2);
   });
 });
