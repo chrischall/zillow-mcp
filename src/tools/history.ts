@@ -2,74 +2,28 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
+import { fetchPropertyRecord } from './properties.js';
 import {
-  fetchPropertyRecord,
-  type RawPriceHistoryEntry,
-  type RawTaxHistoryEntry,
-} from './properties.js';
+  formatPriceEvent,
+  formatTaxEvent,
+  normalizePriceEvent,
+} from './history-format.js';
 
-/**
- * Two history-focused tools, both sourcing from the same homedetails
- * `__NEXT_DATA__` payload that `zillow_get_property` reads. Exposed as
- * standalone tools so callers can ask for "just the price history" or
- * "just the tax record" without paying for/parsing the full property
- * blob in the response.
- */
-
-export interface FormattedPriceEvent {
-  date?: string;
-  event?: string;
-  price?: number;
-  price_change_percent?: number;
-  price_per_sqft?: number;
-  source?: string;
-  mls_number?: string;
-}
-
-export interface FormattedTaxEvent {
-  year?: number;
-  tax_paid?: number;
-  tax_increase_percent?: number;
-  assessed_value?: number;
-  assessed_value_increase_percent?: number;
-}
-
-/** Convert Zillow's `priceChangeRate` (decimal like 0.0125) to a percent. */
-function toPercent(rate?: number): number | undefined {
-  if (typeof rate !== 'number') return undefined;
-  return Math.round(rate * 1000) / 10;
-}
-
-export function formatPriceEvent(raw: RawPriceHistoryEntry): FormattedPriceEvent {
-  const date =
-    raw.date ??
-    (typeof raw.time === 'number'
-      ? new Date(raw.time).toISOString().slice(0, 10)
-      : undefined);
-  return {
-    date,
-    event: raw.event,
-    price: raw.price,
-    price_change_percent: toPercent(raw.priceChangeRate),
-    price_per_sqft: raw.pricePerSquareFoot,
-    source: raw.source,
-    mls_number: raw.attributeSource?.infoString1,
-  };
-}
-
-export function formatTaxEvent(raw: RawTaxHistoryEntry): FormattedTaxEvent {
-  const year =
-    typeof raw.time === 'number'
-      ? new Date(raw.time).getUTCFullYear()
-      : undefined;
-  return {
-    year,
-    tax_paid: raw.taxPaid,
-    tax_increase_percent: toPercent(raw.taxIncreaseRate),
-    assessed_value: raw.value,
-    assessed_value_increase_percent: toPercent(raw.valueIncreaseRate),
-  };
-}
+// Re-export the shared types + helpers so existing import paths keep working.
+export {
+  formatPriceEvent,
+  formatTaxEvent,
+  normalizePriceEvent,
+  normalizeEventType,
+} from './history-format.js';
+export type {
+  FormattedPriceEvent,
+  FormattedTaxEvent,
+  NormalizedPriceEvent,
+  NormalizedEventType,
+  RawPriceHistoryEntry,
+  RawTaxHistoryEntry,
+} from './history-format.js';
 
 export function registerHistoryTools(
   server: McpServer,
@@ -80,7 +34,7 @@ export function registerHistoryTools(
     {
       title: 'Get Zillow price history for a property',
       description:
-        "Listing-price events for a property — listings, price changes, pending, sold, etc. — by zpid or homedetails URL. Each entry has a date, event type, price, percent price-change, price/sqft, and MLS attribution. Sourced from the same homedetails page as zillow_get_property, but returns just the price-history series for easier downstream reasoning.",
+        "Listing-price events for a property — listings, price changes, pending, sold, etc. — by zpid or homedetails URL. Returns two parallel arrays: `events` (raw Zillow shape with `event` strings and MLS attribution) and `events_normalized` (cross-MCP shared shape with a fixed `type` enum: Listed/PriceChange/Pending/Contingent/Sold/Withdrawn/Relisted/Delisted). The normalized form lets callers merge histories across real-estate MCPs without re-implementing taxonomy. Sourced from the same homedetails page as zillow_get_property.",
       annotations: {
         title: 'Get Zillow price history for a property',
         readOnlyHint: true,
@@ -101,7 +55,12 @@ export function registerHistoryTools(
     async ({ zpid, url }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
       const events = (raw.priceHistory ?? []).map(formatPriceEvent);
-      return textResult({ zpid: String(raw.zpid ?? zpid ?? ''), events });
+      const events_normalized = events.map(normalizePriceEvent);
+      return textResult({
+        zpid: String(raw.zpid ?? zpid ?? ''),
+        events,
+        events_normalized,
+      });
     }
   );
 
