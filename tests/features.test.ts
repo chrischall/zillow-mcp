@@ -116,6 +116,33 @@ describe('extractFeatures', () => {
         extractFeatures('Furnishings are negotiable', baseCommunities).furnished
       ).toBe('negotiable');
     });
+    it('does NOT misfire on bare "with exceptions" in non-furnishing context (false-positive pin)', () => {
+      // Real-estate prose routinely uses "with exceptions" in title /
+      // survey / HOA / disclosure contexts unrelated to furnishings.
+      // The `furnished` token must anchor the partial match. Mirrors
+      // the fix landed in onehome-mcp PR #28 commit bada4e5.
+      expect(
+        extractFeatures(
+          'Sold with exceptions per title report; modern open floor plan.',
+          baseCommunities
+        ).furnished
+      ).toBeNull();
+      expect(
+        extractFeatures(
+          'HOA documents available with exceptions noted in section 3.',
+          baseCommunities
+        ).furnished
+      ).toBeNull();
+    });
+    it('still matches "furnished with exceptions" when anchored', () => {
+      // The anchored form should keep working — only the bare
+      // alternative was removed. (Carefully avoid words like "sold
+      // furnished" or "fully furnished" that would trip the FULLY
+      // detector ahead of PARTIAL.)
+      expect(
+        extractFeatures('Comes furnished with exceptions noted', baseCommunities).furnished
+      ).toBe('partial');
+    });
     it('returns null otherwise', () => {
       expect(extractFeatures('Lovely home', baseCommunities).furnished).toBeNull();
     });
@@ -224,5 +251,87 @@ describe('loadCommunities', () => {
     writeFileSync(p, '["Foo Hills", "Bar Estates"]');
     process.env.ZILLOW_COMMUNITIES_FILE = p;
     expect(loadCommunities()).toEqual(['Foo Hills', 'Bar Estates']);
+  });
+
+  describe('negative cache (issue #61 polish nit)', () => {
+    // The failure paths (missing file / malformed JSON / wrong shape)
+    // used to re-stat the filesystem on every call. For high-volume tool
+    // use that's wasteful — the negative result is keyed on the env-var
+    // path and reused until the path changes.
+    //
+    // Tested behaviorally: prime the negative cache against a missing /
+    // malformed file, then change the file's contents on disk WITHOUT
+    // changing the env-var path. If the cache is honoured, the
+    // post-mutation result should still be the fallback; otherwise the
+    // loader will have re-read the disk and seen the new content.
+
+    it('caches the missing-file fallback until the env-var path changes', () => {
+      const p = join(tmp, 'missing.json');
+      process.env.ZILLOW_COMMUNITIES_FILE = p;
+
+      // Prime: file is missing → fallback.
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+
+      // Materialise a valid file at the SAME path. Without a negative
+      // cache the loader would now read and return the new contents;
+      // with the negative cache it keeps returning the fallback.
+      writeFileSync(p, '["NewlyAppeared"]');
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+    });
+
+    it('caches the malformed-JSON fallback until the env-var path changes', () => {
+      const p = join(tmp, 'bad.json');
+      writeFileSync(p, '{not json');
+      process.env.ZILLOW_COMMUNITIES_FILE = p;
+
+      // Prime: bad JSON → fallback.
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+
+      // Repair the file in-place. Without a negative cache the loader
+      // would now read + parse + return ['Recovered']; with the cache
+      // it keeps returning the fallback.
+      writeFileSync(p, '["Recovered"]');
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+    });
+
+    it('caches the wrong-shape fallback until the env-var path changes', () => {
+      const p = join(tmp, 'wrong-shape.json');
+      writeFileSync(p, '{"a": 1}');
+      process.env.ZILLOW_COMMUNITIES_FILE = p;
+
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+
+      writeFileSync(p, '["NowRight"]');
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+    });
+
+    it('invalidates negative cache when env-var path changes', () => {
+      // Path A is missing → cached negative.
+      process.env.ZILLOW_COMMUNITIES_FILE = join(tmp, 'first-missing.json');
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+
+      // Path B is valid → cache must NOT serve the stale negative.
+      const p = join(tmp, 'now-valid.json');
+      writeFileSync(p, '["Alpha", "Beta"]');
+      process.env.ZILLOW_COMMUNITIES_FILE = p;
+      expect(loadCommunities()).toEqual(['Alpha', 'Beta']);
+    });
+
+    it('clears negative cache when env-var becomes unset', () => {
+      process.env.ZILLOW_COMMUNITIES_FILE = join(tmp, 'gone.json');
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+
+      delete process.env.ZILLOW_COMMUNITIES_FILE;
+      expect(loadCommunities()).toEqual(DEFAULT_COMMUNITIES);
+
+      // Re-setting to a valid path should still work (not stale-cached).
+      const p = join(tmp, 'fresh.json');
+      writeFileSync(p, '["Gamma"]');
+      process.env.ZILLOW_COMMUNITIES_FILE = p;
+      expect(loadCommunities()).toEqual(['Gamma']);
+    });
   });
 });

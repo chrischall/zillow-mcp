@@ -28,6 +28,8 @@ import { registerAffordabilityTools } from './tools/affordability.js';
 import { registerPhotosTools } from './tools/photos.js';
 import { registerHealthcheckTools } from './tools/healthcheck.js';
 import { registerGetByAddressTools } from './tools/get-by-address.js';
+import { registerBulkGetTools } from './tools/bulk-get.js';
+import { registerResolveAddressesTools } from './tools/resolve-addresses.js';
 import { SessionRegistry } from './sessions.js';
 import { registerSessionTools } from './tools/sessions.js';
 
@@ -57,6 +59,8 @@ registerAffordabilityTools(server);
 registerPhotosTools(server, client);
 registerHealthcheckTools(server, client);
 registerGetByAddressTools(server, client);
+registerBulkGetTools(server, client);
+registerResolveAddressesTools(server, client);
 registerSessionTools(server, sessions);
 
 console.error(
