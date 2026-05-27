@@ -16,7 +16,9 @@ import {
   type FormattedPriceEvent,
   type FormattedTaxEvent,
   type NormalizedPriceEvent,
-} from './history.js';
+  type RawPriceHistoryEntry as _SharedRawPriceHistoryEntry,
+  type RawTaxHistoryEntry as _SharedRawTaxHistoryEntry,
+} from './history-format.js';
 
 /**
  * Zillow's homedetails pages are SSR Next.js. The full property object
@@ -26,28 +28,10 @@ import {
  * has a `property` field gives us the property record.
  */
 
-export interface RawPriceHistoryEntry {
-  date?: string;
-  time?: number;
-  event?: string;
-  price?: number;
-  priceChangeRate?: number;
-  pricePerSquareFoot?: number;
-  source?: string;
-  attributeSource?: {
-    infoString1?: string;
-    infoString2?: string;
-    infoString3?: string;
-  };
-}
-
-export interface RawTaxHistoryEntry {
-  time?: number;
-  taxPaid?: number;
-  taxIncreaseRate?: number;
-  value?: number;
-  valueIncreaseRate?: number;
-}
+// Raw history entry types now live in `history-format.ts`; re-exported here
+// so existing import paths (e.g. `from './properties'`) keep working.
+export type RawPriceHistoryEntry = _SharedRawPriceHistoryEntry;
+export type RawTaxHistoryEntry = _SharedRawTaxHistoryEntry;
 
 export interface RawResoFacts {
   yearBuilt?: number;
@@ -135,20 +119,12 @@ export interface FormattedProperty {
   tax_assessed_value?: number;
   tax_assessed_year?: number;
   schools?: RawProperty['schools'];
-  /**
-   * Bundled price history — only present when the caller passed
-   * `include_price_history: true`. Mirrors the shape of
-   * `zillow_get_price_history`. (Issue #56.)
-   */
+  // Present only when `include_price_history: true`; mirrors `zillow_get_price_history`.
   price_history?: {
     events: FormattedPriceEvent[];
     events_normalized: NormalizedPriceEvent[];
   };
-  /**
-   * Bundled tax history — only present when the caller passed
-   * `include_tax_history: true`. Mirrors `zillow_get_tax_history`.
-   * (Issue #56.)
-   */
+  // Present only when `include_tax_history: true`; mirrors `zillow_get_tax_history`.
   tax_history?: FormattedTaxEvent[];
   /**
    * Server-side keyword extraction from the description (issue #41).
@@ -160,21 +136,11 @@ export interface FormattedProperty {
 }
 
 export interface FormatOptions {
-  /**
-   * Include the raw `description` in the output. Defaults to `false`
-   * (issue #40) because callers usually keyword-parse and discard it
-   * on receipt — `extracted_features` covers the common needs.
-   */
+  // Include the raw `description`; defaults false (callers usually rely on `extracted_features`).
   includeDescription?: boolean;
-  /**
-   * Bundle the same payload `zillow_get_price_history` would return
-   * onto the property record under `price_history`. (Issue #56.)
-   */
+  // Bundle the same payload `zillow_get_price_history` would return under `price_history`.
   includePriceHistory?: boolean;
-  /**
-   * Bundle the same payload `zillow_get_tax_history` would return
-   * onto the property record under `tax_history`. (Issue #56.)
-   */
+  // Bundle the same payload `zillow_get_tax_history` would return under `tax_history`.
   includeTaxHistory?: boolean;
 }
 

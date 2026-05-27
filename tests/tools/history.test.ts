@@ -156,6 +156,9 @@ describe('normalizePriceEvent (issue #55)', () => {
   it('maps "Price change" -> PriceChange', () => {
     expect(typeOf('Price change')).toBe('PriceChange');
   });
+  it('maps "Price reduced" -> PriceChange', () => {
+    expect(typeOf('Price reduced')).toBe('PriceChange');
+  });
   it('maps "Sold" -> Sold', () => {
     expect(typeOf('Sold')).toBe('Sold');
   });
