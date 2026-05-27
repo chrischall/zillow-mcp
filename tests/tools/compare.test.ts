@@ -133,6 +133,24 @@ describe('zillow_compare_properties tool', () => {
     expect(r.isError).toBeTruthy();
   });
 
+  it('accepts up to 25 zpids per call (issue #60 — cap raised from 8 to 25)', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      const zpid = m ? parseInt(m[1], 10) : 0;
+      return htmlWith({ zpid, price: zpid });
+    });
+    const zpids = Array.from({ length: 25 }, (_, i) => i + 1);
+    const r = await harness.callTool('zillow_compare_properties', { zpids });
+    const parsed = parseToolResult<{ count: number }>(r);
+    expect(parsed.count).toBe(25);
+  });
+
+  it('rejects more than 25 zpids per call (cap enforced)', async () => {
+    const zpids = Array.from({ length: 26 }, (_, i) => i + 1);
+    const r = await harness.callTool('zillow_compare_properties', { zpids });
+    expect(r.isError).toBeTruthy();
+  });
+
   it('accepts urls as an alternative to zpids', async () => {
     mockFetchHtml.mockImplementation(async () =>
       htmlWith({ zpid: 99, price: 999 })
