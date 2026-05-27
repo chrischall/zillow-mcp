@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import {
+  type FormattedPriceEvent,
   formatPriceEvent,
   formatTaxEvent,
+  normalizePriceEvent,
+  type NormalizedPriceEvent,
   registerHistoryTools,
 } from '../../src/tools/history.js';
+import { registerPropertyTools } from '../../src/tools/properties.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
@@ -133,5 +137,179 @@ describe('history tools — MCP integration', () => {
     const r = await harness.callTool('zillow_get_price_history', { zpid: 1 });
     const parsed = parseToolResult<{ events: unknown[] }>(r);
     expect(parsed.events).toEqual([]);
+  });
+});
+
+describe('normalizePriceEvent (issue #55)', () => {
+  const make = (event: string): FormattedPriceEvent => ({
+    date: '2025-01-15',
+    event,
+    price: 500_000,
+  });
+  function typeOf(event: string): NormalizedPriceEvent['type'] {
+    return normalizePriceEvent(make(event)).type;
+  }
+
+  it('maps "Listed for sale" -> Listed', () => {
+    expect(typeOf('Listed for sale')).toBe('Listed');
+  });
+  it('maps "Price change" -> PriceChange', () => {
+    expect(typeOf('Price change')).toBe('PriceChange');
+  });
+  it('maps "Sold" -> Sold', () => {
+    expect(typeOf('Sold')).toBe('Sold');
+  });
+  it('maps "Pending sale" -> Pending', () => {
+    expect(typeOf('Pending sale')).toBe('Pending');
+  });
+  it('maps "Listing removed" -> Withdrawn', () => {
+    expect(typeOf('Listing removed')).toBe('Withdrawn');
+  });
+  it('maps "Contingent" -> Contingent', () => {
+    expect(typeOf('Contingent')).toBe('Contingent');
+  });
+  it('maps "Relisted" -> Relisted', () => {
+    expect(typeOf('Relisted')).toBe('Relisted');
+  });
+  it('maps "Listing delisted" -> Delisted', () => {
+    expect(typeOf('Listing delisted')).toBe('Delisted');
+  });
+  it('falls back to Listed for an unrecognized event (best-effort)', () => {
+    // Zillow has used a number of historical variants; we err on the
+    // side of preserving the price-point data even when the label is
+    // novel. Callers can still inspect raw `event` from the parallel
+    // `events` array if they care about disambiguation.
+    expect(typeOf('Some weird future event')).toBe('Listed');
+  });
+
+  it('carries date/price/source_mls/price_change_pct through', () => {
+    const normalized = normalizePriceEvent({
+      date: '2025-01-15',
+      event: 'Listed for sale',
+      price: 500_000,
+      price_change_percent: 4.0,
+      source: 'SIBOR',
+      mls_number: '12345',
+    });
+    expect(normalized).toEqual({
+      date: '2025-01-15',
+      type: 'Listed',
+      price: 500_000,
+      price_change_pct: 4.0,
+      source_mls: 'SIBOR',
+    });
+  });
+});
+
+describe('zillow_get_price_history — events_normalized (issue #55)', () => {
+  it('attaches events_normalized alongside the raw events series', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWith({
+        zpid: 42,
+        priceHistory: [
+          { date: '2024-01-01', event: 'Listed for sale', price: 500_000 },
+          { date: '2024-03-01', event: 'Price change', price: 480_000, priceChangeRate: -0.04 },
+          { date: '2024-05-01', event: 'Sold', price: 475_000 },
+        ],
+      })
+    );
+    const r = await harness.callTool('zillow_get_price_history', { zpid: 42 });
+    const parsed = parseToolResult<{
+      events: unknown[];
+      events_normalized: Array<{ date: string; type: string; price?: number; price_change_pct?: number }>;
+    }>(r);
+    expect(parsed.events).toHaveLength(3);
+    expect(parsed.events_normalized).toHaveLength(3);
+    expect(parsed.events_normalized.map((e) => e.type)).toEqual([
+      'Listed',
+      'PriceChange',
+      'Sold',
+    ]);
+    expect(parsed.events_normalized[1].price_change_pct).toBe(-4);
+  });
+});
+
+describe('zillow_get_property — bundled history flags (issue #56)', () => {
+  it('omits price_history and tax_history by default', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWith({
+        zpid: 1,
+        priceHistory: [{ date: '2024-01-01', event: 'Listed for sale', price: 100 }],
+        taxHistory: [{ time: Date.parse('2024-06-01'), taxPaid: 100 }],
+      })
+    );
+    // Use the property tool, not history.
+    const propHarness = await createTestHarness((server) =>
+      registerPropertyTools(server, mockClient)
+    );
+    try {
+      const r = await propHarness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        price_history?: unknown;
+        tax_history?: unknown;
+      }>(r);
+      expect(parsed.price_history).toBeUndefined();
+      expect(parsed.tax_history).toBeUndefined();
+    } finally {
+      await propHarness.close();
+    }
+  });
+
+  it('includes price_history when include_price_history: true', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWith({
+        zpid: 1,
+        priceHistory: [
+          { date: '2024-01-01', event: 'Listed for sale', price: 500_000 },
+          { date: '2024-03-01', event: 'Price change', price: 480_000, priceChangeRate: -0.04 },
+        ],
+      })
+    );
+    const propHarness = await createTestHarness((server) =>
+      registerPropertyTools(server, mockClient)
+    );
+    try {
+      const r = await propHarness.callTool('zillow_get_property', {
+        zpid: 1,
+        include_price_history: true,
+      });
+      const parsed = parseToolResult<{
+        price_history?: {
+          events: Array<{ price: number }>;
+          events_normalized: Array<{ type: string }>;
+        };
+      }>(r);
+      expect(parsed.price_history).toBeDefined();
+      expect(parsed.price_history!.events).toHaveLength(2);
+      expect(parsed.price_history!.events_normalized).toHaveLength(2);
+    } finally {
+      await propHarness.close();
+    }
+  });
+
+  it('includes tax_history when include_tax_history: true', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWith({
+        zpid: 1,
+        taxHistory: [
+          { time: Date.parse('2024-06-01'), taxPaid: 12_000, value: 850_000 },
+        ],
+      })
+    );
+    const propHarness = await createTestHarness((server) =>
+      registerPropertyTools(server, mockClient)
+    );
+    try {
+      const r = await propHarness.callTool('zillow_get_property', {
+        zpid: 1,
+        include_tax_history: true,
+      });
+      const parsed = parseToolResult<{ tax_history?: Array<{ year: number }> }>(r);
+      expect(parsed.tax_history).toBeDefined();
+      expect(parsed.tax_history).toHaveLength(1);
+      expect(parsed.tax_history![0].year).toBe(2024);
+    } finally {
+      await propHarness.close();
+    }
   });
 });

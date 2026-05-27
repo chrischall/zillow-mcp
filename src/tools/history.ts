@@ -26,6 +26,68 @@ export interface FormattedPriceEvent {
   mls_number?: string;
 }
 
+/**
+ * Cross-MCP shared taxonomy for price-history events. Issue #55 calls
+ * for the same `type` enum on every real-estate MCP so the caller can
+ * merge histories from Compass/Zillow/Redfin/homes-com without
+ * re-implementing per-source taxonomy.
+ */
+export type NormalizedEventType =
+  | 'Listed'
+  | 'PriceChange'
+  | 'Pending'
+  | 'Contingent'
+  | 'Sold'
+  | 'Withdrawn'
+  | 'Relisted'
+  | 'Delisted';
+
+export interface NormalizedPriceEvent {
+  date?: string;
+  type: NormalizedEventType;
+  price?: number;
+  /** Percent change from the previous price (when Zillow provides it). */
+  price_change_pct?: number;
+  /** MLS attribution string when available. */
+  source_mls?: string;
+}
+
+/**
+ * Map Zillow's raw `event` strings to the cross-MCP normalized
+ * `type` enum (issue #55). Specificity-ordered: tighter matches checked
+ * first so e.g. "Pending sale" doesn't accidentally hit "Sold".
+ * Falls back to `Listed` for novel/unknown labels — the caller still
+ * has the raw event in the parallel `events` array if disambiguation
+ * matters.
+ */
+export function normalizeEventType(event: string | undefined): NormalizedEventType {
+  const s = (event ?? '').toLowerCase();
+  if (s.includes('delist')) return 'Delisted';
+  if (s.includes('relist')) return 'Relisted';
+  if (s.includes('withdrawn') || s.includes('listing removed')) return 'Withdrawn';
+  if (s.includes('pending')) return 'Pending';
+  if (s.includes('contingent')) return 'Contingent';
+  if (s.includes('sold')) return 'Sold';
+  if (s.includes('price change') || s.includes('price decrease') || s.includes('price increase'))
+    return 'PriceChange';
+  // Default: treat unknown as Listed so the price point still surfaces.
+  return 'Listed';
+}
+
+/**
+ * Project a `FormattedPriceEvent` onto the normalized shape.
+ */
+export function normalizePriceEvent(ev: FormattedPriceEvent): NormalizedPriceEvent {
+  const out: NormalizedPriceEvent = {
+    type: normalizeEventType(ev.event),
+  };
+  if (ev.date !== undefined) out.date = ev.date;
+  if (ev.price !== undefined) out.price = ev.price;
+  if (ev.price_change_percent !== undefined) out.price_change_pct = ev.price_change_percent;
+  if (ev.source !== undefined) out.source_mls = ev.source;
+  return out;
+}
+
 export interface FormattedTaxEvent {
   year?: number;
   tax_paid?: number;
@@ -80,7 +142,7 @@ export function registerHistoryTools(
     {
       title: 'Get Zillow price history for a property',
       description:
-        "Listing-price events for a property — listings, price changes, pending, sold, etc. — by zpid or homedetails URL. Each entry has a date, event type, price, percent price-change, price/sqft, and MLS attribution. Sourced from the same homedetails page as zillow_get_property, but returns just the price-history series for easier downstream reasoning.",
+        "Listing-price events for a property — listings, price changes, pending, sold, etc. — by zpid or homedetails URL. Returns two parallel arrays: `events` (raw Zillow shape with `event` strings and MLS attribution) and `events_normalized` (cross-MCP shared shape with a fixed `type` enum: Listed/PriceChange/Pending/Contingent/Sold/Withdrawn/Relisted/Delisted). The normalized form lets callers merge histories across real-estate MCPs without re-implementing taxonomy. Sourced from the same homedetails page as zillow_get_property.",
       annotations: {
         title: 'Get Zillow price history for a property',
         readOnlyHint: true,
@@ -101,7 +163,15 @@ export function registerHistoryTools(
     async ({ zpid, url }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
       const events = (raw.priceHistory ?? []).map(formatPriceEvent);
-      return textResult({ zpid: String(raw.zpid ?? zpid ?? ''), events });
+      // events_normalized: parallel array with the cross-MCP shared
+      // taxonomy. Purely additive — the raw shape is preserved in
+      // `events`. (Issue #55.)
+      const events_normalized = events.map(normalizePriceEvent);
+      return textResult({
+        zpid: String(raw.zpid ?? zpid ?? ''),
+        events,
+        events_normalized,
+      });
     }
   );
 
