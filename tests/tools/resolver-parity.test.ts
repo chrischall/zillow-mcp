@@ -5,8 +5,8 @@ import { registerResolveAddressesTools } from '../../src/tools/resolve-addresses
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 // Parity regression for issue #73: the bulk `zillow_resolve_addresses`
-// must run the same 3-rung strategy (direct → suffix-expansion →
-// search-fallback) that the single `zillow_get_by_address` does. The
+// must run the same 4-rung strategy (direct → suffix-expansion →
+// locality-remap → search-fallback) that the single `zillow_get_by_address` does. The
 // real-world headline: a 20-address batch returned 0/20 via bulk while
 // 17/20 resolved via single. The test below shares one mock backing
 // store across both tools and asserts the resolved/unresolved partition

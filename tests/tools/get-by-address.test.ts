@@ -303,7 +303,10 @@ describe('zillow_get_by_address tool', () => {
 
   it('falls back to a one-shot search (city/state + price band) when direct resolve fails (issue #52)', async () => {
     // First two calls (abbrev + expanded) return nothing; the third call
-    // — a city+state search — returns the listing.
+    // — the locality-remap city-drop direct fetch — returns the listing.
+    // (After #82 the locality-remap rung sits between suffix-expansion and
+    // the scope-resolve search; when the dropped-city slug resolves
+    // directly we never reach rung 4, so `via` is `locality_remap`.)
     let call = 0;
     mockFetchHtml.mockImplementation(async () => {
       call++;
@@ -335,55 +338,68 @@ describe('zillow_get_by_address tool', () => {
     }>(result);
     expect(parsed.resolved).toBe(true);
     expect(parsed.zpid).toBe('70000');
-    expect(parsed.via).toBe('search_fallback');
-    // direct + expansion + search-fallback = 3 calls
+    expect(parsed.via).toBe('locality_remap');
+    // direct + expansion + locality-remap (city-drop) = 3 calls
     expect(call).toBe(3);
   });
 
-  it('search fallback: takes the region branch + 4th filtered call when scope resolve returns a pinned region', async () => {
-    // Triggers the `kind === 'region'` path of searchFallback (lines
-    // 211-228 of get-by-address.ts): rung 3's resolveLocationOrListings
-    // gets a page with `regionSelection` + `mapBounds` and no listResults,
-    // forcing a 4th request — the filtered search pinned to that region —
-    // which finally yields the listing.
-    let call = 0;
-    mockFetchHtml.mockImplementation(async () => {
-      call++;
-      if (call <= 2) {
-        // direct + suffix-expansion both miss
-        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
-      }
-      if (call === 3) {
-        // scope resolve: region pinned but no listResults yet
-        const nextData = {
-          props: {
-            pageProps: {
-              searchPageState: {
-                queryState: {
-                  regionSelection: [{ regionId: 41568, regionType: 6 }],
-                  mapBounds: {
-                    north: 35.55,
-                    south: 35.4,
-                    east: -82.05,
-                    west: -82.25,
-                  },
+  it('search fallback: takes the region branch + filtered call when scope resolve returns a pinned region', async () => {
+    // Triggers the `kind === 'region'` path of searchFallback: rung 4's
+    // resolveLocationOrListings gets a page with `regionSelection` +
+    // `mapBounds` and no listResults, forcing a follow-up request — the
+    // filtered search pinned to that region — which finally yields the
+    // listing. The mock uses path-based matching so the rung-3 locality
+    // remap (city-drop + alias) misses cleanly and we actually reach the
+    // rung-4 search fallback.
+    const EMPTY =
+      '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+    const regionHtml = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+      {
+        props: {
+          pageProps: {
+            searchPageState: {
+              queryState: {
+                regionSelection: [{ regionId: 41568, regionType: 6 }],
+                mapBounds: {
+                  north: 35.55,
+                  south: 35.4,
+                  east: -82.05,
+                  west: -82.25,
                 },
-                cat1: { searchResults: { listResults: [] } },
               },
+              cat1: { searchResults: { listResults: [] } },
             },
           },
-        };
-        return `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script>`;
+        },
       }
-      // 4th call: the filtered search with the pinned region — return the match.
-      return htmlWithFirstListing({
-        zpid: 75_000,
-        detailUrl: '/homedetails/foo/75000_zpid/',
-        streetAddress: '99 Hidden Cove Ln',
-        city: 'Lake Lure',
-        state: 'NC',
-        zipcode: '28746',
-      });
+    )}</script>`;
+    let call = 0;
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      call++;
+      const decoded = decodeURIComponent(path).toLowerCase();
+      // The rung-4 scope resolve is the bare city/state slug (no
+      // street component) — that's our region-pinning call.
+      if (
+        !decoded.includes('99 hidden cove') &&
+        decoded.includes('lake lure') &&
+        !decoded.includes('searchqueryst')
+      ) {
+        return regionHtml;
+      }
+      // The filtered search carries a searchQueryState query string.
+      if (decoded.includes('searchqueryst')) {
+        return htmlWithFirstListing({
+          zpid: 75_000,
+          detailUrl: '/homedetails/foo/75000_zpid/',
+          streetAddress: '99 Hidden Cove Ln',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        });
+      }
+      // All direct + suffix-expansion + locality-remap (city-drop +
+      // alias) attempts miss.
+      return EMPTY;
     });
     const result = await harness.callTool('zillow_get_by_address', {
       address: '99 Hidden Cove Ln',
@@ -401,8 +417,10 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.resolved).toBe(true);
     expect(parsed.zpid).toBe('75000');
     expect(parsed.via).toBe('search_fallback');
-    // direct + expansion + scope-resolve + filtered-search = 4 calls
-    expect(call).toBe(4);
+    // direct + expansion + (city-drop + alias for locality_remap) +
+    // scope-resolve + filtered-search — at least the scope-resolve and
+    // filtered-search calls must have fired.
+    expect(call).toBeGreaterThanOrEqual(4);
   });
 
   it('still returns resolved=false when ALL retries fail', async () => {
@@ -416,6 +434,44 @@ describe('zillow_get_by_address tool', () => {
     });
     const parsed = parseToolResult<{ resolved: boolean }>(result);
     expect(parsed.resolved).toBe(false);
+  });
+
+  it('search fallback: refuses to match when the address has zero discriminating tokens (round-3 nit)', async () => {
+    // Pathological input: `"1 St"` tokenizes to `["1", "st"]`; both are
+    // shorter than the 3-char discriminating-token threshold, so
+    // `inputTokens.length === 0`. Without an early guard, searchFallback
+    // returns `listings[0]` unchecked — silently mis-resolving free-text
+    // like `"1 St, Lake Lure, NC"` to whatever Zillow returns first.
+    // The strict `every`-token guard must be the single source of truth,
+    // so we must NOT accept the first listing here.
+    let call = 0;
+    mockFetchHtml.mockImplementation(async () => {
+      call++;
+      if (call <= 2) {
+        // direct + suffix-expansion both miss
+        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      }
+      // scope-resolve / fallback returns an unrelated listing — we must
+      // NOT silently take it just because we have no tokens to check.
+      return htmlWithFirstListing({
+        zpid: 99999,
+        detailUrl: '/homedetails/totally-unrelated/99999_zpid/',
+        streetAddress: '4242 Totally Unrelated Way',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      });
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '1 St',
+      city: 'Lake Lure',
+      state: 'NC',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(
+      result
+    );
+    expect(parsed.resolved).toBe(false);
+    expect(parsed.zpid).toBeUndefined();
   });
 
   it('builds an absolute URL when detailUrl is missing — falls back to zpid path', async () => {

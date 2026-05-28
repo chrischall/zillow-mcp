@@ -14,11 +14,12 @@ import {
 /**
  * `zillow_resolve_addresses`: batch address → zpid resolver.
  *
- * Issue #73: now runs the shared 3-rung ladder (direct → suffix
- * expansion → search fallback) so the bulk and single tools resolve
- * the same partition for the same inputs. Inputs may be either bare
- * free-text strings or structured rows that include `city`, `state`,
- * `zip`, and a `price_hint` (issue #74) for the search-fallback rung.
+ * Issue #73: now runs the shared 4-rung ladder (direct → suffix
+ * expansion → locality remap → search fallback) so the bulk and
+ * single tools resolve the same partition for the same inputs.
+ * Inputs may be either bare free-text strings or structured rows
+ * that include `city`, `state`, `zip`, and a `price_hint` (issue
+ * #74) for the search-fallback rung.
  */
 
 export const RESOLVE_ADDRESSES_MAX = 100;
@@ -57,12 +58,18 @@ export interface ResolveAddressesRow {
   queried_city?: string;
   /**
    * How the match was made.
-   * - `exact`           — rung 1 direct hit.
-   * - `suffix_expansion`— rung 2 (issue #51 + #76).
-   * - `search_fallback` — rung 3 (issue #52 + #74 + #75).
-   * - `none`            — all rungs missed.
+   * - `exact`            — rung 1 direct hit.
+   * - `suffix_expansion` — rung 2 (issue #51 + #76).
+   * - `locality_remap`   — rung 3 (issue #75) — city-drop / alias.
+   * - `search_fallback`  — rung 4 (issue #52 + #74).
+   * - `none`             — all rungs missed.
    */
-  confidence: 'exact' | 'suffix_expansion' | 'search_fallback' | 'none';
+  confidence:
+    | 'exact'
+    | 'suffix_expansion'
+    | 'locality_remap'
+    | 'search_fallback'
+    | 'none';
   /** Set when `resolved` is false. */
   error?: string;
   /** The slug we passed through the resolver — useful for debugging. */
@@ -97,13 +104,17 @@ function normalizeRow(row: ResolveAddressesInputRow): ResolverInput & {
 
 /** Map a ResolverVia onto the bulk-row confidence string. */
 function viaToConfidence(
-  via: 'direct' | 'suffix_expansion' | 'search_fallback'
-): 'exact' | 'suffix_expansion' | 'search_fallback' {
+  via: 'direct' | 'suffix_expansion' | 'locality_remap' | 'search_fallback'
+):
+  | 'exact'
+  | 'suffix_expansion'
+  | 'locality_remap'
+  | 'search_fallback' {
   return via === 'direct' ? 'exact' : via;
 }
 
 /**
- * Single-address resolver — runs the same 3-rung ladder
+ * Single-address resolver — runs the same 4-rung ladder
  * `zillow_get_by_address` uses. Captures errors and always returns a
  * row (per-row error capture means one bad address never fails the
  * batch).
@@ -220,10 +231,10 @@ export function registerResolveAddressesTools(
       description:
         `Resolve up to ${RESOLVE_ADDRESSES_MAX} free-text or structured addresses to Zillow zpids + canonical URLs in one call. ` +
         'Each row may be a bare string or `{address, city?, state?, zip?, price_hint?}`; `price_hint` (USD) bounds the search-fallback rung. ' +
-        'Runs the same 3-rung resolver as `zillow_get_by_address` (direct → suffix-expansion → search-fallback) so bulk and single match the same partition. ' +
+        'Runs the same 4-rung resolver as `zillow_get_by_address` (direct → suffix-expansion → locality-remap → search-fallback) so bulk and single match the same partition. ' +
         'Concurrent fan-out — a 60-address batch returns in roughly one round trip instead of 60. ' +
         'Per-row error capture so one bad address never fails the batch. ' +
-        '`confidence` is `"exact"` for direct hits, `"suffix_expansion"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
+        '`confidence` is `"exact"` for direct hits, `"suffix_expansion"` / `"locality_remap"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
         '`resolved_city` is set (alongside `queried_city`) when issue #75 city-drop or locality-alias remap fired. ' +
         'Read-only, no auth required.',
       annotations: {

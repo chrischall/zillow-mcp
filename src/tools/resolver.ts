@@ -1,16 +1,17 @@
 /**
- * Shared 3-rung address-resolution strategy used by both
+ * Shared 4-rung address-resolution strategy used by both
  * `zillow_get_by_address` (single) and `zillow_resolve_addresses` (bulk).
  *
  * Issue #73 — bulk used to run only rung 1 (direct), so a real-world
- * 20-address batch returned 0/20 while the single tool's 3-rung ladder
+ * 20-address batch returned 0/20 while the single tool's ladder
  * resolved 17/20. Factoring the ladder here keeps the two tools at
  * parity by construction.
  *
  * Ladder (each rung tried only when the prior misses):
  *   1. Direct          — `/homes/<slug>_rb/`
  *   2. Suffix expansion — `Rd <-> Road`, `Hts <-> Heights` (issue #51 + #76)
- *   3. Search fallback  — city/state-scoped search bounded by an
+ *   3. Locality remap   — city-drop + alias substitution (issue #75)
+ *   4. Search fallback  — city/state-scoped search bounded by an
  *                          optional price band (issue #52, plumbed
  *                          through to bulk in issue #74)
  */
@@ -38,7 +39,11 @@ export interface ResolverInput {
   price_max?: number;
 }
 
-export type ResolverVia = 'direct' | 'suffix_expansion' | 'search_fallback';
+export type ResolverVia =
+  | 'direct'
+  | 'suffix_expansion'
+  | 'locality_remap'
+  | 'search_fallback';
 
 export interface ResolverHit {
   raw: RawListing;
@@ -136,7 +141,12 @@ export async function searchFallback(
   }
   if (listings.length === 0) return null;
   const inputTokens = locationTokens(input.address).filter((t) => t.length >= 3);
-  if (inputTokens.length === 0) return listings[0];
+  // Round-3 nit: pathological input (e.g. `"1 St, Lake Lure, NC"`) tokenizes
+  // to zero discriminating tokens. Without this guard we'd silently return
+  // `listings[0]` for ANY scope-matching result — mis-resolving free-text
+  // queries. The strict `every`-token guard below is the single source of
+  // truth; bail out instead of falling through.
+  if (inputTokens.length === 0) return null;
   for (const l of listings) {
     const info = l.hdpData?.homeInfo ?? {};
     const haystack = [info.streetAddress, l.address, l.addressStreet]
@@ -539,7 +549,7 @@ export async function resolveAddressFull(
       hit: {
         raw: remap.raw,
         formatted: remap.formatted,
-        via: 'search_fallback',
+        via: 'locality_remap',
         slug: remap.slug,
       },
       finalSlug: remap.slug,
