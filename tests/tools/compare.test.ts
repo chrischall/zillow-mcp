@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import { buildSummary, registerCompareTools } from '../../src/tools/compare.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const mockFetchHtml = vi.fn();
 const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
@@ -133,7 +136,7 @@ describe('zillow_compare_properties tool', () => {
     expect(r.isError).toBeTruthy();
   });
 
-  it('accepts up to 25 zpids per call (issue #60 — cap raised from 8 to 25)', async () => {
+  it('accepts up to 25 zpids per call (issues #60, #79 — cap raised from 8 to 25)', async () => {
     mockFetchHtml.mockImplementation(async (path: string) => {
       const m = /\/homedetails\/(\d+)_zpid/.exec(path);
       const zpid = m ? parseInt(m[1], 10) : 0;
@@ -145,10 +148,51 @@ describe('zillow_compare_properties tool', () => {
     expect(parsed.count).toBe(25);
   });
 
-  it('rejects more than 25 zpids per call (cap enforced)', async () => {
+  it('rejects 26 zpids — boundary check on the 25 cap (issue #79)', async () => {
     const zpids = Array.from({ length: 26 }, (_, i) => i + 1);
     const r = await harness.callTool('zillow_compare_properties', { zpids });
     expect(r.isError).toBeTruthy();
+  });
+
+  it('rejects 26 urls — boundary check on the 25 cap (issue #79)', async () => {
+    const urls = Array.from(
+      { length: 26 },
+      (_, i) => `/homedetails/x/${i + 1}_zpid/`
+    );
+    const r = await harness.callTool('zillow_compare_properties', { urls });
+    expect(r.isError).toBeTruthy();
+  });
+
+  describe('tool description framing (issue #79)', () => {
+    // The reporter said "compare looks like the fetch-many tool and
+    // isn't" — the doc fix matters as much as the cap. Verify the
+    // description (a) advertises the 25 cap so callers know it was
+    // raised from 8, and (b) cross-references zillow_bulk_get so
+    // batches >25 land at the right tool.
+    async function getCompareDescription(): Promise<string> {
+      const server = new McpServer({ name: 't', version: '0.0.0' });
+      registerCompareTools(server, mockClient);
+      const client = new Client({ name: 'tc', version: '0.0.0' });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(b), client.connect(a)]);
+      const { tools } = await client.listTools();
+      await client.close();
+      await server.close();
+      const t = tools.find((t) => t.name === 'zillow_compare_properties');
+      if (!t) throw new Error('tool missing');
+      return t.description ?? '';
+    }
+
+    it('description mentions the 25 cap and cross-references zillow_bulk_get', async () => {
+      const d = await getCompareDescription();
+      expect(d).toMatch(/25/);
+      expect(d).toMatch(/zillow_bulk_get/);
+    });
+
+    it('description frames compare as side-by-side analysis, not fetch-many', async () => {
+      const d = await getCompareDescription();
+      expect(d).toMatch(/side[- ]by[- ]side/i);
+    });
   });
 
   it('accepts urls as an alternative to zpids', async () => {

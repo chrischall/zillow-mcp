@@ -49,11 +49,10 @@ export function registerBulkGetTools(
     {
       title: 'Bulk-fetch Zillow properties by zpid',
       description:
-        `Fetch up to ${BULK_GET_MAX} Zillow properties in a single call. Returns one structured row per input id ` +
-        '(no side-by-side summary table — use `zillow_compare_properties` for that). Each row is either ' +
+        `Fetch up to ${BULK_GET_MAX} Zillow property records in a single call — the "give me everything for these N saved homes" endpoint. Returns one structured row per input id ` +
+        '(no pivoted side-by-side summary table — for 2-25 listings with a comparison summary use `zillow_compare_properties`). Each row is either ' +
         '`{ zpid, property }` on success or `{ zpid, error }` on failure — one bad zpid never fails the ' +
-        'whole call. Calls fan out concurrently against `/homedetails/<zpid>_zpid/`. Use this for the ' +
-        '"give me everything for these 50 saved homes" workflow.',
+        'whole call. Calls fan out concurrently against `/homedetails/<zpid>_zpid/` (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions).',
       annotations: {
         title: 'Bulk-fetch Zillow properties by zpid',
         readOnlyHint: true,
