@@ -252,7 +252,7 @@ describe('zillow_resolve_addresses tool', () => {
       expect(parsed.results[0].error).toMatch(/^bridge unreachable: /);
     });
 
-    it('caps internal concurrency to BULK_CONCURRENCY (issue #78)', async () => {
+    it('caps internal concurrency to BRIDGE_CONCURRENCY (issue #78)', async () => {
       // 14 addresses, watch in-flight count peak. With unlimited fan-out
       // it would peak at 14; with the cap it should stay ≤ 6.
       let inFlight = 0;

@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { classifyBridgeError } from '@fetchproxy/server';
+import {
+  BRIDGE_CONCURRENCY,
+  classifyRowError,
+  mapWithConcurrency,
+  retryOnceOnTimeout,
+} from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import {
@@ -8,11 +13,6 @@ import {
   format,
   type FormattedProperty,
 } from './properties.js';
-import {
-  BULK_CONCURRENCY,
-  mapWithConcurrency,
-  retryOnceOnTimeout,
-} from './concurrency.js';
 
 /**
  * `zillow_bulk_get`: structured fetch of N properties in one call.
@@ -92,13 +92,13 @@ export function registerBulkGetTools(
             ').'
         );
       }
-      // Issue #78: pace fan-out at BULK_CONCURRENCY + retry-once-on-
+      // Issue #78: pace fan-out at BRIDGE_CONCURRENCY + retry-once-on-
       // timeout per sub-request so a single transient SW eviction
       // doesn't surface as a hard fetch failure for that row.
       type Target = { zpid?: number | string; url?: string };
       const rows = await mapWithConcurrency<Target, BulkGetRow>(
         targets as Target[],
-        BULK_CONCURRENCY,
+        BRIDGE_CONCURRENCY,
         async (t): Promise<BulkGetRow> => {
           const fallbackZpid = 'zpid' in t ? String(t.zpid) : '';
           try {
@@ -110,12 +110,7 @@ export function registerBulkGetTools(
               property: format(raw),
             };
           } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            const kind = classifyBridgeError(e);
-            let error = msg;
-            if (kind === 'timeout') error = `bridge timeout after retry: ${msg}`;
-            else if (kind === 'bridge_down') error = `bridge unreachable: ${msg}`;
-            return { zpid: fallbackZpid, error };
+            return { zpid: fallbackZpid, error: classifyRowError(e).message };
           }
         }
       );
