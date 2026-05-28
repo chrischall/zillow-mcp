@@ -2,19 +2,42 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   BRIDGE_CONCURRENCY,
+  TokenBucket,
+  backoffDelayMs,
   classifyRowError,
   mapWithConcurrency,
   retryOnceOnTimeout,
 } from '@fetchproxy/server';
-import { CaptchaBlockedError, type ZillowClient } from '../client.js';
+import { BotWallError, type ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
-import { backoffDelayMs, sleep } from '../backoff.js';
-import { chunk, TokenBucket } from '../throttle.js';
 import {
   fetchPropertyRecord,
   format,
   type FormattedProperty,
 } from './properties.js';
+
+/**
+ * Split `items` into pages of at most `size`. A non-positive `size`
+ * collapses to a single page (defensive — never produces an infinite
+ * loop). Used to auto-chunk a big id list into safe-sized pages
+ * dispatched one after another (issue #90 part c). Kept local — the
+ * resilience kit hoisted `TokenBucket`/`backoffDelayMs` but not this
+ * array helper.
+ */
+export function chunk<T>(items: T[], size: number): T[][] {
+  if (items.length === 0) return [];
+  if (size <= 0) return [items.slice()];
+  const pages: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    pages.push(items.slice(i, i + size));
+  }
+  return pages;
+}
+
+/** Promise-based sleep. Resolves after `ms` milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * `zillow_bulk_get`: structured fetch of N properties in one call.
@@ -28,11 +51,13 @@ import {
  * Errors for individual zpids are captured per-row so a single bad zpid
  * doesn't fail the whole batch.
  *
- * Issue #90 hardening — PerimeterX bot-wall:
- *   - a px-captcha 403 is classified as `rate_limited_captcha`, a
- *     distinct kind that NEVER masquerades as not-found / generic error;
- *   - a per-host requests-per-minute token bucket governs *total*
- *     request volume (not just concurrency — that's what trips px);
+ * Issue #90 hardening — PerimeterX bot-wall (0.10.0: resilience kit):
+ *   - a px-captcha 403 is classified as `bot_challenge` (the kit's
+ *     canonical kind), a distinct value that NEVER masquerades as
+ *     not-found / generic error;
+ *   - a per-host requests-per-minute token bucket (the kit's
+ *     `TokenBucket`) governs *total* request volume (not just
+ *     concurrency — that's what trips px);
  *   - blocked sub-requests back off (exponential + jitter) and retry
  *     rather than failing outright;
  *   - the big id list is auto-chunked into safe-sized pages dispatched
@@ -96,11 +121,12 @@ interface BulkGetRow {
   /**
    * Issue #90: machine-readable error classification so callers can
    * branch without string-matching. Present only on error rows. The
-   * critical value is `rate_limited_captcha` — distinct from a generic
+   * critical value is `bot_challenge` (the resilience kit's canonical
+   * bot-wall {@link FetchErrorKind}, 0.10.0) — distinct from a generic
    * `error`/not-found so a bot-wall is never mistaken for a gone listing.
    */
   error_kind?:
-    | 'rate_limited_captcha'
+    | 'bot_challenge'
     | 'timeout'
     | 'bridge_down'
     | 'protocol'
@@ -110,14 +136,14 @@ interface BulkGetRow {
 type Target = { zpid?: number | string; url?: string };
 
 /**
- * Fetch one target, with the #78 timeout retry AND the #90 captcha
+ * Fetch one target, with the #78 timeout retry AND the #90 bot-wall
  * backoff retry layered on. Returns a per-row envelope; never throws.
  *
- * On a captcha block we back off (full jitter, floored at the captcha's
+ * On a bot-wall block we back off (full jitter, floored at the wall's
  * own retry-after hint) and retry up to `maxCaptchaRetries`. If it never
- * clears, the row is returned with `error_kind: 'rate_limited_captcha'`
- * and the captcha's retry-after seconds so the caller can finish it in a
- * second pass — it is NEVER downgraded to a generic miss.
+ * clears, the row is returned with `error_kind: 'bot_challenge'` and the
+ * wall's retry-after seconds so the caller can finish it in a second
+ * pass — it is NEVER downgraded to a generic miss.
  */
 async function fetchOneRow(
   client: ZillowClient,
@@ -127,7 +153,7 @@ async function fetchOneRow(
   blockedRetryAfter: { seconds: number }
 ): Promise<BulkGetRow> {
   const fallbackZpid = 'zpid' in target ? String(target.zpid) : '';
-  let lastCaptcha: CaptchaBlockedError | null = null;
+  let lastBotWall: BotWallError | null = null;
 
   for (let attempt = 0; attempt <= cfg.maxCaptchaRetries; attempt++) {
     // Spend a token before every attempt — the throttle paces total
@@ -142,16 +168,16 @@ async function fetchOneRow(
         property: format(raw),
       };
     } catch (e) {
-      if (e instanceof CaptchaBlockedError) {
-        lastCaptcha = e;
+      if (e instanceof BotWallError) {
+        lastBotWall = e;
         if (attempt < cfg.maxCaptchaRetries) {
-          // Honour the captcha's retry-after hint as a floor, but never
-          // wait longer than the backoff cap on a single in-batch retry —
-          // a 30s server hint shouldn't stall the whole batch. Anything
+          // Honour the wall's retry-after hint as a floor, but never wait
+          // longer than the backoff cap on a single in-batch retry — a
+          // 30s server hint shouldn't stall the whole batch. Anything
           // still blocked after the bounded retries is reported in the
           // partial-result envelope with the *full* retry-after for a
           // second pass.
-          const floorMs = Math.min(
+          const retryAfterMs = Math.min(
             e.retryAfterSeconds * 1_000,
             cfg.backoffCapMs
           );
@@ -159,7 +185,7 @@ async function fetchOneRow(
             baseMs: cfg.backoffBaseMs,
             capMs: cfg.backoffCapMs,
             rng: cfg.rng,
-            floorMs,
+            retryAfterMs,
           });
           await sleep(delay);
           continue;
@@ -172,10 +198,10 @@ async function fetchOneRow(
         return {
           zpid: fallbackZpid,
           error: e.message,
-          error_kind: 'rate_limited_captcha',
+          error_kind: 'bot_challenge',
         };
       }
-      // Non-captcha failure: classify with the cohort helper (timeout /
+      // Non-bot-wall failure: classify with the cohort helper (timeout /
       // bridge_down / protocol / other) and stop — these are not the
       // bot-wall, so backoff-retry doesn't apply.
       const classified = classifyRowError(e);
@@ -190,12 +216,12 @@ async function fetchOneRow(
   // type-checker happy and is defensive if maxCaptchaRetries < 0.
   blockedRetryAfter.seconds = Math.max(
     blockedRetryAfter.seconds,
-    lastCaptcha?.retryAfterSeconds ?? 0
+    lastBotWall?.retryAfterSeconds ?? 0
   );
   return {
     zpid: fallbackZpid,
-    error: lastCaptcha?.message ?? 'unknown bulk-get failure',
-    error_kind: lastCaptcha ? 'rate_limited_captcha' : 'other',
+    error: lastBotWall?.message ?? 'unknown bulk-get failure',
+    error_kind: lastBotWall ? 'bot_challenge' : 'other',
   };
 }
 
@@ -224,7 +250,7 @@ export function registerBulkGetTools(
         '`{ zpid, property }` on success or `{ zpid, error, error_kind }` on failure — one bad zpid never fails the ' +
         `whole call. Calls fan out concurrently against \`/homedetails/<zpid>_zpid/\` (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions). ` +
         `Big lists are auto-chunked into pages of ${BULK_GET_CHUNK_SIZE} and dispatched sequentially under a per-host requests-per-minute throttle so the batch doesn't trip Zillow's PerimeterX bot-wall (issue #90). ` +
-        'If the bot-wall is hit, the blocked sub-requests are retried with exponential backoff; anything still blocked is reported with `error_kind: "rate_limited_captcha"` (distinct from a missing listing) and the response carries a `{ blocked, retry_after_s }` envelope so you can finish the rest in a second pass.',
+        'If the bot-wall is hit, the blocked sub-requests are retried with exponential backoff; anything still blocked is reported with `error_kind: "bot_challenge"` (distinct from a missing listing) and the response carries a `{ blocked, retry_after_s }` envelope so you can finish the rest in a second pass.',
       annotations: {
         title: 'Bulk-fetch Zillow properties by zpid',
         readOnlyHint: true,
@@ -290,7 +316,7 @@ export function registerBulkGetTools(
       }
 
       const blocked = rows.filter(
-        (r) => r.error_kind === 'rate_limited_captcha'
+        (r) => r.error_kind === 'bot_challenge'
       ).length;
 
       const envelope: {

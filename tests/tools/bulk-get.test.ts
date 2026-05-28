@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
-import { CaptchaBlockedError } from '../../src/client.js';
+import { BotWallError } from '../../src/client.js';
 import {
   registerBulkGetTools,
   BULK_GET_MAX,
   BULK_GET_CHUNK_SIZE,
+  chunk,
 } from '../../src/tools/bulk-get.js';
 import {
   FetchproxyBridgeDownError,
@@ -224,18 +225,18 @@ describe('zillow_bulk_get tool', () => {
   });
 
   describe('px-captcha classification + backoff retry (issue #90)', () => {
-    it('classifies a px-captcha block as rate_limited_captcha — NOT not-found, NOT generic error', async () => {
+    it('classifies a px-captcha block as bot_challenge — NOT not-found, NOT generic error', async () => {
       // Always blocked, even on retry → the row stays a captcha block and
       // must be reported as such (never a bare miss).
       mockFetchHtml.mockImplementation(async () => {
-        throw new CaptchaBlockedError('/homedetails/x/42_zpid/');
+        throw new BotWallError('/homedetails/x/42_zpid/');
       });
       const r = await harness.callTool('zillow_bulk_get', { zpids: [42] });
       const parsed = parseToolResult<{
         rows: Array<{ zpid: string; error?: string; error_kind?: string }>;
       }>(r);
       const row = parsed.rows[0];
-      expect(row.error_kind).toBe('rate_limited_captcha');
+      expect(row.error_kind).toBe('bot_challenge');
       // It must NOT look like a generic fetch failure or a not-found.
       expect(row.error).not.toMatch(/could not locate property/i);
       expect(row.error).toMatch(/captcha/i);
@@ -249,7 +250,7 @@ describe('zillow_bulk_get tool', () => {
         const zpid = m ? m[1] : '0';
         callsByZpid[zpid] = (callsByZpid[zpid] ?? 0) + 1;
         if (zpid === '20' && callsByZpid[zpid] === 1) {
-          throw new CaptchaBlockedError(path);
+          throw new BotWallError(path);
         }
         return htmlWith({ zpid: parseInt(zpid, 10), price: 555 });
       });
@@ -274,7 +275,7 @@ describe('zillow_bulk_get tool', () => {
       mockFetchHtml.mockImplementation(async (path: string) => {
         const m = /\/homedetails\/(\d+)_zpid/.exec(path);
         const zpid = m ? m[1] : '0';
-        if (zpid === '20') throw new CaptchaBlockedError(path, 17);
+        if (zpid === '20') throw new BotWallError(path, 17);
         return htmlWith({ zpid: parseInt(zpid, 10), price: 1 });
       });
       const r = await harness.callTool('zillow_bulk_get', {
@@ -289,7 +290,7 @@ describe('zillow_bulk_get tool', () => {
       expect(parsed.retry_after_s).toBeGreaterThan(0);
       // The blocked row carries the captcha kind, the others are clean.
       const blockedRow = parsed.rows.find((row) => row.zpid === '20');
-      expect(blockedRow?.error_kind).toBe('rate_limited_captcha');
+      expect(blockedRow?.error_kind).toBe('bot_challenge');
       const okRows = parsed.rows.filter((row) => row.zpid !== '20');
       expect(okRows.every((row) => row.error === undefined)).toBe(true);
     });
@@ -299,13 +300,13 @@ describe('zillow_bulk_get tool', () => {
       // a bot-wall must not be reported with the "Could not locate
       // property data … Zillow probably redirected …" not-found message.
       mockFetchHtml.mockImplementation(async () => {
-        throw new CaptchaBlockedError('/homedetails/x/7_zpid/');
+        throw new BotWallError('/homedetails/x/7_zpid/');
       });
       const r = await harness.callTool('zillow_bulk_get', { zpids: [7] });
       const parsed = parseToolResult<{
         rows: Array<{ error?: string; error_kind?: string }>;
       }>(r);
-      expect(parsed.rows[0].error_kind).toBe('rate_limited_captcha');
+      expect(parsed.rows[0].error_kind).toBe('bot_challenge');
       expect(parsed.rows[0].error).not.toMatch(/redirected/i);
       expect(parsed.rows[0].error).not.toMatch(/no listing found/i);
     });
@@ -349,5 +350,26 @@ describe('zillow_bulk_get tool', () => {
       // not all fan out simultaneously.
       expect(peak).toBeLessThanOrEqual(6);
     });
+  });
+});
+
+// `chunk()` stays a local bulk-get helper after the 0.10.0 migration —
+// the resilience kit hoisted TokenBucket/backoffDelayMs (now tested
+// upstream in @fetchproxy/server) but not this array splitter.
+describe('chunk()', () => {
+  it('splits an array into pages of the given size', () => {
+    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+  });
+
+  it('returns a single page when the input fits', () => {
+    expect(chunk([1, 2], 5)).toEqual([[1, 2]]);
+  });
+
+  it('returns an empty array for empty input', () => {
+    expect(chunk([], 5)).toEqual([]);
+  });
+
+  it('treats a non-positive size as a single page (defensive)', () => {
+    expect(chunk([1, 2, 3], 0)).toEqual([[1, 2, 3]]);
   });
 });

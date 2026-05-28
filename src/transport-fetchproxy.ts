@@ -5,7 +5,10 @@
 // service-worker eviction (default 2000ms) and per-request timeouts
 // (default 30000ms) are server defaults — we get them with zero
 // configuration, so this adapter only forwards them when the caller
-// overrides. The convenience `request()` method throws typed
+// overrides. 0.10.0 adds the server-initiated keep-alive ping to that
+// set of zero-config defaults (keepAliveIntervalMs: 25_000,
+// fetchproxy#72), so this adapter no longer opts into it explicitly.
+// The convenience `request()` method throws typed
 // `FetchproxyBridgeDownError` / `FetchproxyTimeoutError` on failure
 // (both subclasses of `FetchproxyProtocolError`). Bridge freshness
 // counters live on `inner.bridgeHealth()` — `status()` re-exposes them
@@ -29,9 +32,12 @@ import {
   type FetchproxyServerOpts,
 } from '@fetchproxy/server';
 import type {
+  BridgeProbeResult,
   BridgeStatus,
   FetchInit,
   FetchResult,
+  RequestJsonInit,
+  ServerFetchResult,
   ZillowTransport,
 } from './transport.js';
 
@@ -86,9 +92,9 @@ export class FetchproxyTransport implements ZillowTransport {
       version: opts.version,
       // Subdomains of zillow.com (www, photos, etc.) match automatically.
       domains: ['zillow.com'],
-      // fetchproxy#71 — keep SW resident across human-paced session gaps.
-      // Still opt-in in 0.9.0; becomes default in 0.10.0.
-      keepAliveIntervalMs: 25_000,
+      // keepAliveIntervalMs is no longer passed — 0.10.0 defaults it to
+      // 25_000ms server-side (fetchproxy#72), so we get the SW-resident
+      // keep-alive ping for free. Behavior-preserving vs the 0.9.x opt-in.
       ...(opts.fetchTimeoutMs !== undefined
         ? { fetchTimeoutMs: opts.fetchTimeoutMs }
         : {}),
@@ -151,5 +157,39 @@ export class FetchproxyTransport implements ZillowTransport {
       bodyLen: response.body.length,
     });
     return { status: response.status, body: response.body, url: response.url };
+  }
+
+  /**
+   * 0.10.0: delegate JSON round-trips to the server's `requestJson`,
+   * which does header defaults + body serialization + 204/empty → null.
+   * We force `subdomain: 'www'` (every zillow.com request targets www,
+   * same as `fetch()`), and hand back the `{ data, result }` pair so the
+   * client runs its own px-bot-wall / sign-in / non-2xx guards over
+   * `result`.
+   */
+  async requestJson<T>(
+    path: string,
+    init: RequestJsonInit = {}
+  ): Promise<{ data: T | null; result: ServerFetchResult }> {
+    const method = init.method ?? 'POST';
+    return this.inner.requestJson<T>(method, path, {
+      subdomain: 'www',
+      headers: init.headers,
+      body: init.body,
+    });
+  }
+
+  /**
+   * 0.10.0: delegate the healthcheck probe loop to the server's
+   * `runProbe` — it runs `fetchFn(probePath)`, times it, classifies any
+   * thrown error via `classifyBridgeError`, and projects the post-probe
+   * `bridgeHealth()`. The zillow_healthcheck tool keeps its own
+   * site-specific hint text and error-detail enrichment on top.
+   */
+  async runProbe(
+    fetchFn: (path: string) => Promise<unknown>,
+    probePath: string
+  ): Promise<BridgeProbeResult> {
+    return this.inner.runProbe(fetchFn, probePath);
   }
 }
