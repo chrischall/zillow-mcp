@@ -6,6 +6,9 @@ import {
   FetchproxyTimeoutError,
 } from '../../src/transport-fetchproxy.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const mockFetchHtml = vi.fn();
 const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
@@ -278,6 +281,57 @@ describe('zillow_resolve_addresses tool', () => {
       await harness.callTool('zillow_resolve_addresses', { addresses });
       expect(peak).toBeLessThanOrEqual(6);
       expect(peak).toBeGreaterThan(1);
+    });
+  });
+
+  describe('tool description honesty (issue #80)', () => {
+    // Description must (a) surface price_hint as load-bearing, (b) drop
+    // the stale "bulk is weaker than single" caveat now that #73 shipped,
+    // (c) document the locality-remap rung + resolved_city / queried_city
+    // fields including the cohort's mountain-MLS cases.
+    async function getDescription(): Promise<string> {
+      const server = new McpServer({ name: 't', version: '0.0.0' });
+      registerResolveAddressesTools(server, mockClient);
+      const client = new Client({ name: 'tc', version: '0.0.0' });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(b), client.connect(a)]);
+      const { tools } = await client.listTools();
+      await client.close();
+      await server.close();
+      const t = tools.find((t) => t.name === 'zillow_resolve_addresses');
+      if (!t) throw new Error('tool missing');
+      return t.description ?? '';
+    }
+
+    it('flags price_hint as load-bearing for rural / locality-mismatched rows', async () => {
+      const d = await getDescription();
+      expect(d).toMatch(/price_hint/);
+      expect(d).toMatch(/load-bearing/i);
+      expect(d).toMatch(/rural|mountain-MLS/i);
+    });
+
+    it('does not carry the stale "bulk is weaker than single" caveat (#73 shipped)', async () => {
+      const d = await getDescription();
+      // The pre-#73 description warned bulk was weaker than looping the
+      // single call. Now they share a resolver — that warning is stale.
+      expect(d).not.toMatch(/weaker than/i);
+      expect(d).not.toMatch(/until #?\d/i);
+      // And it should affirmatively say bulk and single walk the same ladder.
+      expect(d).toMatch(/same/i);
+      expect(d).toMatch(/same 4-rung resolver|same ladder|shared resolver/i);
+    });
+
+    it('documents the locality-remap rung and queried_city / resolved_city fields', async () => {
+      const d = await getDescription();
+      expect(d).toMatch(/locality[ _-]remap/i);
+      expect(d).toMatch(/queried_city/);
+      expect(d).toMatch(/resolved_city/);
+    });
+
+    it("cites the cohort's mountain-MLS remap cases (Lake Lure / Banner Elk)", async () => {
+      const d = await getDescription();
+      expect(d).toMatch(/Lake Lure/);
+      expect(d).toMatch(/Banner Elk/);
     });
   });
 });
