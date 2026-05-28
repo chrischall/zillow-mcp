@@ -6,6 +6,7 @@ import {
   extractZpidFromUrl,
   findPropertyInPageProps,
   format,
+  lotSizeAcres,
   registerPropertyTools,
   type RawProperty,
 } from '../../src/tools/properties.js';
@@ -169,6 +170,43 @@ describe('findPropertyInPageProps', () => {
   });
 });
 
+describe('lotSizeAcres', () => {
+  it('45,738 sq ft → 1.05 acres', () => {
+    // 45738 / 43560 = 1.0499… → rounds to 1.05
+    expect(lotSizeAcres(45_738)).toBe(1.05);
+  });
+  it('13,503 sq ft → 0.31 acres', () => {
+    expect(lotSizeAcres(13_503)).toBe(0.31);
+  });
+  it('94,089 sq ft → 2.16 acres', () => {
+    expect(lotSizeAcres(94_089)).toBe(2.16);
+  });
+  it('rounds to 2 decimal places', () => {
+    // 43560 → exactly 1.00
+    expect(lotSizeAcres(43_560)).toBe(1.0);
+    // 21780 → 0.5 exactly
+    expect(lotSizeAcres(21_780)).toBe(0.5);
+  });
+  it('null lot size → null (not 0)', () => {
+    expect(lotSizeAcres(null)).toBeNull();
+    expect(lotSizeAcres(undefined)).toBeNull();
+  });
+  it('zero lot size → null (treated as missing, never 0 acres)', () => {
+    expect(lotSizeAcres(0)).toBeNull();
+  });
+  it('tiny positive lot (< 218 sq ft) → null, never 0 (#93 review)', () => {
+    // 200 / 43560 = 0.0046 → rounds to 0.00. Guard returns null so a
+    // valid-but-tiny lot is never reported as a misleading 0-acre lot.
+    expect(lotSizeAcres(200)).toBeNull();
+    expect(lotSizeAcres(1)).toBeNull();
+    // 218 / 43560 = 0.0050 → rounds up to 0.01, the smallest non-null.
+    expect(lotSizeAcres(218)).toBe(0.01);
+  });
+  it('non-numeric input → null', () => {
+    expect(lotSizeAcres(NaN)).toBeNull();
+  });
+});
+
 describe('format() — FormattedProperty contract', () => {
   // PR #61 polish nit: the FormattedProperty contract guarantees
   // extracted_features is always populated by format(). The interface
@@ -196,6 +234,36 @@ describe('format() — FormattedProperty contract', () => {
       dock: null,
       community: null,
     });
+  });
+
+  it('emits lot_size + derived lot_size_acres for a SFH (#82)', () => {
+    const out = format({ zpid: 1, lotSize: 45_738 } as RawProperty);
+    expect(out.lot_size).toBe(45_738);
+    expect(out.lot_size_acres).toBe(1.05);
+  });
+
+  it('lot_size + lot_size_acres are null (not 0) when lotSize is absent (#82)', () => {
+    const out = format({ zpid: 1 } as RawProperty);
+    expect(out.lot_size).toBeNull();
+    expect(out.lot_size_acres).toBeNull();
+    // Must be null, never the 0 placeholder (condos / missing data).
+    expect(out.lot_size).not.toBe(0);
+    expect(out.lot_size_acres).not.toBe(0);
+  });
+
+  it('lot_size + lot_size_acres are null (not 0) when lotSize is 0 (#82)', () => {
+    const out = format({ zpid: 1, lotSize: 0 } as RawProperty);
+    expect(out.lot_size).toBeNull();
+    expect(out.lot_size_acres).toBeNull();
+  });
+
+  it('tiny lot keeps lot_size but nulls lot_size_acres (#93 review)', () => {
+    // 200 sq ft is a valid lot, but < 218 sq ft rounds to 0.00 acres —
+    // surface the raw lot_size while nulling acres rather than 0.
+    const out = format({ zpid: 1, lotSize: 200 } as RawProperty);
+    expect(out.lot_size).toBe(200);
+    expect(out.lot_size_acres).toBeNull();
+    expect(out.lot_size_acres).not.toBe(0);
   });
 });
 
@@ -244,6 +312,43 @@ describe('zillow_get_property tool', () => {
     expect(parsed.zestimate).toBe(1_550_000);
     expect(parsed.beds).toBe(3);
     expect(parsed.url).toBe('https://www.zillow.com/homedetails/12345_zpid/');
+  });
+
+  it('surfaces lot_size + lot_size_acres for a SFH (#82)', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 12345,
+        homeType: 'SINGLE_FAMILY',
+        lotSize: 45_738,
+      })
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 12345 });
+    const parsed = parseToolResult<{
+      lot_size: number | null;
+      lot_size_acres: number | null;
+    }>(result);
+    expect(parsed.lot_size).toBe(45_738);
+    expect(parsed.lot_size_acres).toBe(1.05);
+  });
+
+  it('nulls lot_size + lot_size_acres for a condo with no lot (#82)', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({
+        zpid: 12345,
+        homeType: 'CONDO',
+        // lotSize absent entirely for a condo
+      })
+    );
+    const result = await harness.callTool('zillow_get_property', { zpid: 12345 });
+    const parsed = parseToolResult<{
+      lot_size: number | null;
+      lot_size_acres: number | null;
+    }>(result);
+    expect(parsed.lot_size).toBeNull();
+    expect(parsed.lot_size_acres).toBeNull();
+    // Must be null, never the 0 placeholder.
+    expect(parsed.lot_size).not.toBe(0);
+    expect(parsed.lot_size_acres).not.toBe(0);
   });
 
   it('accepts a full URL and reduces it to a path', async () => {

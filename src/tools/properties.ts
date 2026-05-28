@@ -150,7 +150,13 @@ export interface FormattedProperty {
   beds?: number;
   baths?: number;
   living_area?: number;
-  lot_size?: number;
+  /** Lot size in square feet, from the raw `lotSize`. `null` (never `0`)
+   * for condos / listings with no lot. */
+  lot_size?: number | null;
+  /** `round(lot_size / 43560, 2)` — lot size in acres, the unit that
+   * matters for rural/mountain/land listings. `null` when `lot_size` is
+   * null/absent (not `0`). See issue #82. */
+  lot_size_acres?: number | null;
   year_built?: number;
   home_type?: string;
   status?: string;
@@ -413,6 +419,29 @@ export function hoaToMonthlyUsd(
   return Math.round(monthly);
 }
 
+/** Square feet in one acre. */
+const SQFT_PER_ACRE = 43_560;
+
+/**
+ * Derive lot size in acres from a square-foot lot size, rounded to 2 dp
+ * (#82). Pairs with the raw `lot_size` — acreage is the unit that matters
+ * for rural/mountain/land listings.
+ *
+ * Null-safe: returns `null` (never `0`) when the input is missing,
+ * non-numeric, or `0` — a `0` lot is treated as absent (condos / missing
+ * data), matching how `lot_size` itself nulls out rather than reporting a
+ * real "0 acre" lot.
+ */
+export function lotSizeAcres(
+  lotSqFt: number | undefined | null
+): number | null {
+  if (typeof lotSqFt !== 'number' || !Number.isFinite(lotSqFt) || lotSqFt <= 0) {
+    return null;
+  }
+  const acres = Math.round((lotSqFt / SQFT_PER_ACRE) * 100) / 100;
+  return acres > 0 ? acres : null;
+}
+
 /**
  * Normalize an address for equality checks — collapse whitespace, drop
  * punctuation, and lowercase. Used to dedupe `address_alternates`
@@ -494,6 +523,10 @@ export function format(
       ? raw.hdpUrl
       : `https://www.zillow.com${raw.hdpUrl}`
     : `https://www.zillow.com/homedetails/${zpid}_zpid/`;
+  // lot_size + derived lot_size_acres (#82). Null-safe: a 0 or absent
+  // lotSize (condos / missing data) yields null for both, never 0.
+  const lotSize =
+    typeof raw.lotSize === 'number' && raw.lotSize > 0 ? raw.lotSize : null;
   const out: FormattedProperty = {
     zpid,
     url,
@@ -507,7 +540,8 @@ export function format(
     beds: raw.bedrooms,
     baths: raw.bathrooms,
     living_area: raw.livingArea,
-    lot_size: raw.lotSize,
+    lot_size: lotSize,
+    lot_size_acres: lotSizeAcres(lotSize),
     // Fall back to MLS RESO yearBuilt when the top-level is missing (issue #29).
     year_built: raw.yearBuilt ?? raw.resoFacts?.yearBuilt,
     home_type: raw.homeType,
@@ -663,7 +697,7 @@ export function registerPropertyTools(
     {
       title: 'Get Zillow property details',
       description:
-        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, year built, schools, and an `extracted_features` block (lake_front, hot_tub, basement, furnished, dock, community) keyword-parsed from the description. The raw `description` is omitted by default — pass `include_description: true` to keep it; in most cases the extracted features cover what callers need. Price-history and tax-history are also opt-in (`include_price_history: true` / `include_tax_history: true`) — bundle them in to skip a separate call. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
+        "Fetch a property's full Zillow record by zpid (numeric Zillow Property ID, e.g. 12345) or by homedetails URL. Returns address (Zillow's slugged form), mls_street_address (canonical MLS form — prefer this when it disagrees), neighborhood, price, Zestimate, rent Zestimate, beds/baths, square footage, lot_size (sq ft) plus the derived lot_size_acres (round(lot_size / 43560, 2); both null — never 0 — for condos and listings with no lot), year built, schools, and an `extracted_features` block (lake_front, hot_tub, basement, furnished, dock, community) keyword-parsed from the description. The raw `description` is omitted by default — pass `include_description: true` to keep it; in most cases the extracted features cover what callers need. Price-history and tax-history are also opt-in (`include_price_history: true` / `include_tax_history: true`) — bundle them in to skip a separate call. Provide exactly one of zpid or url. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get Zillow property details',
         readOnlyHint: true,

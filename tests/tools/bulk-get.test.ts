@@ -71,6 +71,29 @@ describe('zillow_bulk_get tool', () => {
     ]);
   });
 
+  it('surfaces lot_size + derived lot_size_acres per row, null-safe (#82)', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      const zpid = m ? parseInt(m[1], 10) : 0;
+      // zpid 1 = SFH with a lot; zpid 2 = condo (no lotSize).
+      return htmlWith(
+        zpid === 1 ? { zpid, lotSize: 45_738 } : { zpid }
+      );
+    });
+    const r = await harness.callTool('zillow_bulk_get', { zpids: [1, 2] });
+    const parsed = parseToolResult<{
+      rows: Array<{
+        property?: { lot_size: number | null; lot_size_acres: number | null };
+      }>;
+    }>(r);
+    expect(parsed.rows[0].property?.lot_size).toBe(45_738);
+    expect(parsed.rows[0].property?.lot_size_acres).toBe(1.05);
+    expect(parsed.rows[1].property?.lot_size).toBeNull();
+    expect(parsed.rows[1].property?.lot_size_acres).toBeNull();
+    // Condo lot must be null, never 0.
+    expect(parsed.rows[1].property?.lot_size_acres).not.toBe(0);
+  });
+
   it('captures per-row errors without failing the batch (issue #46)', async () => {
     let call = 0;
     mockFetchHtml.mockImplementation(async () => {

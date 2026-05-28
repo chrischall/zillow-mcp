@@ -40,7 +40,7 @@ interface ComparePerProperty {
 export function buildSummary(rows: ComparePerProperty[]): CompareSummaryRow[] {
   const pick = (
     label: string,
-    fn: (p: FormattedProperty) => number | string | undefined
+    fn: (p: FormattedProperty) => number | string | null | undefined
   ): CompareSummaryRow => ({
     field: label,
     values: rows.map((r) => (r.property ? fn(r.property) ?? null : null)),
@@ -53,6 +53,7 @@ export function buildSummary(rows: ComparePerProperty[]): CompareSummaryRow[] {
     pick('baths', (p) => p.baths),
     pick('living_area_sqft', (p) => p.living_area),
     pick('lot_size_sqft', (p) => p.lot_size),
+    pick('lot_size_acres', (p) => p.lot_size_acres),
     pick('year_built', (p) => p.year_built),
     pick('home_type', (p) => p.home_type),
     pick('status', (p) => p.status),

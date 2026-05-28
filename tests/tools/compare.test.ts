@@ -59,6 +59,31 @@ describe('buildSummary', () => {
     const bedsRow = rows.find((r) => r.field === 'beds')!;
     expect(bedsRow.values).toEqual([2, null, 4]);
   });
+
+  it('includes lot_size_sqft + lot_size_acres in the summary (#82)', () => {
+    const rows = buildSummary([
+      {
+        zpid: '1',
+        property: {
+          zpid: '1',
+          url: 'u',
+          lot_size: 45_738,
+          lot_size_acres: 1.05,
+        } as never,
+      },
+      {
+        zpid: '2',
+        property: {
+          zpid: '2',
+          url: 'v',
+          lot_size: null,
+          lot_size_acres: null,
+        } as never,
+      },
+    ]);
+    expect(rows.find((r) => r.field === 'lot_size_sqft')?.values).toEqual([45_738, null]);
+    expect(rows.find((r) => r.field === 'lot_size_acres')?.values).toEqual([1.05, null]);
+  });
 });
 
 describe('zillow_compare_properties tool', () => {
