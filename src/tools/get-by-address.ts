@@ -46,6 +46,10 @@ export interface GetByAddressResult {
   city?: string;
   state?: string;
   zip?: string;
+  /** The city the caller supplied (only set when remapped — issue #75). */
+  queried_city?: string;
+  /** The city Zillow actually returned (only set when remapped — issue #75). */
+  resolved_city?: string;
   /** Set when `resolved` is false. */
   error?: string;
   /** The slug we passed through the resolver — useful for debugging an unexpected miss. */
@@ -57,9 +61,10 @@ export interface GetByAddressResult {
 function formatResolvedResult(
   formatted: NonNullable<ReturnType<typeof formatListing>>,
   slug: string,
-  via: NonNullable<GetByAddressResult['via']>
+  via: NonNullable<GetByAddressResult['via']>,
+  queriedCity?: string
 ): GetByAddressResult {
-  return {
+  const result: GetByAddressResult = {
     resolved: true,
     zpid: formatted.zpid,
     url: formatted.url,
@@ -70,6 +75,15 @@ function formatResolvedResult(
     query: slug,
     via,
   };
+  if (
+    queriedCity &&
+    formatted.city &&
+    queriedCity.toLowerCase() !== formatted.city.toLowerCase()
+  ) {
+    result.queried_city = queriedCity;
+    result.resolved_city = formatted.city;
+  }
+  return result;
 }
 
 export function registerGetByAddressTools(
@@ -121,7 +135,8 @@ export function registerGetByAddressTools(
         const result = formatResolvedResult(
           outcome.hit.formatted,
           outcome.finalSlug,
-          outcome.hit.via
+          outcome.hit.via,
+          input.city
         );
         return textResult(result);
       }

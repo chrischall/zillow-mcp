@@ -14,6 +14,7 @@
  *                          optional price band (issue #52, plumbed
  *                          through to bulk in issue #74)
  */
+import { existsSync, readFileSync } from 'node:fs';
 import type { ZillowClient } from '../client.js';
 import { ParseError } from '../next-data.js';
 import {
@@ -359,10 +360,138 @@ function isJoinableToken(token: string): boolean {
 }
 
 /**
- * Run the full 3-rung ladder against a single address. Returns the
+ * Default locality alias pairs (issue #75). Each pair is registered
+ * both ways: `Lake Lure ↔ Rutherfordton`. Real-world: a Lake Lure
+ * address frequently lives in a Rutherfordton postal locality. Same
+ * shape as the community vocabulary in `features.ts` — override via
+ * `ZILLOW_LOCALITY_ALIASES_FILE` (JSON `string[][]`).
+ */
+export const DEFAULT_LOCALITY_ALIASES: Array<[string, string]> = [
+  ['Lake Lure', 'Rutherfordton'],
+  ['Beech Mountain', 'Banner Elk'],
+  ['Sugar Mountain', 'Banner Elk'],
+];
+
+let cachedAliasMap: Record<string, string[]> | null = null;
+let cachedAliasPath: string | null = null;
+let cachedAliasFailurePath: string | null = null;
+
+/**
+ * Build the canonical alias map: `{ "lake lure": ["Rutherfordton"], ... }`.
+ * Reads `ZILLOW_LOCALITY_ALIASES_FILE` (a JSON array of `[a, b]` pairs).
+ * Falls back to `DEFAULT_LOCALITY_ALIASES` on missing/malformed config.
+ */
+export function loadLocalityAliases(): Record<string, string[]> {
+  const path = process.env.ZILLOW_LOCALITY_ALIASES_FILE?.trim();
+  if (!path) {
+    cachedAliasMap = null;
+    cachedAliasPath = null;
+    cachedAliasFailurePath = null;
+    return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+  }
+  if (cachedAliasMap && cachedAliasPath === path) return cachedAliasMap;
+  if (cachedAliasFailurePath === path) return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+  cachedAliasMap = null;
+  cachedAliasPath = null;
+  if (!existsSync(path)) {
+    console.error(
+      `[zillow-mcp] ZILLOW_LOCALITY_ALIASES_FILE="${path}" not found — falling back to DEFAULT_LOCALITY_ALIASES.`
+    );
+    cachedAliasFailurePath = path;
+    return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+  }
+  try {
+    const raw = readFileSync(path, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every(
+        (p) =>
+          Array.isArray(p) &&
+          p.length === 2 &&
+          p.every((s) => typeof s === 'string')
+      )
+    ) {
+      console.error(
+        `[zillow-mcp] ZILLOW_LOCALITY_ALIASES_FILE="${path}" must be a JSON array of [string, string] pairs — falling back.`
+      );
+      cachedAliasFailurePath = path;
+      return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+    }
+    cachedAliasMap = buildAliasMap(parsed as Array<[string, string]>);
+    cachedAliasPath = path;
+    cachedAliasFailurePath = null;
+    return cachedAliasMap;
+  } catch (err) {
+    console.error(
+      `[zillow-mcp] failed to load ZILLOW_LOCALITY_ALIASES_FILE="${path}": ${
+        err instanceof Error ? err.message : String(err)
+      } — falling back to DEFAULT_LOCALITY_ALIASES.`
+    );
+    cachedAliasFailurePath = path;
+    return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+  }
+}
+
+function buildAliasMap(pairs: Array<[string, string]>): Record<string, string[]> {
+  const map: Record<string, string[]> = {};
+  const add = (k: string, v: string) => {
+    const key = k.toLowerCase();
+    if (!map[key]) map[key] = [];
+    if (!map[key].includes(v)) map[key].push(v);
+  };
+  for (const [a, b] of pairs) {
+    add(a, b);
+    add(b, a);
+  }
+  return map;
+}
+
+/**
+ * Locality-remap rung (issue #75). Tries two strategies in order:
+ *   1. City-drop — retry with `{street, state, zip}` only when the
+ *      caller supplied enough other scope.
+ *   2. Alias substitution — swap the caller's city for each known
+ *      alias and retry.
+ *
+ * Returns the first hit (with the city Zillow returned, which may
+ * differ from the caller's) or null.
+ */
+async function localityRemap(
+  client: ZillowClient,
+  input: ResolverInput
+): Promise<{ raw: RawListing; formatted: NonNullable<ReturnType<typeof formatListing>>; slug: string } | null> {
+  if (!input.city) return null;
+  // 1. City-drop: need at least state OR zip to keep the slug useful.
+  if (input.state || input.zip) {
+    const slug = buildAddressSlug({ ...input, city: undefined });
+    if (slug.trim().length > 0) {
+      const hit = await resolveDirect(client, slug);
+      if (hit) return { ...hit, slug };
+    }
+  }
+  // 2. Alias substitution.
+  const aliasMap = loadLocalityAliases();
+  const aliases = aliasMap[input.city.toLowerCase()] ?? [];
+  for (const alias of aliases) {
+    const slug = buildAddressSlug({ ...input, city: alias });
+    const hit = await resolveDirect(client, slug);
+    if (hit) return { ...hit, slug };
+  }
+  return null;
+}
+
+/**
+ * Run the full 4-rung ladder against a single address. Returns the
  * first hit (with `via` marking which rung produced it) or null when
- * all three miss. Throws on transport errors — callers in the bulk
+ * all rungs miss. Throws on transport errors — callers in the bulk
  * path wrap this in per-row error capture.
+ *
+ * Rungs:
+ *   1. Direct
+ *   2. Street-variant retry (suffix swap + compound splits)
+ *   3. Locality remap (city-drop + alias substitution) — issue #75
+ *   4. Search fallback (city/state-scoped + price band)
  */
 export async function resolveAddressFull(
   client: ZillowClient,
@@ -402,7 +531,22 @@ export async function resolveAddressFull(
     }
   }
 
-  // Rung 3: search fallback (issue #52 / #74).
+  // Rung 3: locality remap (issue #75). Try city-drop and known aliases
+  // before falling all the way through to the scope-resolve search.
+  const remap = await localityRemap(client, input);
+  if (remap) {
+    return {
+      hit: {
+        raw: remap.raw,
+        formatted: remap.formatted,
+        via: 'search_fallback',
+        slug: remap.slug,
+      },
+      finalSlug: remap.slug,
+    };
+  }
+
+  // Rung 4: search fallback (issue #52 / #74).
   const fallbackHit = await searchFallback(client, input);
   if (fallbackHit) {
     const formatted = formatListing(fallbackHit);
