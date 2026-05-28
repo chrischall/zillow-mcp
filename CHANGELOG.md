@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/chrischall/zillow-mcp/compare/v0.5.0...v0.6.0) (2026-05-27)
+
+
+### Features
+
+* **bulk:** add zillow_bulk_get + zillow_resolve_addresses ([#64](https://github.com/chrischall/zillow-mcp/issues/64)) ([9d69ef5](https://github.com/chrischall/zillow-mcp/commit/9d69ef59e6706bf70f8efa784f6b72a0ae80b707))
+* **history:** events_normalized taxonomy + bundle history into get_property ([#68](https://github.com/chrischall/zillow-mcp/issues/68)) ([305c34c](https://github.com/chrischall/zillow-mcp/commit/305c34cf5075f4e74442e704c0a76c31ddbf9e30))
+* **p0:** default include_description=false + server-side extracted_features ([#61](https://github.com/chrischall/zillow-mcp/issues/61)) ([12c5cb8](https://github.com/chrischall/zillow-mcp/commit/12c5cb8ee40e77e67b882e802e6f2fa0a12ab5ff))
+* **p1-schema:** derived fields, normalized HOA, tax cleanup, summary opt-in ([#63](https://github.com/chrischall/zillow-mcp/issues/63)) ([b816715](https://github.com/chrischall/zillow-mcp/commit/b81671576d24b5cb086263dbe805a36569938737))
+* **sessions:** multi-session registry + register/set_active/get_session_context tools ([#65](https://github.com/chrischall/zillow-mcp/issues/65)) ([ddf0dda](https://github.com/chrischall/zillow-mcp/commit/ddf0ddad494b7d0626bbbaff902d7bbab9748704))
+* **transport-fetchproxy,healthcheck:** adopt @fetchproxy/server 0.8.0 + surface bridge hints ([#72](https://github.com/chrischall/zillow-mcp/issues/72)) ([3c192da](https://github.com/chrischall/zillow-mcp/commit/3c192da14998a0d7114a647725d87a6a09df4b90))
+
+
+### Bug Fixes
+
+* **get_by_address:** retry with suffix expansion + search fallback ([#66](https://github.com/chrischall/zillow-mcp/issues/66)) ([294c923](https://github.com/chrischall/zillow-mcp/commit/294c92383331584acefe77c3b8eeb4fc389c68d2))
+* **p0:** address PR [#61](https://github.com/chrischall/zillow-mcp/issues/61) polish nits ([#70](https://github.com/chrischall/zillow-mcp/issues/70)) ([a176a1d](https://github.com/chrischall/zillow-mcp/commit/a176a1da2fa55829e4315802ae3f1911d9e85353))
+* **search:** auto-paginate when limit &gt; one Zillow page (~40) ([#67](https://github.com/chrischall/zillow-mcp/issues/67)) ([24065ac](https://github.com/chrischall/zillow-mcp/commit/24065acf484534ce0b3a1b224d441e1abb3384ab))
+
 ## [0.5.0](https://github.com/chrischall/zillow-mcp/compare/v0.4.5...v0.5.0) (2026-05-26)
 
 
