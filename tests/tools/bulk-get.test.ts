@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
-import { registerBulkGetTools, BULK_GET_MAX } from '../../src/tools/bulk-get.js';
+import { CaptchaBlockedError } from '../../src/client.js';
+import {
+  registerBulkGetTools,
+  BULK_GET_MAX,
+  BULK_GET_CHUNK_SIZE,
+} from '../../src/tools/bulk-get.js';
 import {
   FetchproxyBridgeDownError,
   FetchproxyTimeoutError,
@@ -26,10 +31,22 @@ function htmlWith(property: Record<string, unknown>): string {
   )}</script>`;
 }
 
+// Fast-path tuning so the throttle/backoff machinery doesn't make the
+// suite wait on real wall-clock delays. A very high RPM effectively
+// disables the throttle's gating; tiny backoff delays keep captcha-retry
+// tests instant. Real defaults are exercised by their own assertions.
+const FAST_TUNING = {
+  ratePerMinute: 100_000,
+  burst: 1000,
+  backoffBaseMs: 1,
+  backoffCapMs: 4,
+  rng: () => 1,
+};
+
 describe('zillow_bulk_get tool', () => {
   it('setup', async () => {
     harness = await createTestHarness((server) =>
-      registerBulkGetTools(server, mockClient)
+      registerBulkGetTools(server, mockClient, FAST_TUNING)
     );
   });
 
@@ -180,6 +197,134 @@ describe('zillow_bulk_get tool', () => {
       await harness.callTool('zillow_bulk_get', { zpids });
       expect(peak).toBeLessThanOrEqual(6);
       expect(peak).toBeGreaterThan(1);
+    });
+  });
+
+  describe('px-captcha classification + backoff retry (issue #90)', () => {
+    it('classifies a px-captcha block as rate_limited_captcha — NOT not-found, NOT generic error', async () => {
+      // Always blocked, even on retry → the row stays a captcha block and
+      // must be reported as such (never a bare miss).
+      mockFetchHtml.mockImplementation(async () => {
+        throw new CaptchaBlockedError('/homedetails/x/42_zpid/');
+      });
+      const r = await harness.callTool('zillow_bulk_get', { zpids: [42] });
+      const parsed = parseToolResult<{
+        rows: Array<{ zpid: string; error?: string; error_kind?: string }>;
+      }>(r);
+      const row = parsed.rows[0];
+      expect(row.error_kind).toBe('rate_limited_captcha');
+      // It must NOT look like a generic fetch failure or a not-found.
+      expect(row.error).not.toMatch(/could not locate property/i);
+      expect(row.error).toMatch(/captcha/i);
+    });
+
+    it('retries a px-captcha-blocked sub-request with backoff and recovers', async () => {
+      // First attempt at zpid 20 trips the wall; the backoff retry clears.
+      const callsByZpid: Record<string, number> = {};
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? m[1] : '0';
+        callsByZpid[zpid] = (callsByZpid[zpid] ?? 0) + 1;
+        if (zpid === '20' && callsByZpid[zpid] === 1) {
+          throw new CaptchaBlockedError(path);
+        }
+        return htmlWith({ zpid: parseInt(zpid, 10), price: 555 });
+      });
+      const r = await harness.callTool('zillow_bulk_get', {
+        zpids: [10, 20, 30],
+      });
+      const parsed = parseToolResult<{
+        blocked?: number;
+        rows: Array<{ zpid: string; property?: { price: number }; error?: string }>;
+      }>(r);
+      // The blocked row recovered on retry — no error, real property.
+      expect(parsed.rows[1].error).toBeUndefined();
+      expect(parsed.rows[1].property?.price).toBe(555);
+      expect(callsByZpid['20']).toBe(2);
+      // Nothing ultimately blocked → no partial-result envelope.
+      expect(parsed.blocked ?? 0).toBe(0);
+    });
+
+    it('surfaces a partial-result envelope { blocked, retry_after_s } when captcha persists', async () => {
+      // zpid 20 is permanently walled; others succeed. After exhausting
+      // retries the batch returns partial with a blocked count + hint.
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? m[1] : '0';
+        if (zpid === '20') throw new CaptchaBlockedError(path, 17);
+        return htmlWith({ zpid: parseInt(zpid, 10), price: 1 });
+      });
+      const r = await harness.callTool('zillow_bulk_get', {
+        zpids: [10, 20, 30],
+      });
+      const parsed = parseToolResult<{
+        blocked: number;
+        retry_after_s: number;
+        rows: Array<{ zpid: string; error?: string; error_kind?: string }>;
+      }>(r);
+      expect(parsed.blocked).toBe(1);
+      expect(parsed.retry_after_s).toBeGreaterThan(0);
+      // The blocked row carries the captcha kind, the others are clean.
+      const blockedRow = parsed.rows.find((row) => row.zpid === '20');
+      expect(blockedRow?.error_kind).toBe('rate_limited_captcha');
+      const okRows = parsed.rows.filter((row) => row.zpid !== '20');
+      expect(okRows.every((row) => row.error === undefined)).toBe(true);
+    });
+
+    it('a px-captcha block NEVER round-trips through the not-found diagnosis path', async () => {
+      // Regression guard for the exact silent-corruption bug in #90:
+      // a bot-wall must not be reported with the "Could not locate
+      // property data … Zillow probably redirected …" not-found message.
+      mockFetchHtml.mockImplementation(async () => {
+        throw new CaptchaBlockedError('/homedetails/x/7_zpid/');
+      });
+      const r = await harness.callTool('zillow_bulk_get', { zpids: [7] });
+      const parsed = parseToolResult<{
+        rows: Array<{ error?: string; error_kind?: string }>;
+      }>(r);
+      expect(parsed.rows[0].error_kind).toBe('rate_limited_captcha');
+      expect(parsed.rows[0].error).not.toMatch(/redirected/i);
+      expect(parsed.rows[0].error).not.toMatch(/no listing found/i);
+    });
+  });
+
+  describe('auto-chunk with paced dispatch (issue #90 part c)', () => {
+    it('exposes a safe internal chunk size', () => {
+      expect(BULK_GET_CHUNK_SIZE).toBeGreaterThan(0);
+      expect(BULK_GET_CHUNK_SIZE).toBeLessThanOrEqual(25);
+    });
+
+    it('dispatches a large id list in safe-sized pages, never all at once', async () => {
+      // Record how many distinct fetches are in flight across the whole
+      // call. With paced chunking the peak concurrency stays bounded by
+      // BRIDGE_CONCURRENCY even for a >chunk-size id list — pages are
+      // dispatched sequentially, not fanned out together.
+      let inFlight = 0;
+      let peak = 0;
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((res) => setTimeout(res, 4));
+        inFlight--;
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? parseInt(m[1], 10) : 0;
+        return htmlWith({ zpid, price: zpid });
+      });
+      const n = BULK_GET_CHUNK_SIZE * 3 + 5;
+      const zpids = Array.from({ length: n }, (_, i) => i + 1);
+      const r = await harness.callTool('zillow_bulk_get', { zpids });
+      const parsed = parseToolResult<{
+        count: number;
+        rows: Array<{ zpid: string; property?: { price: number } }>;
+      }>(r);
+      // Every id still produces exactly one row, in input order.
+      expect(parsed.count).toBe(n);
+      expect(parsed.rows.map((row) => row.zpid)).toEqual(
+        zpids.map((z) => String(z))
+      );
+      // Peak in-flight never exceeds the concurrency cap — the chunks did
+      // not all fan out simultaneously.
+      expect(peak).toBeLessThanOrEqual(6);
     });
   });
 });

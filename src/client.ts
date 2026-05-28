@@ -22,6 +22,63 @@ export class SessionNotAuthenticatedError extends Error {
   }
 }
 
+/**
+ * Default retry-after hint (seconds) surfaced on a `CaptchaBlockedError`
+ * when PerimeterX doesn't give us an explicit one. Tuned for the
+ * bulk-get back-off path (issue #90) — long enough that the bot-wall
+ * usually clears on the next pass, short enough not to stall a batch.
+ */
+export const DEFAULT_CAPTCHA_RETRY_AFTER_S = 30;
+
+/**
+ * Issue #90: PerimeterX (px) bot-wall. A `bulk_get` that fans out too
+ * many requests in a short window trips this — Zillow returns an HTTP
+ * 403 (sometimes a 200) whose body is the PerimeterX CAPTCHA
+ * interstitial, NOT the listing.
+ *
+ * This is its own error class — distinct from `SessionNotAuthenticatedError`
+ * (DataDome / sign-in) and from a generic non-2xx — because the caller's
+ * response differs: a captcha block is *transient and retryable* (back off
+ * and retry the blocked ids), whereas a generic 403 / not-found means the
+ * listing is genuinely unavailable. Misclassifying the bot-wall as
+ * not-found silently corrupts downstream trackers (issue #90).
+ */
+export class CaptchaBlockedError extends Error {
+  /** Suggested seconds to wait before retrying the blocked request(s). */
+  readonly retryAfterSeconds: number;
+  constructor(path: string, retryAfterSeconds = DEFAULT_CAPTCHA_RETRY_AFTER_S) {
+    super(
+      `Zillow served a PerimeterX CAPTCHA bot-wall for ${path} — the request was ` +
+        `rate-limited, not a missing listing. Back off and retry (suggested wait: ` +
+        `${retryAfterSeconds}s). If it persists, open zillow.com in your browser and ` +
+        `clear the CAPTCHA, then retry with a smaller batch.`
+    );
+    this.name = 'CaptchaBlockedError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/**
+ * The three PerimeterX px-captcha body markers from issue #90. Any one
+ * of them in a response body means we hit the bot-wall rather than the
+ * listing. Kept small and substring-based — the interstitial body shape
+ * drifts, but these tokens are stable across px versions.
+ */
+const PX_CAPTCHA_MARKERS = [
+  'window._pxAppId',
+  'Access to this page has been denied',
+  'meta name="px-captcha"',
+] as const;
+
+/**
+ * True when a response body is a PerimeterX px-captcha interstitial.
+ * Pure; matches any of the {@link PX_CAPTCHA_MARKERS}. Exported so the
+ * detection logic has a direct unit-test surface (issue #90).
+ */
+export function detectPxCaptcha(body: string): boolean {
+  return PX_CAPTCHA_MARKERS.some((marker) => body.includes(marker));
+}
+
 export interface ZillowClientOptions {
   /** Transport used to relay fetches to the user's browser. */
   transport: ZillowTransport;
@@ -53,6 +110,11 @@ export class ZillowClient {
    */
   async fetchHtml(path: string): Promise<string> {
     const result = await this.transport.fetch({ path, method: 'GET' });
+    // Issue #90: the px-captcha check runs FIRST — before throwIfNotOk —
+    // because the bot-wall arrives as a 403 (sometimes a 200) whose body
+    // is the CAPTCHA interstitial, and it must surface as a distinct
+    // retryable CaptchaBlockedError rather than a generic "403" string.
+    this.throwIfPxCaptcha(result, path);
     this.throwIfNotOk(result, 'GET', path);
     this.throwIfSignInPage(result);
     return result.body;
@@ -87,6 +149,7 @@ export class ZillowClient {
           : JSON.stringify(init.body),
     };
     const result = await this.transport.fetch(serialised);
+    this.throwIfPxCaptcha(result, path);
     this.throwIfNotOk(result, method, path);
     this.throwIfSignInPage(result);
     if (result.status === 204 || result.body === '') {
@@ -100,6 +163,21 @@ export class ZillowClient {
           (e as Error).message
         )}`
       );
+    }
+  }
+
+  /**
+   * Issue #90: detect the PerimeterX bot-wall before any other error
+   * mapping. PerimeterX serves the CAPTCHA interstitial as the response
+   * body (commonly HTTP 403, occasionally 200), so we key on the body
+   * markers rather than the status code. Throws `CaptchaBlockedError` —
+   * the bulk-get back-off path branches on it.
+   */
+  private throwIfPxCaptcha(result: FetchResult, path: string): void {
+    if (detectPxCaptcha(result.body)) {
+      // The bridge's FetchResult doesn't surface response headers, so we
+      // can't read a server `Retry-After`; fall back to the tuned default.
+      throw new CaptchaBlockedError(path);
     }
   }
 
