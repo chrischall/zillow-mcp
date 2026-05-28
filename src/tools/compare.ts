@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { classifyBridgeError } from '@fetchproxy/server';
+import {
+  BRIDGE_CONCURRENCY,
+  classifyRowError,
+  mapWithConcurrency,
+  retryOnceOnTimeout,
+} from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import {
@@ -8,11 +13,6 @@ import {
   format,
   type FormattedProperty,
 } from './properties.js';
-import {
-  BULK_CONCURRENCY,
-  mapWithConcurrency,
-  retryOnceOnTimeout,
-} from './concurrency.js';
 
 /**
  * Side-by-side comparison of N Zillow properties. Calls
@@ -125,13 +125,13 @@ export function registerCompareTools(
       // Issue #78 follow-up: compare used to do unbounded `Promise.all`
       // for up to 25 zpids. The round-3 session that motivated #78 saw
       // 7-of-20 timeouts at unlimited concurrency — 25 sits in the same
-      // risk window. Mirror bulk-get's pacing (BULK_CONCURRENCY +
+      // risk window. Mirror bulk-get's pacing (BRIDGE_CONCURRENCY +
       // retry-once-on-timeout per row) so compare absorbs the same
       // transient SW evictions instead of failing rows.
       type Target = { zpid?: number | string; url?: string };
       const results = await mapWithConcurrency<Target, ComparePerProperty>(
         targets as Target[],
-        BULK_CONCURRENCY,
+        BRIDGE_CONCURRENCY,
         async (t): Promise<ComparePerProperty> => {
           const fallbackZpid = 'zpid' in t ? String(t.zpid) : '';
           try {
@@ -143,12 +143,7 @@ export function registerCompareTools(
               property: format(raw, { includeDescription: include_description }),
             };
           } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            const kind = classifyBridgeError(e);
-            let error = msg;
-            if (kind === 'timeout') error = `bridge timeout after retry: ${msg}`;
-            else if (kind === 'bridge_down') error = `bridge unreachable: ${msg}`;
-            return { zpid: fallbackZpid, error };
+            return { zpid: fallbackZpid, error: classifyRowError(e).message };
           }
         }
       );

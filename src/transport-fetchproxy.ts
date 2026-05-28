@@ -1,10 +1,11 @@
 // Adapter that lets @fetchproxy/server's FetchproxyServer satisfy
 // zillow-mcp's ZillowTransport interface.
 //
-// As of @fetchproxy/server 0.8.0, lazy-revive on Chrome MV3
+// As of @fetchproxy/server 0.8.0+, lazy-revive on Chrome MV3
 // service-worker eviction (default 2000ms) and per-request timeouts
 // (default 30000ms) are server defaults — we get them with zero
-// configuration. The convenience `request()` method throws typed
+// configuration, so this adapter only forwards them when the caller
+// overrides. The convenience `request()` method throws typed
 // `FetchproxyBridgeDownError` / `FetchproxyTimeoutError` on failure
 // (both subclasses of `FetchproxyProtocolError`). Bridge freshness
 // counters live on `inner.bridgeHealth()` — `status()` re-exposes them
@@ -43,9 +44,6 @@ export {
 const ZILLOW_ORIGIN = 'https://www.zillow.com';
 const ZILLOW_TAB_URL = 'https://www.zillow.com/';
 
-// 0.8.0 server default — mirrored here for `status()` reporting.
-const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
-
 const DEFAULT_PORT = 37_149;
 
 const DEBUG = process.env.ZILLOW_DEBUG === '1';
@@ -60,33 +58,40 @@ export interface FetchproxyTransportOptions {
   server?: string;
   /** MCP server version. Should match package.json + the banner in index.ts. */
   version: string;
-  /** Per-request timeout in ms. Default 30s (server-side, 0.8.0+). */
+  /**
+   * Per-request timeout in ms. Defaults to the server-side default
+   * (30_000 ms in 0.8.0+); only forwarded when overridden.
+   */
   fetchTimeoutMs?: number;
   /**
    * Lazy-revive delay (ms) before the server retries once on a
-   * `content_script_unreachable` failure. Default 2_000 ms (server-
-   * side, 0.8.0+). Pass 0 to disable.
+   * `content_script_unreachable` failure. Defaults to the server-side
+   * default (2_000 ms in 0.8.0+); only forwarded when overridden. Pass
+   * 0 to disable.
    */
   bridgeReviveDelayMs?: number;
 }
 
 export class FetchproxyTransport implements ZillowTransport {
   private readonly inner: FetchproxyServer;
-  private readonly fetchTimeoutMs: number;
   private readonly port: number;
   private readonly serverVersion: string;
 
   constructor(opts: FetchproxyTransportOptions) {
     this.port = opts.port ?? DEFAULT_PORT;
     this.serverVersion = opts.version;
-    this.fetchTimeoutMs = opts.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
     const options: FetchproxyServerOpts = {
       port: this.port,
       serverName: opts.server ?? 'zillow-mcp',
       version: opts.version,
       // Subdomains of zillow.com (www, photos, etc.) match automatically.
       domains: ['zillow.com'],
-      fetchTimeoutMs: this.fetchTimeoutMs,
+      // fetchproxy#71 — keep SW resident across human-paced session gaps.
+      // Still opt-in in 0.9.0; becomes default in 0.10.0.
+      keepAliveIntervalMs: 25_000,
+      ...(opts.fetchTimeoutMs !== undefined
+        ? { fetchTimeoutMs: opts.fetchTimeoutMs }
+        : {}),
       ...(opts.bridgeReviveDelayMs !== undefined
         ? { bridgeReviveDelayMs: opts.bridgeReviveDelayMs }
         : {}),
@@ -112,7 +117,8 @@ export class FetchproxyTransport implements ZillowTransport {
   /**
    * 0.8.0+: BridgeStatus is now an alias for the server's BridgeHealth,
    * so the shim collapses to a direct delegation. `serverVersion` and
-   * `fetchTimeoutMs` are populated by the server from its own opts.
+   * `fetchTimeoutMs` are populated by the server from its own opts (or
+   * its defaults when we don't override).
    */
   status(): BridgeStatus {
     return this.inner.bridgeHealth();
