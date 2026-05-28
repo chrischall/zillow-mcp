@@ -6,6 +6,9 @@ import {
   registerGetByAddressTools,
 } from '../../src/tools/get-by-address.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const mockFetchHtml = vi.fn();
 const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
@@ -517,5 +520,47 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.url).toBe(
       'https://www.zillow.com/homedetails/12345_zpid/'
     );
+  });
+
+  describe('tool description honesty (issue #80)', () => {
+    // Description must surface the load-bearing-ness of the price band
+    // for rural / locality-mismatched addresses (search-fallback rung is
+    // often the ONLY rung that hits), and the resolved_city / queried_city
+    // remap signal from issue #75 — including the real-world mountain-MLS
+    // cohort cases the field exists for.
+    async function getDescription(): Promise<string> {
+      const server = new McpServer({ name: 't', version: '0.0.0' });
+      registerGetByAddressTools(server, mockClient);
+      const client = new Client({ name: 'tc', version: '0.0.0' });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(b), client.connect(a)]);
+      const { tools } = await client.listTools();
+      await client.close();
+      await server.close();
+      const t = tools.find((t) => t.name === 'zillow_get_by_address');
+      if (!t) throw new Error('tool missing');
+      return t.description ?? '';
+    }
+
+    it('flags the price band as load-bearing for rural / locality-mismatched addresses', async () => {
+      const d = await getDescription();
+      expect(d).toMatch(/load-bearing/i);
+      expect(d).toMatch(/rural|mountain-MLS/i);
+      expect(d).toMatch(/price_min/);
+      expect(d).toMatch(/price_max/);
+    });
+
+    it('documents the locality-remap rung and queried_city / resolved_city fields', async () => {
+      const d = await getDescription();
+      expect(d).toMatch(/locality[ _-]remap/i);
+      expect(d).toMatch(/queried_city/);
+      expect(d).toMatch(/resolved_city/);
+    });
+
+    it("cites the cohort's mountain-MLS remap cases (Lake Lure / Beech / Sugar Mountain / Banner Elk)", async () => {
+      const d = await getDescription();
+      expect(d).toMatch(/Lake Lure/);
+      expect(d).toMatch(/Banner Elk/);
+    });
   });
 });

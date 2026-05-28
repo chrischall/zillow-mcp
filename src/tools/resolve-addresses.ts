@@ -238,12 +238,12 @@ export function registerResolveAddressesTools(
       title: 'Bulk-resolve addresses → Zillow zpids',
       description:
         `Resolve up to ${RESOLVE_ADDRESSES_MAX} free-text or structured addresses to Zillow zpids + canonical URLs in one call. ` +
-        'Each row may be a bare string or `{address, city?, state?, zip?, price_hint?}`; `price_hint` (USD) bounds the search-fallback rung. ' +
-        'Runs the same 4-rung resolver as `zillow_get_by_address` (direct → suffix-expansion → locality-remap → search-fallback) so bulk and single match the same partition. ' +
-        'Concurrent fan-out — a 60-address batch returns in roughly one round trip instead of 60. ' +
-        'Per-row error capture so one bad address never fails the batch. ' +
+        'Each row may be a bare string or `{address, city?, state?, zip?, price_hint?}`. ' +
+        'IMPORTANT: `price_hint` (USD) is frequently load-bearing — for rural / mountain-MLS / locality-mismatched rows the search-fallback rung is often the ONLY rung that hits, and without a price band it cannot disambiguate. The resolver derives a ±0.5% band from the hint. Always pass `price_hint` for any row where you have a sense of the price. ' +
+        'Runs the same 4-rung resolver as `zillow_get_by_address` (direct → suffix-expansion → locality-remap → search-fallback) — bulk and single walk the same ladder via the shared resolver, so they match the same partition for the same inputs. ' +
+        'Locality-remap rung handles real-world mountain-MLS cases (Lake Lure <-> Rutherfordton, Beech/Sugar Mountain <-> Banner Elk) where Zillow indexes the parent locality; when it fires, `queried_city` (what you sent) and `resolved_city` (what Zillow returned) are both set so the caller can see the substitution. ' +
+        'Concurrent fan-out — a 60-address batch returns in roughly one round trip instead of 60. Per-row error capture so one bad address never fails the batch. ' +
         '`confidence` is `"exact"` for direct hits, `"suffix_expansion"` / `"locality_remap"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
-        '`resolved_city` is set (alongside `queried_city`) when issue #75 city-drop or locality-alias remap fired. ' +
         'Read-only, no auth required.',
       annotations: {
         title: 'Bulk-resolve addresses → Zillow zpids',
