@@ -301,7 +301,7 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.zpid).toBe('60000');
   });
 
-  it('falls back to a one-shot search (city/state + price band) when direct resolve fails (issue #52)', async () => {
+  it('locality-remap rung: city-drop hits when direct + suffix-expansion miss (rung 3)', async () => {
     // First two calls (abbrev + expanded) return nothing; the third call
     // — the locality-remap city-drop direct fetch — returns the listing.
     // (After #82 the locality-remap rung sits between suffix-expansion and
@@ -313,7 +313,7 @@ describe('zillow_get_by_address tool', () => {
       if (call <= 2) {
         return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
       }
-      // The fallback search returns a listing in the matching city + a token from the address.
+      // The rung-3 city-drop direct fetch returns a listing in the matching city + a token from the address.
       return htmlWithFirstListing({
         zpid: 70_000,
         detailUrl: '/homedetails/foo/70000_zpid/',
@@ -328,8 +328,6 @@ describe('zillow_get_by_address tool', () => {
       city: 'Lake Lure',
       state: 'NC',
       zip: '28746',
-      price_min: 500_000,
-      price_max: 800_000,
     });
     const parsed = parseToolResult<{
       resolved: boolean;
