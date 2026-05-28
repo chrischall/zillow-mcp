@@ -4,7 +4,6 @@ import { textResult } from '../mcp.js';
 import {
   FetchproxyBridgeDownError,
   FetchproxyTimeoutError,
-  classifyBridgeError,
   type BridgeError,
 } from '@fetchproxy/server';
 
@@ -151,49 +150,63 @@ export function registerHealthcheckTools(
       inputSchema: {},
     },
     async () => {
-      // We read bridgeStatus() once at the bottom (after the probe) so
-      // the freshness counters in the response include this very call.
-      // Don't read it up front — that snapshot would be stale.
-      const start = Date.now();
-      let probe: HealthcheckResult['probe'] = {
-        url: `https://www.zillow.com${PROBE_PATH}`,
-        elapsed_ms: 0,
-      };
+      // 0.10.0: the probe loop (run fetchFn, time it, classify the error
+      // via classifyBridgeError, project post-probe bridgeHealth) is the
+      // server's runProbe — the transport half zillow/redfin/homes had
+      // duplicated. We supply the probe call + path and capture the thrown
+      // error in a closure so we can still enrich error.detail (elapsedMs,
+      // .hint, retryAttempted) with the typed-error fields runProbe drops.
+      let probeBody = '';
+      let thrown: unknown;
+      const probeResult = await client.runProbe(async (path) => {
+        try {
+          probeBody = await client.fetchHtml(path);
+          return probeBody;
+        } catch (e) {
+          thrown = e;
+          throw e;
+        }
+      }, PROBE_PATH);
+
+      const ok = probeResult.ok;
+      const probe: HealthcheckResult['probe'] = ok
+        ? {
+            url: `https://www.zillow.com${PROBE_PATH}`,
+            elapsed_ms: probeResult.elapsed_ms,
+            status: 200, // fetchHtml throws on non-2xx; ok means 2xx
+            body_length: probeBody.length,
+          }
+        : {
+            url: `https://www.zillow.com${PROBE_PATH}`,
+            elapsed_ms: probeResult.elapsed_ms,
+          };
+
+      // runProbe already classified the error (kind + message). We layer
+      // the zillow-specific structured detail + role_at_failure on top
+      // from the captured typed error.
       let error: HealthcheckResult['error'];
-      let ok = false;
-      try {
-        const html = await client.fetchHtml(PROBE_PATH);
-        probe = {
-          url: `https://www.zillow.com${PROBE_PATH}`,
-          elapsed_ms: Date.now() - start,
-          status: 200, // fetchHtml throws on non-2xx; reaching here means 2xx
-          body_length: html.length,
-        };
-        ok = true;
-      } catch (e) {
-        const elapsedMs = Date.now() - start;
-        // 0.8.0+: classifyBridgeError enforces the correct instanceof
-        // ordering once (subclass before parent) — see its docs. Branching
-        // on the returned string keeps this catch block flat and immune
-        // to ladder-ordering bugs.
-        const kind = classifyBridgeError(e);
-        const message = e instanceof Error ? e.message : String(e);
+      if (probeResult.error) {
+        const kind = probeResult.error.kind;
+        const message = probeResult.error.message;
         // role_at_failure is meaningful only for the typed-error arms.
         // For 'other' (non-bridge errors), it's noise — skip it.
         const roleAtFailure =
-          kind === 'other' ? undefined : client.bridgeStatus().role;
-        if (kind === 'timeout' && e instanceof FetchproxyTimeoutError) {
+          kind === 'other' ? undefined : probeResult.bridge.role;
+        if (kind === 'timeout' && thrown instanceof FetchproxyTimeoutError) {
           error = {
             kind,
             message,
             role_at_failure: roleAtFailure,
             // Surface elapsedMs / timeoutMs so callers can distinguish
             // "barely missed" from "hung for the full window".
-            detail: { elapsed_ms: e.elapsedMs, timeout_ms: e.timeoutMs },
+            detail: {
+              elapsed_ms: thrown.elapsedMs,
+              timeout_ms: thrown.timeoutMs,
+            },
           };
         } else if (
           kind === 'bridge_down' &&
-          e instanceof FetchproxyBridgeDownError
+          thrown instanceof FetchproxyBridgeDownError
         ) {
           error = {
             kind,
@@ -201,7 +214,7 @@ export function registerHealthcheckTools(
             role_at_failure: roleAtFailure,
             // Surface the package's actionable .hint + retryAttempted so
             // the LLM can show the user concrete recovery guidance.
-            detail: { hint: e.hint, retry_attempted: e.retryAttempted },
+            detail: { hint: thrown.hint, retry_attempted: thrown.retryAttempted },
           };
         } else {
           // Covers 'http', 'protocol', and 'other'.
@@ -210,30 +223,29 @@ export function registerHealthcheckTools(
               ? { kind, message }
               : { kind, message, role_at_failure: roleAtFailure };
         }
-        probe = { ...probe, elapsed_ms: elapsedMs };
       }
-      // Re-read after the probe — recordSuccess/recordFailure on the
-      // transport just updated the counters, so this snapshot reflects
-      // the freshest state including this very call.
-      const postProbeBridge = client.bridgeStatus();
+
+      // runProbe's bridge projection omits lastExtensionMessageAt; read it
+      // from bridgeStatus() (also post-probe, so freshness is consistent).
+      const lastExtensionMessageAt = client.bridgeStatus().lastExtensionMessageAt;
       const result: HealthcheckResult = {
         ok,
         bridge: {
-          role: postProbeBridge.role,
-          port: postProbeBridge.port,
-          server_version: postProbeBridge.serverVersion,
-          fetch_timeout_ms: postProbeBridge.fetchTimeoutMs,
-          last_success_at: postProbeBridge.lastSuccessAt,
-          last_failure_at: postProbeBridge.lastFailureAt,
-          last_failure_reason: postProbeBridge.lastFailureReason,
-          consecutive_failures: postProbeBridge.consecutiveFailures,
-          last_extension_message_at: postProbeBridge.lastExtensionMessageAt,
+          role: probeResult.bridge.role,
+          port: probeResult.bridge.port,
+          server_version: probeResult.bridge.server_version,
+          fetch_timeout_ms: probeResult.bridge.fetch_timeout_ms,
+          last_success_at: probeResult.bridge.last_success_at,
+          last_failure_at: probeResult.bridge.last_failure_at,
+          last_failure_reason: probeResult.bridge.last_failure_reason,
+          consecutive_failures: probeResult.bridge.consecutive_failures,
+          last_extension_message_at: lastExtensionMessageAt,
         },
         probe,
         ...(error ? { error } : {}),
         hint: hintFor({
           ok,
-          role: postProbeBridge.role,
+          role: probeResult.bridge.role,
           errorKind: error?.kind,
           // Prepend the bridge-down error's `.hint` so the LLM sees the
           // package's specific recovery copy at the top.

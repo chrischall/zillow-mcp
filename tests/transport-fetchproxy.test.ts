@@ -2,9 +2,27 @@
 // WebSocket here — the protocol-level tests (lazy-revive retry, request
 // timeout, content_script_unreachable mapping) live in @fetchproxy/server
 // 0.8.0+. What we verify is the path → URL prepending, the request()
-// delegation, the bridgeHealth() → status() projection, and the typed-
-// error re-exports.
+// delegation, the bridgeHealth() → status() projection, the typed-error
+// re-exports, and the constructor options the adapter hands the server.
 import { describe, it, expect, vi } from 'vitest';
+
+// Capture the exact options object the adapter passes to the
+// FetchproxyServer constructor, so we can prove the explicit
+// keepAliveIntervalMs opt-in was dropped (0.10.0 defaults it server-side,
+// fetchproxy#72). The real class is preserved for behavior; only the
+// constructor is wrapped to record its first argument.
+const constructorOpts: Array<Record<string, unknown>> = [];
+vi.mock('@fetchproxy/server', async (importActual) => {
+  const actual = await importActual<typeof import('@fetchproxy/server')>();
+  class CapturingServer extends actual.FetchproxyServer {
+    constructor(opts: ConstructorParameters<typeof actual.FetchproxyServer>[0]) {
+      constructorOpts.push({ ...(opts as Record<string, unknown>) });
+      super(opts);
+    }
+  }
+  return { ...actual, FetchproxyServer: CapturingServer };
+});
+
 import {
   FetchproxyBridgeDownError,
   FetchproxyTimeoutError,
@@ -13,13 +31,14 @@ import {
 import {
   FetchproxyBridgeDownError as PkgBridgeDown,
   FetchproxyTimeoutError as PkgTimeout,
-  FetchproxyServer,
 } from '@fetchproxy/server';
 
 type Inner = {
   listen: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   request: ReturnType<typeof vi.fn>;
+  requestJson: ReturnType<typeof vi.fn>;
+  runProbe: ReturnType<typeof vi.fn>;
   bridgeHealth: ReturnType<typeof vi.fn>;
   role: 'host' | 'peer' | null;
 };
@@ -29,6 +48,8 @@ function stubInner(role: 'host' | 'peer' | null = 'host'): Inner {
     listen: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     request: vi.fn(),
+    requestJson: vi.fn(),
+    runProbe: vi.fn(),
     bridgeHealth: vi.fn().mockReturnValue({
       role,
       port: 37149,
@@ -156,6 +177,67 @@ describe('FetchproxyTransport', () => {
     expect(opts.body).toBe('{"q":"x"}');
   });
 
+  it('requestJson() delegates to inner.requestJson() with subdomain=www (0.10.0)', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    const result = { ok: true, status: 200, url: 'https://www.zillow.com/x', body: '{}' };
+    inner.requestJson.mockResolvedValue({ data: { ok: true }, result });
+    installInner(t, inner);
+
+    const out = await t.requestJson<{ ok: boolean }>('/x', {
+      method: 'POST',
+      headers: { 'X-Test': '1' },
+      body: { q: 'x' },
+    });
+    expect(out).toEqual({ data: { ok: true }, result });
+    const [method, path, opts] = inner.requestJson.mock.calls[0];
+    expect(method).toBe('POST');
+    expect(path).toBe('/x');
+    expect(opts.subdomain).toBe('www');
+    expect(opts.headers).toEqual({ 'X-Test': '1' });
+    expect(opts.body).toEqual({ q: 'x' });
+  });
+
+  it('requestJson() defaults the method to POST when omitted (0.10.0)', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    inner.requestJson.mockResolvedValue({
+      data: null,
+      result: { ok: true, status: 204, url: 'https://www.zillow.com/x', body: '' },
+    });
+    installInner(t, inner);
+    await t.requestJson('/x', { body: {} });
+    expect(inner.requestJson.mock.calls[0][0]).toBe('POST');
+  });
+
+  it('runProbe() delegates to inner.runProbe() with the same fetchFn + path (0.10.0)', async () => {
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    const inner = stubInner();
+    const probeResult = {
+      ok: true,
+      elapsed_ms: 12,
+      bridge: {
+        role: 'host' as const,
+        port: 37149,
+        server_version: '0.0.0',
+        fetch_timeout_ms: 30_000,
+        last_success_at: null,
+        last_failure_at: null,
+        last_failure_reason: null,
+        consecutive_failures: 0,
+      },
+    };
+    inner.runProbe.mockResolvedValue(probeResult);
+    installInner(t, inner);
+
+    const fetchFn = vi.fn().mockResolvedValue('User-agent: *');
+    const out = await t.runProbe(fetchFn, '/robots.txt');
+    expect(out).toBe(probeResult);
+    expect(inner.runProbe).toHaveBeenCalledTimes(1);
+    expect(inner.runProbe.mock.calls[0][0]).toBe(fetchFn);
+    expect(inner.runProbe.mock.calls[0][1]).toBe('/robots.txt');
+  });
+
   it('status() delegates directly to inner.bridgeHealth() (0.8.0+ collapsed the shim)', () => {
     const t = new FetchproxyTransport({ version: '0.0.0', port: 37200 });
     const inner = stubInner(null);
@@ -184,18 +266,19 @@ describe('FetchproxyTransport', () => {
     expect(s.lastExtensionMessageAt).toBeNull();
   });
 
-  it('passes keepAliveIntervalMs: 25_000 to the FetchproxyServer constructor (fetchproxy#71)', () => {
-    // The 0.9.0 server exposes opt-in keep-alive pings; zillow-mcp
-    // opts in so Chrome's MV3 service worker stays resident across
-    // human-paced session gaps (sub-issue: zillow-mcp#89). The 0.8.x
-    // server stores constructor options on `this.opts`; if that ever
-    // changes upstream we'll catch it here.
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    // @ts-expect-error reach into the private inner for unit testing
-    const inner = t.inner as FetchproxyServer;
-    // @ts-expect-error inner.opts is private on the upstream server
-    const opts = inner.opts as { keepAliveIntervalMs?: number };
-    expect(opts.keepAliveIntervalMs).toBe(25_000);
+  it('no longer passes keepAliveIntervalMs to the FetchproxyServer constructor (0.10.0 defaults it, fetchproxy#72)', () => {
+    // Pre-0.10.0 zillow-mcp opted into keepAliveIntervalMs: 25_000
+    // explicitly. 0.10.0 promoted that exact value to the server default
+    // (every consumer was opting in, fetchproxy#72), so the adapter now
+    // passes NOTHING for it and inherits the default. We inspect the
+    // options the adapter actually hands the constructor (captured by the
+    // module mock above) — `inner.opts` can't prove this because the
+    // server backfills the key, so the consumer-passed object is the only
+    // place the opt-in's absence is observable.
+    constructorOpts.length = 0;
+    new FetchproxyTransport({ version: '0.0.0' });
+    expect(constructorOpts).toHaveLength(1);
+    expect('keepAliveIntervalMs' in constructorOpts[0]).toBe(false);
   });
 
   it('status() reflects freshness counters tracked by the server', () => {

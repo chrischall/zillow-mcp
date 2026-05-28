@@ -5,8 +5,9 @@ import {
   FetchproxyBridgeDownError,
   FetchproxyProtocolError,
   FetchproxyTimeoutError,
+  classifyBridgeError,
 } from '@fetchproxy/server';
-import type { BridgeStatus } from '../../src/transport.js';
+import type { BridgeProbeResult, BridgeStatus } from '../../src/transport.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const DEFAULT_STATUS: BridgeStatus = {
@@ -21,15 +22,60 @@ const DEFAULT_STATUS: BridgeStatus = {
   lastExtensionMessageAt: null,
 };
 
+// 0.10.0: the tool now drives the probe through `client.runProbe`, which
+// the real transport delegates to the server's `runProbe`. The stub
+// reproduces that contract faithfully — run the probe fetch, time it,
+// classify any thrown error with the real `classifyBridgeError`, and
+// project the (stubbed) bridge health — so the tool's hint + error.detail
+// enrichment stays fully under test. The probe path is `/robots.txt`.
 function stubClient(args: {
   status?: Partial<BridgeStatus>;
   fetchHtml?: ReturnType<typeof vi.fn>;
 }): ZillowClient {
+  const status = { ...DEFAULT_STATUS, ...(args.status ?? {}) };
+  const fetchHtml =
+    args.fetchHtml ?? vi.fn().mockResolvedValue('User-agent: *');
+  const bridgeStatus = vi.fn().mockReturnValue(status);
+  const runProbe = vi
+    .fn()
+    .mockImplementation(
+      async (
+        fetchFn: (path: string) => Promise<unknown>,
+        probePath: string
+      ): Promise<BridgeProbeResult> => {
+        const start = Date.now();
+        let ok = false;
+        let error: BridgeProbeResult['error'];
+        try {
+          await fetchFn(probePath);
+          ok = true;
+        } catch (e) {
+          error = {
+            kind: classifyBridgeError(e),
+            message: e instanceof Error ? e.message : String(e),
+          };
+        }
+        return {
+          ok,
+          elapsed_ms: Date.now() - start,
+          bridge: {
+            role: status.role,
+            port: status.port,
+            server_version: status.serverVersion,
+            fetch_timeout_ms: status.fetchTimeoutMs,
+            last_success_at: status.lastSuccessAt,
+            last_failure_at: status.lastFailureAt,
+            last_failure_reason: status.lastFailureReason,
+            consecutive_failures: status.consecutiveFailures,
+          },
+          ...(error ? { error } : {}),
+        };
+      }
+    );
   return {
-    bridgeStatus: vi
-      .fn()
-      .mockReturnValue({ ...DEFAULT_STATUS, ...(args.status ?? {}) }),
-    fetchHtml: args.fetchHtml ?? vi.fn().mockResolvedValue('User-agent: *'),
+    bridgeStatus,
+    fetchHtml,
+    runProbe,
   } as unknown as ZillowClient;
 }
 

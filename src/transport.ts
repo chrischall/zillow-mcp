@@ -36,6 +36,24 @@ export interface FetchResult {
  */
 export type BridgeStatus = import('@fetchproxy/server').BridgeHealth;
 
+/**
+ * 0.10.0: the server's discriminated success-arm `FetchResult`
+ * (`{ ok, status, url, body, retryAttempted? }`). `requestJson` returns
+ * the raw result alongside the parsed `data` so the client can run its
+ * own per-site guards (`throwIfNotOk` / `throwIfSignInPage`) over it.
+ */
+export type ServerFetchResult = import('@fetchproxy/server').FetchResult;
+
+/** 0.10.0: typed result of `runProbe` — see `BridgeProbeResult`. */
+export type BridgeProbeResult = import('@fetchproxy/server').BridgeProbeResult;
+
+/** Options accepted by `ZillowTransport.requestJson` (mirrors the server's). */
+export interface RequestJsonInit {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
 export interface ZillowTransport {
   /** Bring the transport up. Idempotent. */
   start(): Promise<void>;
@@ -46,6 +64,29 @@ export interface ZillowTransport {
   /** Round-trip one request through the bridge. Resolves to a result
    *  triple even for non-2xx statuses — the client maps HTTP errors. */
   fetch(init: FetchInit): Promise<FetchResult>;
+
+  /**
+   * 0.10.0: method-generic JSON round-trip. Handles header defaults,
+   * body serialization, and 204/empty → `data: null`, returning BOTH the
+   * parsed `data` and the raw `result` so the client keeps its per-site
+   * `throwIfNotOk` / `throwIfSignInPage` guards. Bridge failures still
+   * throw the typed errors, exactly like `fetch`.
+   */
+  requestJson<T>(
+    path: string,
+    init?: RequestJsonInit
+  ): Promise<{ data: T | null; result: ServerFetchResult }>;
+
+  /**
+   * 0.10.0: run one healthcheck probe through `fetchFn`, measure elapsed
+   * ms, classify any thrown error, and project the post-probe bridge
+   * health. The tool supplies its own probe call + path and keeps its
+   * site-specific hint text.
+   */
+  runProbe(
+    fetchFn: (path: string) => Promise<unknown>,
+    probePath: string
+  ): Promise<BridgeProbeResult>;
 
   /** Diagnostic snapshot of the bridge. Safe to call any time. */
   status(): BridgeStatus;

@@ -5,9 +5,9 @@
 //
 // Error mapping (non-2xx, sign-in interstitial, empty 204 body) lives
 // here so tool authors never have to think about it.
+import { classifyBotWall, type FetchErrorKind } from '@fetchproxy/server';
 import type {
   BridgeStatus,
-  FetchInit,
   FetchResult,
   ZillowTransport,
 } from './transport.js';
@@ -23,60 +23,47 @@ export class SessionNotAuthenticatedError extends Error {
 }
 
 /**
- * Default retry-after hint (seconds) surfaced on a `CaptchaBlockedError`
- * when PerimeterX doesn't give us an explicit one. Tuned for the
- * bulk-get back-off path (issue #90) — long enough that the bot-wall
+ * Default retry-after hint (seconds) surfaced on a `BotWallError` when
+ * the bot-wall interstitial doesn't give us an explicit one. Tuned for
+ * the bulk-get back-off path (issue #90) — long enough that the wall
  * usually clears on the next pass, short enough not to stall a batch.
  */
-export const DEFAULT_CAPTCHA_RETRY_AFTER_S = 30;
+export const DEFAULT_BOT_WALL_RETRY_AFTER_S = 30;
 
 /**
- * Issue #90: PerimeterX (px) bot-wall. A `bulk_get` that fans out too
- * many requests in a short window trips this — Zillow returns an HTTP
- * 403 (sometimes a 200) whose body is the PerimeterX CAPTCHA
+ * Issue #90 / #91: PerimeterX (px) bot-wall. A `bulk_get` that fans out
+ * too many requests in a short window trips this — Zillow returns an
+ * HTTP 403 (sometimes a 200) whose body is the PerimeterX CAPTCHA
  * interstitial, NOT the listing.
  *
- * This is its own error class — distinct from `SessionNotAuthenticatedError`
+ * 0.10.0: detection is now the shared `classifyBotWall` from
+ * `@fetchproxy/server` (promoted from this MCP's #91 px-detection); this
+ * error is the retryable signal it raises, carrying the server's
+ * canonical `bot_challenge` {@link FetchErrorKind} so bulk-get classifies
+ * rows with one vocabulary instead of a local string.
+ *
+ * It stays a distinct class — separate from `SessionNotAuthenticatedError`
  * (DataDome / sign-in) and from a generic non-2xx — because the caller's
- * response differs: a captcha block is *transient and retryable* (back off
- * and retry the blocked ids), whereas a generic 403 / not-found means the
+ * response differs: a bot-wall is *transient and retryable* (back off and
+ * retry the blocked ids), whereas a generic 403 / not-found means the
  * listing is genuinely unavailable. Misclassifying the bot-wall as
  * not-found silently corrupts downstream trackers (issue #90).
  */
-export class CaptchaBlockedError extends Error {
+export class BotWallError extends Error {
+  /** The server's canonical bot-wall error kind. */
+  readonly kind: FetchErrorKind = 'bot_challenge';
   /** Suggested seconds to wait before retrying the blocked request(s). */
   readonly retryAfterSeconds: number;
-  constructor(path: string, retryAfterSeconds = DEFAULT_CAPTCHA_RETRY_AFTER_S) {
+  constructor(path: string, retryAfterSeconds = DEFAULT_BOT_WALL_RETRY_AFTER_S) {
     super(
       `Zillow served a PerimeterX CAPTCHA bot-wall for ${path} — the request was ` +
         `rate-limited, not a missing listing. Back off and retry (suggested wait: ` +
         `${retryAfterSeconds}s). If it persists, open zillow.com in your browser and ` +
         `clear the CAPTCHA, then retry with a smaller batch.`
     );
-    this.name = 'CaptchaBlockedError';
+    this.name = 'BotWallError';
     this.retryAfterSeconds = retryAfterSeconds;
   }
-}
-
-/**
- * The three PerimeterX px-captcha body markers from issue #90. Any one
- * of them in a response body means we hit the bot-wall rather than the
- * listing. Kept small and substring-based — the interstitial body shape
- * drifts, but these tokens are stable across px versions.
- */
-const PX_CAPTCHA_MARKERS = [
-  'window._pxAppId',
-  'Access to this page has been denied',
-  'meta name="px-captcha"',
-] as const;
-
-/**
- * True when a response body is a PerimeterX px-captcha interstitial.
- * Pure; matches any of the {@link PX_CAPTCHA_MARKERS}. Exported so the
- * detection logic has a direct unit-test surface (issue #90).
- */
-export function detectPxCaptcha(body: string): boolean {
-  return PX_CAPTCHA_MARKERS.some((marker) => body.includes(marker));
 }
 
 export interface ZillowClientOptions {
@@ -105,16 +92,29 @@ export class ZillowClient {
   }
 
   /**
+   * 0.10.0: run one healthcheck probe through the transport's `runProbe`
+   * (probe execution + timing + `classifyBridgeError` + bridge
+   * projection). The `zillow_healthcheck` tool keeps its own probe call
+   * (`(p) => this.fetchHtml(p)`), probe path, and site-specific hints.
+   */
+  runProbe(
+    fetchFn: (path: string) => Promise<unknown>,
+    probePath: string
+  ): ReturnType<ZillowTransport['runProbe']> {
+    return this.transport.runProbe(fetchFn, probePath);
+  }
+
+  /**
    * GET a zillow.com path, return the HTML body. Throws on non-2xx or
    * sign-in interstitial.
    */
   async fetchHtml(path: string): Promise<string> {
     const result = await this.transport.fetch({ path, method: 'GET' });
-    // Issue #90: the px-captcha check runs FIRST — before throwIfNotOk —
-    // because the bot-wall arrives as a 403 (sometimes a 200) whose body
-    // is the CAPTCHA interstitial, and it must surface as a distinct
-    // retryable CaptchaBlockedError rather than a generic "403" string.
-    this.throwIfPxCaptcha(result, path);
+    // Issue #90: the bot-wall check runs FIRST — before throwIfNotOk —
+    // because the wall arrives as a 403 (sometimes a 200) whose body is
+    // the CAPTCHA interstitial, and it must surface as a distinct
+    // retryable BotWallError rather than a generic "403" string.
+    this.throwIfBotWall(result, path);
     this.throwIfNotOk(result, 'GET', path);
     this.throwIfSignInPage(result);
     return result.body;
@@ -133,51 +133,39 @@ export class ZillowClient {
     } = {}
   ): Promise<T> {
     const method = init.method ?? 'POST';
-    const serialised: FetchInit = {
-      path,
+    // 0.10.0: serialization (Accept/Content-Type defaults, JSON.stringify,
+    // 204/empty → null, JSON.parse) is the server's `requestJson`. It
+    // hands back BOTH the parsed `data` and the raw `result` so the
+    // per-site guards below stay here — the server deliberately doesn't
+    // assert on status or look for Zillow's sign-in interstitial.
+    const { data, result } = await this.transport.requestJson<T>(path, {
       method,
-      headers: {
-        Accept: 'application/json',
-        ...(method !== 'GET' && init.body !== undefined
-          ? { 'Content-Type': 'application/json' }
-          : {}),
-        ...(init.headers ?? {}),
-      },
-      body:
-        method === 'GET' || init.body === undefined
-          ? undefined
-          : JSON.stringify(init.body),
-    };
-    const result = await this.transport.fetch(serialised);
-    this.throwIfPxCaptcha(result, path);
+      headers: init.headers,
+      body: init.body,
+    });
+    this.throwIfBotWall(result, path);
     this.throwIfNotOk(result, method, path);
     this.throwIfSignInPage(result);
-    if (result.status === 204 || result.body === '') {
-      return null as T;
-    }
-    try {
-      return JSON.parse(result.body) as T;
-    } catch (e) {
-      throw new Error(
-        `Zillow ${method} ${path} — response was not JSON: ${String(
-          (e as Error).message
-        )}`
-      );
-    }
+    return data as T;
   }
 
   /**
-   * Issue #90: detect the PerimeterX bot-wall before any other error
-   * mapping. PerimeterX serves the CAPTCHA interstitial as the response
-   * body (commonly HTTP 403, occasionally 200), so we key on the body
-   * markers rather than the status code. Throws `CaptchaBlockedError` —
-   * the bulk-get back-off path branches on it.
+   * Issue #90 / #91: detect the PerimeterX bot-wall before any other
+   * error mapping. 0.10.0: detection is the shared `classifyBotWall`
+   * (body-first, so a 200-status px wall is still caught). We act ONLY on
+   * the `perimeterx` vendor — that's the retryable bot-wall this MCP
+   * backs off on. The classifier also recognises DataDome's
+   * `captcha-delivery` marker, but on Zillow that interstitial means
+   * "sign in", not "rate-limited", so it stays the job of
+   * `throwIfSignInPage` below; folding it in here would change behavior.
    */
-  private throwIfPxCaptcha(result: FetchResult, path: string): void {
-    if (detectPxCaptcha(result.body)) {
-      // The bridge's FetchResult doesn't surface response headers, so we
-      // can't read a server `Retry-After`; fall back to the tuned default.
-      throw new CaptchaBlockedError(path);
+  private throwIfBotWall(result: FetchResult, path: string): void {
+    // The bridge's FetchResult doesn't surface response headers, so we
+    // pass body + status only (matching the body-only px detection) and
+    // fall back to the tuned default retry-after.
+    const verdict = classifyBotWall(result.body, result.status);
+    if (verdict.blocked && verdict.vendor === 'perimeterx') {
+      throw new BotWallError(path);
     }
   }
 
