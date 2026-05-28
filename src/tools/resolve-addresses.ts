@@ -1,9 +1,15 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { classifyBridgeError } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { resolveAddressFull, type ResolverInput } from './resolver.js';
 import { parseFreeTextAddress } from './address-parse.js';
+import {
+  BULK_CONCURRENCY,
+  mapWithConcurrency,
+  retryOnceOnTimeout,
+} from './concurrency.js';
 
 /**
  * `zillow_resolve_addresses`: batch address → zpid resolver.
@@ -125,7 +131,14 @@ export async function resolveOneAddress(
     ...(priceBand ? { price_min: priceBand.min, price_max: priceBand.max } : {}),
   };
   try {
-    const outcome = await resolveAddressFull(client, resolverInput);
+    // Per-row retry-once-on-timeout (issue #78): a single
+    // FetchproxyTimeoutError inside the resolver ladder retries the
+    // whole ladder once before bubbling up. Any other error class
+    // (HTTP, parse, etc.) bubbles immediately — only a transient bridge
+    // hiccup gets a second chance.
+    const outcome = await retryOnceOnTimeout(() =>
+      resolveAddressFull(client, resolverInput)
+    );
     if ('hit' in outcome) {
       const f = outcome.hit.formatted;
       const out: ResolveAddressesRow = {
@@ -156,11 +169,23 @@ export async function resolveOneAddress(
       query: outcome.miss.slug,
     };
   } catch (err) {
+    // Issue #78: a bridge timeout that survives the retry MUST surface
+    // distinctly — the reporter saw rows marked `resolved: false` with
+    // a generic miss message and nearly recorded real properties as
+    // absent. classifyBridgeError gives us the right discriminator.
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const kind = classifyBridgeError(err);
+    let error = errMsg;
+    if (kind === 'timeout') {
+      error = `bridge timeout after retry: ${errMsg}`;
+    } else if (kind === 'bridge_down') {
+      error = `bridge unreachable: ${errMsg}`;
+    }
     return {
       address: norm.raw,
       resolved: false,
       confidence: 'none',
-      error: err instanceof Error ? err.message : String(err),
+      error,
       query: norm.address,
     };
   }
@@ -218,8 +243,14 @@ export function registerResolveAddressesTools(
       },
     },
     async ({ addresses }) => {
-      const results = await Promise.all(
-        addresses.map((a) => resolveOneAddress(client, a))
+      // Issue #78: pace the fan-out to BULK_CONCURRENCY (Redfin parity).
+      // Unlimited concurrency timed out 7 of 20 sub-requests in a real
+      // session; 6-in-flight + retry-once-on-timeout lands the same
+      // batch clean.
+      const results = await mapWithConcurrency(
+        addresses,
+        BULK_CONCURRENCY,
+        (a) => resolveOneAddress(client, a)
       );
       return textResult({ count: results.length, results });
     }
