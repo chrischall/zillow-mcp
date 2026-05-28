@@ -194,6 +194,14 @@ describe('lotSizeAcres', () => {
   it('zero lot size → null (treated as missing, never 0 acres)', () => {
     expect(lotSizeAcres(0)).toBeNull();
   });
+  it('tiny positive lot (< 218 sq ft) → null, never 0 (#93 review)', () => {
+    // 200 / 43560 = 0.0046 → rounds to 0.00. Guard returns null so a
+    // valid-but-tiny lot is never reported as a misleading 0-acre lot.
+    expect(lotSizeAcres(200)).toBeNull();
+    expect(lotSizeAcres(1)).toBeNull();
+    // 218 / 43560 = 0.0050 → rounds up to 0.01, the smallest non-null.
+    expect(lotSizeAcres(218)).toBe(0.01);
+  });
   it('non-numeric input → null', () => {
     expect(lotSizeAcres(NaN)).toBeNull();
   });
@@ -247,6 +255,15 @@ describe('format() — FormattedProperty contract', () => {
     const out = format({ zpid: 1, lotSize: 0 } as RawProperty);
     expect(out.lot_size).toBeNull();
     expect(out.lot_size_acres).toBeNull();
+  });
+
+  it('tiny lot keeps lot_size but nulls lot_size_acres (#93 review)', () => {
+    // 200 sq ft is a valid lot, but < 218 sq ft rounds to 0.00 acres —
+    // surface the raw lot_size while nulling acres rather than 0.
+    const out = format({ zpid: 1, lotSize: 200 } as RawProperty);
+    expect(out.lot_size).toBe(200);
+    expect(out.lot_size_acres).toBeNull();
+    expect(out.lot_size_acres).not.toBe(0);
   });
 });
 

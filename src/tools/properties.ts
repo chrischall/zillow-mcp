@@ -438,7 +438,8 @@ export function lotSizeAcres(
   if (typeof lotSqFt !== 'number' || !Number.isFinite(lotSqFt) || lotSqFt <= 0) {
     return null;
   }
-  return Math.round((lotSqFt / SQFT_PER_ACRE) * 100) / 100;
+  const acres = Math.round((lotSqFt / SQFT_PER_ACRE) * 100) / 100;
+  return acres > 0 ? acres : null;
 }
 
 /**
