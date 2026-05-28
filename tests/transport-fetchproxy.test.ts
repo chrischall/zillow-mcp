@@ -185,7 +185,7 @@ describe('FetchproxyTransport', () => {
   });
 
   it('passes keepAliveIntervalMs: 25_000 to the FetchproxyServer constructor (fetchproxy#71)', () => {
-    // The 0.8.1+ server exposes opt-in keep-alive pings; zillow-mcp
+    // The 0.9.0 server exposes opt-in keep-alive pings; zillow-mcp
     // opts in so Chrome's MV3 service worker stays resident across
     // human-paced session gaps (sub-issue: zillow-mcp#89). The 0.8.x
     // server stores constructor options on `this.opts`; if that ever

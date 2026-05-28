@@ -220,7 +220,7 @@ describe('zillow_compare_properties tool', () => {
     // tests mirror the bulk-get coverage so compare absorbs transient
     // SW evictions instead of failing rows.
 
-    it('caps internal concurrency to BULK_CONCURRENCY', async () => {
+    it('caps internal concurrency to BRIDGE_CONCURRENCY', async () => {
       let inFlight = 0;
       let peak = 0;
       mockFetchHtml.mockImplementation(async (path: string) => {

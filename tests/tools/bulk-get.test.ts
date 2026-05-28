@@ -164,7 +164,7 @@ describe('zillow_bulk_get tool', () => {
       expect(parsed.rows[0].error).toMatch(/^bridge unreachable: /);
     });
 
-    it('caps internal concurrency to BULK_CONCURRENCY', async () => {
+    it('caps internal concurrency to BRIDGE_CONCURRENCY', async () => {
       let inFlight = 0;
       let peak = 0;
       mockFetchHtml.mockImplementation(async (path: string) => {
