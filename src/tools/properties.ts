@@ -179,8 +179,30 @@ export interface FormattedProperty {
   hoa_monthly_usd?: number | null;
   /** Null when the raw value was the not-yet-assessed 0/1 sentinel. (Issue #44.) */
   tax_annual?: number | null;
-  /** "actual" | "not_yet_assessed". (Issue #44.) */
-  tax_status?: 'actual' | 'not_yet_assessed';
+  /**
+   * Disambiguates "Zillow has no tax data for this home" from
+   * "lookup failed" (issue #77). Always present.
+   * - `available`        — a real annual tax figure surfaced.
+   * - `new_construction` — Zillow returned the 0/1 not-yet-assessed sentinel.
+   * - `unavailable`      — no tax field on the page at all.
+   */
+  tax_status: 'available' | 'new_construction' | 'unavailable';
+  /**
+   * Disambiguates "no Zestimate for this home" from "lookup failed"
+   * (issue #77). Always present.
+   * - `available`   — `zestimate` is a positive number.
+   * - `rent_only`   — only `rent_zestimate` is set (no sale Zestimate).
+   * - `unavailable` — neither Zestimate surfaced.
+   */
+  zestimate_status: 'available' | 'rent_only' | 'unavailable';
+  /**
+   * Disambiguates "Zillow has no record of a sale" from "lookup
+   * failed" (issue #77). Always present.
+   * - `available`   — a Sold event was found in the price history.
+   * - `never_sold`  — price history was non-empty but had no Sold event.
+   * - `unavailable` — no price history at all (Zillow may simply not have it).
+   */
+  last_sold_status: 'available' | 'never_sold' | 'unavailable';
   tax_assessed_value?: number;
   tax_assessed_year?: number;
   schools?: RawProperty['schools'];
@@ -502,6 +524,11 @@ export function format(
     // description, the five binary/categorical fields are present with
     // default values so callers can rely on the schema (issue #41).
     extracted_features: extractFeatures(raw.description, loadCommunities()),
+    // Tri-state status fields (issue #77) — overwritten below. Defaults
+    // to 'unavailable' so a missing branch never lies about presence.
+    tax_status: 'unavailable',
+    zestimate_status: 'unavailable',
+    last_sold_status: 'unavailable',
   };
 
   // address_alternates: alternate flat-string addresses that disagree
@@ -547,28 +574,52 @@ export function format(
     );
   }
 
-  // tax_annual: null out the 0/1 not-yet-assessed sentinels.
-  // (Issue #44.) Fall back to resoFacts when top-level is missing.
+  // tax_annual + tax_status (issues #44, #77): null out the 0/1
+  // not-yet-assessed sentinels and disambiguate "no tax data" from
+  // "lookup failed". Fall back to resoFacts when top-level is missing.
   const rawTax = raw.taxAnnualAmount ?? raw.resoFacts?.taxAnnualAmount;
   if (typeof rawTax === 'number') {
     if (rawTax <= 1) {
       out.tax_annual = null;
-      out.tax_status = 'not_yet_assessed';
+      out.tax_status = 'new_construction';
     } else {
       out.tax_annual = rawTax;
-      out.tax_status = 'actual';
+      out.tax_status = 'available';
     }
+  } else {
+    out.tax_annual = null;
+    out.tax_status = 'unavailable';
+  }
+
+  // zestimate_status (issue #77): the bare `zestimate`/`rent_zestimate`
+  // numbers can be missing for legitimate reasons (Zillow simply
+  // doesn't have a sale Zestimate yet). Surface a tri-state so callers
+  // distinguish "genuinely absent" from "lookup failed".
+  if (typeof raw.zestimate === 'number' && raw.zestimate > 0) {
+    out.zestimate_status = 'available';
+  } else if (typeof raw.rentZestimate === 'number' && raw.rentZestimate > 0) {
+    out.zestimate_status = 'rent_only';
+  } else {
+    out.zestimate_status = 'unavailable';
   }
 
   // last_sold_*: scan price history for the most recent Sold event.
   // (Issue #57.) No separate call — Zillow embeds priceHistory inline.
+  // last_sold_status (issue #77): distinguish "Zillow has no sale on
+  // record" from "Zillow has no price history for this property at all".
   const lastSold = findLastSold(raw.priceHistory);
   if (lastSold) {
     out.last_sold_date = lastSold.date;
     out.last_sold_price = lastSold.price;
+    out.last_sold_status = 'available';
   } else {
     out.last_sold_date = null;
     out.last_sold_price = null;
+    // Non-empty history without a Sold event = never_sold; empty/absent = unavailable.
+    out.last_sold_status =
+      Array.isArray(raw.priceHistory) && raw.priceHistory.length > 0
+        ? 'never_sold'
+        : 'unavailable';
   }
 
   // zest_vs_list_pct: (list - zest) / zest * 100, one decimal.
