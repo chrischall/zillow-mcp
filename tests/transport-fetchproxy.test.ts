@@ -13,6 +13,7 @@ import {
 import {
   FetchproxyBridgeDownError as PkgBridgeDown,
   FetchproxyTimeoutError as PkgTimeout,
+  FetchproxyServer,
 } from '@fetchproxy/server';
 
 type Inner = {
@@ -181,6 +182,20 @@ describe('FetchproxyTransport', () => {
     expect(s.lastFailureAt).toBeNull();
     expect(s.consecutiveFailures).toBe(0);
     expect(s.lastExtensionMessageAt).toBeNull();
+  });
+
+  it('passes keepAliveIntervalMs: 25_000 to the FetchproxyServer constructor (fetchproxy#71)', () => {
+    // The 0.8.1+ server exposes opt-in keep-alive pings; zillow-mcp
+    // opts in so Chrome's MV3 service worker stays resident across
+    // human-paced session gaps (sub-issue: zillow-mcp#89). The 0.8.x
+    // server stores constructor options on `this.opts`; if that ever
+    // changes upstream we'll catch it here.
+    const t = new FetchproxyTransport({ version: '0.0.0' });
+    // @ts-expect-error reach into the private inner for unit testing
+    const inner = t.inner as FetchproxyServer;
+    // @ts-expect-error inner.opts is private on the upstream server
+    const opts = inner.opts as { keepAliveIntervalMs?: number };
+    expect(opts.keepAliveIntervalMs).toBe(25_000);
   });
 
   it('status() reflects freshness counters tracked by the server', () => {

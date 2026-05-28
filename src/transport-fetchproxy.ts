@@ -87,6 +87,8 @@ export class FetchproxyTransport implements ZillowTransport {
       // Subdomains of zillow.com (www, photos, etc.) match automatically.
       domains: ['zillow.com'],
       fetchTimeoutMs: this.fetchTimeoutMs,
+      // fetchproxy#71 — keep SW resident across human-paced session gaps
+      keepAliveIntervalMs: 25_000,
       ...(opts.bridgeReviveDelayMs !== undefined
         ? { bridgeReviveDelayMs: opts.bridgeReviveDelayMs }
         : {}),
