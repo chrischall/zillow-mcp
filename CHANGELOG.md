@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/chrischall/zillow-mcp/compare/v0.6.0...v0.7.0) (2026-05-28)
+
+
+### Features
+
+* **resolve:** round-3 P0 wave — bulk/single parity + bidirectional tokens + locality remap + price_hint + test corpus ([#82](https://github.com/chrischall/zillow-mcp/issues/82)) ([1113c12](https://github.com/chrischall/zillow-mcp/commit/1113c12e636cf7e7c5e8b2ec7d2cba20f737f16b))
+* round-3 P1 wave — zestimate_status + bulk concurrency/retry + compare cap ([#84](https://github.com/chrischall/zillow-mcp/issues/84)) ([896dd11](https://github.com/chrischall/zillow-mcp/commit/896dd11091b5fbc9a10d3c386068a0dfba5b458d))
+
+
+### Bug Fixes
+
+* address round-3 P0 wave review nits ([#82](https://github.com/chrischall/zillow-mcp/issues/82) follow-up) ([#86](https://github.com/chrischall/zillow-mcp/issues/86)) ([0a966b7](https://github.com/chrischall/zillow-mcp/commit/0a966b75fe2cb96f470f22a1675aa26479f950c8))
+* round-3 P1 wave review follow-ups ([#84](https://github.com/chrischall/zillow-mcp/issues/84)) ([#85](https://github.com/chrischall/zillow-mcp/issues/85)) ([cfe30f6](https://github.com/chrischall/zillow-mcp/commit/cfe30f671a7f9df768a823528bf9f7f61ed35a90))
+
+
+### Documentation
+
+* **tools:** round-3 description-honesty sweep (closes [#80](https://github.com/chrischall/zillow-mcp/issues/80)) ([#88](https://github.com/chrischall/zillow-mcp/issues/88)) ([4b9f694](https://github.com/chrischall/zillow-mcp/commit/4b9f694407938106c727136ef6bc14c9a2b8af59))
+
 ## [0.6.0](https://github.com/chrischall/zillow-mcp/compare/v0.5.0...v0.6.0) (2026-05-27)
 
 
