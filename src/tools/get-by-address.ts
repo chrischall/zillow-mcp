@@ -13,7 +13,7 @@ import {
  * `zillow_get_by_address`: resolve a free-text address (and optional
  * city/state/zip) to its Zillow canonical homedetails URL + zpid.
  *
- * Thin wrapper around the shared 3-rung resolver in `resolver.ts` —
+ * Thin wrapper around the shared 4-rung resolver in `resolver.ts` —
  * the same ladder is used by `zillow_resolve_addresses` (issue #73
  * parity). See `resolver.ts` for ladder semantics.
  */
@@ -55,7 +55,7 @@ export interface GetByAddressResult {
   /** The slug we passed through the resolver — useful for debugging an unexpected miss. */
   query?: string;
   /** Which rung of the resolution ladder produced the result. */
-  via?: 'direct' | 'suffix_expansion' | 'search_fallback';
+  via?: 'direct' | 'suffix_expansion' | 'locality_remap' | 'search_fallback';
 }
 
 function formatResolvedResult(
@@ -95,7 +95,7 @@ export function registerGetByAddressTools(
     {
       title: 'Resolve an address to its Zillow canonical URL + zpid',
       description:
-        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. Tries up to 3 strategies: (1) direct resolver hit, (2) bidirectional street-token swap (\"Rd\" <-> \"Road\", \"Hts\" <-> \"Heights\", \"Bluebird\" <-> \"Blue Bird\"), (3) city/state search fallback bounded by an optional price band, with city-drop + locality-alias remap when the caller-supplied city fails. Returns `via: \"direct\" | \"suffix_expansion\" | \"search_fallback\"` so the caller knows how the match was made; `resolved_city` is set when the city was remapped. Degrades to `{ resolved: false }` when ALL strategies miss — does not throw. Read-only, no auth required.",
+        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. Tries up to 4 strategies: (1) direct resolver hit, (2) bidirectional street-token swap (\"Rd\" <-> \"Road\", \"Hts\" <-> \"Heights\", \"Bluebird\" <-> \"Blue Bird\"), (3) locality remap — city-drop + locality-alias substitution when the caller-supplied city fails, (4) city/state search fallback bounded by an optional price band. Returns `via: \"direct\" | \"suffix_expansion\" | \"locality_remap\" | \"search_fallback\"` so the caller knows how the match was made; `resolved_city` is set when the city was remapped. Degrades to `{ resolved: false }` when ALL strategies miss — does not throw. Read-only, no auth required.",
       annotations: {
         title: 'Resolve an address to its Zillow canonical URL + zpid',
         readOnlyHint: true,

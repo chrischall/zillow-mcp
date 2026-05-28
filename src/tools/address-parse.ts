@@ -1,7 +1,7 @@
 /**
  * Free-text address parser used by the bulk resolver to split a string
  * like `"126 Sleeping Bear Ln, Lake Lure, NC 28746"` into
- * `{address, city, state, zip}` so it can feed the shared 3-rung
+ * `{address, city, state, zip}` so it can feed the shared 4-rung
  * resolver with the same shape the single tool already takes.
  *
  * Heuristic-only — comma-separated parts feed `[street, city, state+zip]`.
