@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import { registerBulkGetTools, BULK_GET_MAX } from '../../src/tools/bulk-get.js';
-import { FetchproxyTimeoutError } from '../../src/transport-fetchproxy.js';
+import {
+  FetchproxyBridgeDownError,
+  FetchproxyTimeoutError,
+} from '../../src/transport-fetchproxy.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
@@ -138,6 +141,27 @@ describe('zillow_bulk_get tool', () => {
       }>(r);
       expect(parsed.rows[0].error).toBeDefined();
       expect(parsed.rows[0].error).toMatch(/timeout/i);
+    });
+
+    it('surfaces a "bridge unreachable" error when FetchproxyBridgeDownError fires after the revive retry', async () => {
+      // Item 2 follow-up to #84 (PR #78): the bridge_down branch on
+      // bulk-get.ts ~L117 was previously uncovered. When the
+      // transport's `bridgeReviveDelayMs` retry also fails, the inner
+      // call raises FetchproxyBridgeDownError (NOT a timeout) — the
+      // per-row error must rewrite to `bridge unreachable: ...` so the
+      // caller can distinguish a dead SW from a true upstream miss.
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyBridgeDownError({
+          originalError: 'Could not establish connection.',
+          retryAttempted: true,
+        });
+      });
+      const r = await harness.callTool('zillow_bulk_get', { zpids: [42] });
+      const parsed = parseToolResult<{
+        rows: Array<{ error?: string }>;
+      }>(r);
+      expect(parsed.rows[0].error).toBeDefined();
+      expect(parsed.rows[0].error).toMatch(/^bridge unreachable: /);
     });
 
     it('caps internal concurrency to BULK_CONCURRENCY', async () => {

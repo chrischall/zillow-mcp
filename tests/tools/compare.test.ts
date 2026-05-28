@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import { buildSummary, registerCompareTools } from '../../src/tools/compare.js';
+import {
+  FetchproxyBridgeDownError,
+  FetchproxyTimeoutError,
+} from '../../src/transport-fetchproxy.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -207,5 +211,87 @@ describe('zillow_compare_properties tool', () => {
     });
     const parsed = parseToolResult<{ count: number }>(r);
     expect(parsed.count).toBe(2);
+  });
+
+  describe('bulk concurrency + retry-once-on-timeout (issue #78 follow-up)', () => {
+    // Compare used to do unbounded Promise.all for up to 25 zpids. The
+    // round-3 session that motivated #78 saw 7-of-20 timeouts at
+    // unlimited concurrency — 25 sits in the same risk window. These
+    // tests mirror the bulk-get coverage so compare absorbs transient
+    // SW evictions instead of failing rows.
+
+    it('caps internal concurrency to BULK_CONCURRENCY', async () => {
+      let inFlight = 0;
+      let peak = 0;
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 8));
+        inFlight--;
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? parseInt(m[1], 10) : 0;
+        return htmlWith({ zpid, price: 1 });
+      });
+      const zpids = Array.from({ length: 14 }, (_, i) => i + 1);
+      await harness.callTool('zillow_compare_properties', { zpids });
+      expect(peak).toBeLessThanOrEqual(6);
+      expect(peak).toBeGreaterThan(1);
+    });
+
+    it('retries a sub-request once on FetchproxyTimeoutError, then returns property', async () => {
+      const callsByZpid: Record<string, number> = {};
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? m[1] : '0';
+        callsByZpid[zpid] = (callsByZpid[zpid] ?? 0) + 1;
+        if (zpid === '20' && callsByZpid[zpid] === 1) {
+          throw new FetchproxyTimeoutError({
+            url: '/x',
+            timeoutMs: 30_000,
+          });
+        }
+        return htmlWith({ zpid: parseInt(zpid, 10), price: 999 });
+      });
+      const r = await harness.callTool('zillow_compare_properties', {
+        zpids: [10, 20, 30],
+      });
+      const parsed = parseToolResult<{
+        results: Array<{ zpid: string; property?: { price: number }; error?: string }>;
+      }>(r);
+      expect(parsed.results[1].error).toBeUndefined();
+      expect(parsed.results[1].property?.price).toBe(999);
+      expect(callsByZpid['20']).toBe(2);
+    });
+
+    it('surfaces a bridge-timeout error after retry exhaustion (NOT a generic miss)', async () => {
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyTimeoutError({ url: '/x', timeoutMs: 30_000 });
+      });
+      const r = await harness.callTool('zillow_compare_properties', {
+        zpids: [42, 43],
+      });
+      const parsed = parseToolResult<{
+        results: Array<{ error?: string }>;
+      }>(r);
+      expect(parsed.results[0].error).toBeDefined();
+      expect(parsed.results[0].error).toMatch(/timeout/i);
+    });
+
+    it('surfaces a "bridge unreachable" error when FetchproxyBridgeDownError fires after the revive retry', async () => {
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyBridgeDownError({
+          originalError: 'Could not establish connection.',
+          retryAttempted: true,
+        });
+      });
+      const r = await harness.callTool('zillow_compare_properties', {
+        zpids: [42, 43],
+      });
+      const parsed = parseToolResult<{
+        results: Array<{ error?: string }>;
+      }>(r);
+      expect(parsed.results[0].error).toBeDefined();
+      expect(parsed.results[0].error).toMatch(/^bridge unreachable: /);
+    });
   });
 });
