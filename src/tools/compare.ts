@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { classifyBridgeError } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import {
@@ -7,6 +8,11 @@ import {
   format,
   type FormattedProperty,
 } from './properties.js';
+import {
+  BULK_CONCURRENCY,
+  mapWithConcurrency,
+  retryOnceOnTimeout,
+} from './concurrency.js';
 
 /**
  * Side-by-side comparison of N Zillow properties. Calls
@@ -66,7 +72,7 @@ export function registerCompareTools(
       title: 'Compare multiple Zillow properties side-by-side',
       description:
         'Side-by-side analysis of 2-25 Zillow properties. **If you just want N property records, use `zillow_bulk_get` instead** — compare is for genuine side-by-side (its pivoted summary table is the value-add); bulk_get is the fetch-many endpoint and accepts up to 200 ids. (Issue #79 raised this cap from 8 to 25 — a 19-listing analysis now fits in one call instead of three.) ' +
-        'Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won\'t fail the whole call. Calls are concurrent.',
+        'Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won\'t fail the whole call. Calls fan out concurrently (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions).',
       annotations: {
         title: 'Compare multiple Zillow properties side-by-side',
         readOnlyHint: true,
@@ -116,19 +122,35 @@ export function registerCompareTools(
           'zillow_compare_properties: provide an array of at least 2 zpids or urls.'
         );
       }
-      const results = await Promise.all(
-        targets.map(async (t): Promise<ComparePerProperty> => {
+      // Issue #78 follow-up: compare used to do unbounded `Promise.all`
+      // for up to 25 zpids. The round-3 session that motivated #78 saw
+      // 7-of-20 timeouts at unlimited concurrency — 25 sits in the same
+      // risk window. Mirror bulk-get's pacing (BULK_CONCURRENCY +
+      // retry-once-on-timeout per row) so compare absorbs the same
+      // transient SW evictions instead of failing rows.
+      type Target = { zpid?: number | string; url?: string };
+      const results = await mapWithConcurrency<Target, ComparePerProperty>(
+        targets as Target[],
+        BULK_CONCURRENCY,
+        async (t): Promise<ComparePerProperty> => {
           const fallbackZpid = 'zpid' in t ? String(t.zpid) : '';
           try {
-            const { raw } = await fetchPropertyRecord(client, t);
+            const { raw } = await retryOnceOnTimeout(() =>
+              fetchPropertyRecord(client, t)
+            );
             return {
               zpid: String(raw.zpid ?? fallbackZpid),
               property: format(raw, { includeDescription: include_description }),
             };
           } catch (e) {
-            return { zpid: fallbackZpid, error: (e as Error).message };
+            const msg = e instanceof Error ? e.message : String(e);
+            const kind = classifyBridgeError(e);
+            let error = msg;
+            if (kind === 'timeout') error = `bridge timeout after retry: ${msg}`;
+            else if (kind === 'bridge_down') error = `bridge unreachable: ${msg}`;
+            return { zpid: fallbackZpid, error };
           }
-        })
+        }
       );
       const body: {
         count: number;

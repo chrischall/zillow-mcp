@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import { registerResolveAddressesTools } from '../../src/tools/resolve-addresses.js';
-import { FetchproxyTimeoutError } from '../../src/transport-fetchproxy.js';
+import {
+  FetchproxyBridgeDownError,
+  FetchproxyTimeoutError,
+} from '../../src/transport-fetchproxy.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
@@ -219,6 +222,31 @@ describe('zillow_resolve_addresses tool', () => {
       expect(parsed.results[0].error).not.toMatch(/no listing found/i);
       // Must mention the bridge timeout so the caller can decide to retry.
       expect(parsed.results[0].error).toMatch(/timeout/i);
+    });
+
+    it('surfaces a "bridge unreachable" error when FetchproxyBridgeDownError fires after the revive retry', async () => {
+      // Item 2 follow-up to #84 (PR #78): the bridge_down branch on
+      // resolve-addresses.ts L181-183 was previously uncovered. When
+      // the transport's `bridgeReviveDelayMs` retry also fails, the
+      // inner call raises FetchproxyBridgeDownError (NOT a timeout) —
+      // the per-row error must rewrite to `bridge unreachable: ...`
+      // and the row must NOT collapse onto `no listing found`.
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyBridgeDownError({
+          originalError: 'Could not establish connection.',
+          retryAttempted: true,
+        });
+      });
+      const r = await harness.callTool('zillow_resolve_addresses', {
+        addresses: ['1 Foo St, Bar, NC'],
+      });
+      const parsed = parseToolResult<{
+        results: Array<{ resolved: boolean; error?: string }>;
+      }>(r);
+      expect(parsed.results[0].resolved).toBe(false);
+      expect(parsed.results[0].error).toBeDefined();
+      expect(parsed.results[0].error).not.toMatch(/no listing found/i);
+      expect(parsed.results[0].error).toMatch(/^bridge unreachable: /);
     });
 
     it('caps internal concurrency to BULK_CONCURRENCY (issue #78)', async () => {

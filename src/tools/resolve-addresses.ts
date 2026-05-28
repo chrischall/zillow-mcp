@@ -136,6 +136,14 @@ export async function resolveOneAddress(
     // whole ladder once before bubbling up. Any other error class
     // (HTTP, parse, etc.) bubbles immediately — only a transient bridge
     // hiccup gets a second chance.
+    //
+    // Cost trade-off (PR #84 round-3 follow-up item 3): retryOnceOnTimeout
+    // wraps the *entire* 4-rung ladder. If the transient timeout fires on
+    // rung 3 or 4 after rungs 1-2 already missed, the retry re-runs rungs
+    // 1-2 from scratch — worst case ~2× total fetch cost on a row that
+    // ultimately resolves. Functionally correct (per-rung retry would need
+    // a real refactor of `resolveAddressFull`); intentionally left here as
+    // a single-call wrap to keep the change minimal.
     const outcome = await retryOnceOnTimeout(() =>
       resolveAddressFull(client, resolverInput)
     );
