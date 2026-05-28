@@ -491,7 +491,7 @@ describe('zillow_get_property tool', () => {
       expect(parsed.days_on_market).toBeNull();
     });
 
-    it('nulls out the placeholder tax_annual: 1 (issue #44)', async () => {
+    it('nulls out the placeholder tax_annual: 1 with tax_status="new_construction" (issues #44, #77)', async () => {
       mockFetchHtml.mockResolvedValue(
         htmlWithProperty({ zpid: 1, taxAnnualAmount: 1 } as RawProperty)
       );
@@ -501,10 +501,10 @@ describe('zillow_get_property tool', () => {
         tax_status: string;
       }>(result);
       expect(parsed.tax_annual).toBeNull();
-      expect(parsed.tax_status).toBe('not_yet_assessed');
+      expect(parsed.tax_status).toBe('new_construction');
     });
 
-    it('nulls out the placeholder tax_annual: 0 (issue #44)', async () => {
+    it('nulls out the placeholder tax_annual: 0 with tax_status="new_construction" (issues #44, #77)', async () => {
       mockFetchHtml.mockResolvedValue(
         htmlWithProperty({ zpid: 1, taxAnnualAmount: 0 } as RawProperty)
       );
@@ -514,10 +514,10 @@ describe('zillow_get_property tool', () => {
         tax_status: string;
       }>(result);
       expect(parsed.tax_annual).toBeNull();
-      expect(parsed.tax_status).toBe('not_yet_assessed');
+      expect(parsed.tax_status).toBe('new_construction');
     });
 
-    it('keeps a real tax_annual and sets tax_status="actual"', async () => {
+    it('keeps a real tax_annual and sets tax_status="available" (issue #77)', async () => {
       mockFetchHtml.mockResolvedValue(
         htmlWithProperty({ zpid: 1, taxAnnualAmount: 5432 } as RawProperty)
       );
@@ -527,7 +527,84 @@ describe('zillow_get_property tool', () => {
         tax_status: string;
       }>(result);
       expect(parsed.tax_annual).toBe(5432);
-      expect(parsed.tax_status).toBe('actual');
+      expect(parsed.tax_status).toBe('available');
+    });
+
+    it('sets tax_status="unavailable" when no tax field at all (issue #77)', async () => {
+      // Distinguishes "Zillow has no tax data for this home" from "lookup failed".
+      mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 1 } as RawProperty));
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBeNull();
+      expect(parsed.tax_status).toBe('unavailable');
+    });
+
+    describe('zestimate_status / last_sold_status (issue #77)', () => {
+      it('zestimate_status="available" when zestimate is a positive number', async () => {
+        mockFetchHtml.mockResolvedValue(
+          htmlWithProperty({ zpid: 1, zestimate: 500_000 } as RawProperty)
+        );
+        const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+        const parsed = parseToolResult<{ zestimate_status: string }>(result);
+        expect(parsed.zestimate_status).toBe('available');
+      });
+
+      it('zestimate_status="rent_only" when only rentZestimate is set (e.g. 181 Highland Hts)', async () => {
+        // Session reporter: 181 Highland Hts resolved fine but returned
+        // null sale Zestimate + a real rent Zestimate. That genuinely-
+        // absent state must be distinguishable from a hard lookup miss.
+        mockFetchHtml.mockResolvedValue(
+          htmlWithProperty({ zpid: 1, rentZestimate: 3500 } as RawProperty)
+        );
+        const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+        const parsed = parseToolResult<{ zestimate_status: string }>(result);
+        expect(parsed.zestimate_status).toBe('rent_only');
+      });
+
+      it('zestimate_status="unavailable" when both zestimate and rentZestimate are null (e.g. 193 Downing Pl)', async () => {
+        mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 1 } as RawProperty));
+        const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+        const parsed = parseToolResult<{ zestimate_status: string }>(result);
+        expect(parsed.zestimate_status).toBe('unavailable');
+      });
+
+      it('last_sold_status="available" when a Sold event exists in priceHistory', async () => {
+        mockFetchHtml.mockResolvedValue(
+          htmlWithProperty({
+            zpid: 1,
+            priceHistory: [{ date: '2023-06-01', event: 'Sold', price: 750_000 }],
+          } as RawProperty)
+        );
+        const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+        const parsed = parseToolResult<{ last_sold_status: string }>(result);
+        expect(parsed.last_sold_status).toBe('available');
+      });
+
+      it('last_sold_status="never_sold" when priceHistory has events but no Sold', async () => {
+        // Distinguishes "Zillow saw a price change but no sale" from
+        // "Zillow has no history for this property".
+        mockFetchHtml.mockResolvedValue(
+          htmlWithProperty({
+            zpid: 1,
+            priceHistory: [
+              { date: '2025-01-15', event: 'Listed for sale', price: 800_000 },
+            ],
+          } as RawProperty)
+        );
+        const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+        const parsed = parseToolResult<{ last_sold_status: string }>(result);
+        expect(parsed.last_sold_status).toBe('never_sold');
+      });
+
+      it('last_sold_status="unavailable" when priceHistory is absent', async () => {
+        mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 1 } as RawProperty));
+        const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+        const parsed = parseToolResult<{ last_sold_status: string }>(result);
+        expect(parsed.last_sold_status).toBe('unavailable');
+      });
     });
 
     it('reads tax_annual from resoFacts when top-level is missing (issue #44 fallback)', async () => {

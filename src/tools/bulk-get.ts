@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { classifyBridgeError } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import {
@@ -7,6 +8,11 @@ import {
   format,
   type FormattedProperty,
 } from './properties.js';
+import {
+  BULK_CONCURRENCY,
+  mapWithConcurrency,
+  retryOnceOnTimeout,
+} from './concurrency.js';
 
 /**
  * `zillow_bulk_get`: structured fetch of N properties in one call.
@@ -43,11 +49,10 @@ export function registerBulkGetTools(
     {
       title: 'Bulk-fetch Zillow properties by zpid',
       description:
-        `Fetch up to ${BULK_GET_MAX} Zillow properties in a single call. Returns one structured row per input id ` +
-        '(no side-by-side summary table — use `zillow_compare_properties` for that). Each row is either ' +
+        `Fetch up to ${BULK_GET_MAX} Zillow property records in a single call — the "give me everything for these N saved homes" endpoint. Returns one structured row per input id ` +
+        '(no pivoted side-by-side summary table — for 2-25 listings with a comparison summary use `zillow_compare_properties`). Each row is either ' +
         '`{ zpid, property }` on success or `{ zpid, error }` on failure — one bad zpid never fails the ' +
-        'whole call. Calls fan out concurrently against `/homedetails/<zpid>_zpid/`. Use this for the ' +
-        '"give me everything for these 50 saved homes" workflow.',
+        'whole call. Calls fan out concurrently against `/homedetails/<zpid>_zpid/` (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions).',
       annotations: {
         title: 'Bulk-fetch Zillow properties by zpid',
         readOnlyHint: true,
@@ -87,19 +92,32 @@ export function registerBulkGetTools(
             ').'
         );
       }
-      const rows = await Promise.all(
-        targets.map(async (t): Promise<BulkGetRow> => {
+      // Issue #78: pace fan-out at BULK_CONCURRENCY + retry-once-on-
+      // timeout per sub-request so a single transient SW eviction
+      // doesn't surface as a hard fetch failure for that row.
+      type Target = { zpid?: number | string; url?: string };
+      const rows = await mapWithConcurrency<Target, BulkGetRow>(
+        targets as Target[],
+        BULK_CONCURRENCY,
+        async (t): Promise<BulkGetRow> => {
           const fallbackZpid = 'zpid' in t ? String(t.zpid) : '';
           try {
-            const { raw } = await fetchPropertyRecord(client, t);
+            const { raw } = await retryOnceOnTimeout(() =>
+              fetchPropertyRecord(client, t)
+            );
             return {
               zpid: String(raw.zpid ?? fallbackZpid),
               property: format(raw),
             };
           } catch (e) {
-            return { zpid: fallbackZpid, error: (e as Error).message };
+            const msg = e instanceof Error ? e.message : String(e);
+            const kind = classifyBridgeError(e);
+            let error = msg;
+            if (kind === 'timeout') error = `bridge timeout after retry: ${msg}`;
+            else if (kind === 'bridge_down') error = `bridge unreachable: ${msg}`;
+            return { zpid: fallbackZpid, error };
           }
-        })
+        }
       );
       return textResult({ count: rows.length, rows });
     }

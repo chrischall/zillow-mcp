@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import { registerBulkGetTools, BULK_GET_MAX } from '../../src/tools/bulk-get.js';
+import { FetchproxyTimeoutError } from '../../src/transport-fetchproxy.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
@@ -99,5 +100,62 @@ describe('zillow_bulk_get tool', () => {
     const r = await harness.callTool('zillow_bulk_get', { zpids: [1, 2] });
     const parsed = parseToolResult<Record<string, unknown>>(r);
     expect(parsed.summary).toBeUndefined();
+  });
+
+  describe('bulk concurrency + retry-once-on-timeout (issue #78)', () => {
+    it('retries a sub-request once on FetchproxyTimeoutError, then returns property', async () => {
+      const callsByZpid: Record<string, number> = {};
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? m[1] : '0';
+        callsByZpid[zpid] = (callsByZpid[zpid] ?? 0) + 1;
+        if (zpid === '20' && callsByZpid[zpid] === 1) {
+          throw new FetchproxyTimeoutError({
+            url: '/x',
+            timeoutMs: 30_000,
+          });
+        }
+        return htmlWith({ zpid: parseInt(zpid, 10), price: 999 });
+      });
+      const r = await harness.callTool('zillow_bulk_get', {
+        zpids: [10, 20, 30],
+      });
+      const parsed = parseToolResult<{
+        rows: Array<{ zpid: string; property?: { price: number }; error?: string }>;
+      }>(r);
+      expect(parsed.rows[1].error).toBeUndefined();
+      expect(parsed.rows[1].property?.price).toBe(999);
+      expect(callsByZpid['20']).toBe(2);
+    });
+
+    it('surfaces a bridge-timeout error after retry exhaustion (NOT a generic miss)', async () => {
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyTimeoutError({ url: '/x', timeoutMs: 30_000 });
+      });
+      const r = await harness.callTool('zillow_bulk_get', { zpids: [42] });
+      const parsed = parseToolResult<{
+        rows: Array<{ error?: string }>;
+      }>(r);
+      expect(parsed.rows[0].error).toBeDefined();
+      expect(parsed.rows[0].error).toMatch(/timeout/i);
+    });
+
+    it('caps internal concurrency to BULK_CONCURRENCY', async () => {
+      let inFlight = 0;
+      let peak = 0;
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 8));
+        inFlight--;
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? parseInt(m[1], 10) : 0;
+        return htmlWith({ zpid, price: 1 });
+      });
+      const zpids = Array.from({ length: 14 }, (_, i) => i + 1);
+      await harness.callTool('zillow_bulk_get', { zpids });
+      expect(peak).toBeLessThanOrEqual(6);
+      expect(peak).toBeGreaterThan(1);
+    });
   });
 });

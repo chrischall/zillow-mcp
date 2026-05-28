@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import { registerResolveAddressesTools } from '../../src/tools/resolve-addresses.js';
+import { FetchproxyTimeoutError } from '../../src/transport-fetchproxy.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
@@ -148,5 +149,107 @@ describe('zillow_resolve_addresses tool', () => {
   it('rejects empty addresses[] arrays', async () => {
     const r = await harness.callTool('zillow_resolve_addresses', { addresses: [] });
     expect(r.isError).toBeTruthy();
+  });
+
+  describe('bulk concurrency + retry-once-on-timeout (issue #78)', () => {
+    it('retries a sub-request once on FetchproxyTimeoutError, then resolves cleanly', async () => {
+      // First fetch for row 2 throws a timeout; the retry succeeds.
+      // Row 2 should land as `resolved: true` — a transient SW eviction
+      // must NOT surface as a hard "no listing found".
+      let row2Calls = 0;
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        if (path.includes('Highland')) {
+          row2Calls++;
+          if (row2Calls === 1) {
+            throw new FetchproxyTimeoutError({
+              url: path,
+              timeoutMs: 30_000,
+            });
+          }
+          return htmlWithListing({
+            zpid: 200,
+            streetAddress: '181 Highland Hts',
+            city: 'Lake Lure',
+            state: 'NC',
+            zip: '28746',
+          });
+        }
+        return htmlWithListing({
+          zpid: 100,
+          streetAddress: '126 Sleeping Bear Ln',
+          city: 'Lake Lure',
+          state: 'NC',
+          zip: '28746',
+        });
+      });
+
+      const r = await harness.callTool('zillow_resolve_addresses', {
+        addresses: [
+          '126 Sleeping Bear Ln, Lake Lure, NC',
+          '181 Highland Hts, Lake Lure, NC',
+        ],
+      });
+      const parsed = parseToolResult<{
+        results: Array<{ resolved: boolean; zpid?: string; error?: string }>;
+      }>(r);
+      expect(parsed.results[0].resolved).toBe(true);
+      expect(parsed.results[1].resolved).toBe(true);
+      expect(parsed.results[1].zpid).toBe('200');
+      expect(row2Calls).toBe(2);
+    });
+
+    it('surfaces a distinct bridge-timeout error after the retry also times out — NOT "no listing found"', async () => {
+      // Reporter's specific complaint: a bridge timeout used to render
+      // as `resolved: false` with no error context, indistinguishable
+      // from a genuine miss. After retry exhaustion the row must carry
+      // an error that mentions the bridge timeout, not the
+      // "no listing found" string the miss path uses.
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyTimeoutError({ url: '/x', timeoutMs: 30_000 });
+      });
+      const r = await harness.callTool('zillow_resolve_addresses', {
+        addresses: ['1 Foo St, Bar, NC'],
+      });
+      const parsed = parseToolResult<{
+        results: Array<{ resolved: boolean; error?: string }>;
+      }>(r);
+      expect(parsed.results[0].resolved).toBe(false);
+      expect(parsed.results[0].error).toBeDefined();
+      // Must NOT collapse onto the genuine-miss copy.
+      expect(parsed.results[0].error).not.toMatch(/no listing found/i);
+      // Must mention the bridge timeout so the caller can decide to retry.
+      expect(parsed.results[0].error).toMatch(/timeout/i);
+    });
+
+    it('caps internal concurrency to BULK_CONCURRENCY (issue #78)', async () => {
+      // 14 addresses, watch in-flight count peak. With unlimited fan-out
+      // it would peak at 14; with the cap it should stay ≤ 6.
+      let inFlight = 0;
+      let peak = 0;
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 8));
+        inFlight--;
+        const m = /\/homes\/([^_]+)_rb/.exec(path);
+        const slug = m ? decodeURIComponent(m[1]) : '';
+        // Use the first word of the slug as a fake zpid by index.
+        const i = parseInt(slug.split(' ')[0] || '0', 10);
+        return htmlWithListing({
+          zpid: i + 1000,
+          streetAddress: `${i} Main St`,
+          city: 'Brooklyn',
+          state: 'NY',
+          zip: '11215',
+        });
+      });
+      const addresses = Array.from(
+        { length: 14 },
+        (_, i) => `${i} Main St, Brooklyn, NY`
+      );
+      await harness.callTool('zillow_resolve_addresses', { addresses });
+      expect(peak).toBeLessThanOrEqual(6);
+      expect(peak).toBeGreaterThan(1);
+    });
   });
 });

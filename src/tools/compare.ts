@@ -65,7 +65,8 @@ export function registerCompareTools(
     {
       title: 'Compare multiple Zillow properties side-by-side',
       description:
-        "Fetch and compare 2-25 Zillow properties side-by-side. Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won't fail the whole call. Calls are concurrent. For larger batches, use `zillow_bulk_get`.",
+        'Side-by-side analysis of 2-25 Zillow properties. **If you just want N property records, use `zillow_bulk_get` instead** — compare is for genuine side-by-side (its pivoted summary table is the value-add); bulk_get is the fetch-many endpoint and accepts up to 200 ids. (Issue #79 raised this cap from 8 to 25 — a 19-listing analysis now fits in one call instead of three.) ' +
+        'Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won\'t fail the whole call. Calls are concurrent.',
       annotations: {
         title: 'Compare multiple Zillow properties side-by-side',
         readOnlyHint: true,
