@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
 import {
   buildAddressSlug,
-  expandStreetSuffix,
   registerGetByAddressTools,
 } from '../../src/tools/get-by-address.js';
+import { swapStreetSuffix } from '../../src/tools/resolver.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -60,33 +60,33 @@ function htmlWithFirstListing(args: {
   )}</script>`;
 }
 
-describe('expandStreetSuffix', () => {
+describe('swapStreetSuffix', () => {
   it('returns null when the address has no recognized suffix', () => {
-    expect(expandStreetSuffix('1 Main')).toBeNull();
+    expect(swapStreetSuffix('1 Main')).toBeNull();
   });
 
   it('expands an abbreviated suffix into its long form (Rd -> Road)', () => {
-    expect(expandStreetSuffix('268 Mallard Rd')).toBe('268 Mallard Road');
+    expect(swapStreetSuffix('268 Mallard Rd')).toBe('268 Mallard Road');
   });
 
   it('contracts a long suffix into its abbreviated form (Lane -> Ln)', () => {
-    expect(expandStreetSuffix('12 Eagle Lane')).toBe('12 Eagle Ln');
+    expect(swapStreetSuffix('12 Eagle Lane')).toBe('12 Eagle Ln');
   });
 
   it('handles a trailing period on an abbreviated suffix (Rd.)', () => {
     // CONSOLIDATION (realty-mcp#1): now delegates to realty-core's
     // canonical `expandSuffix`, which preserves the trailing period
     // (`Road.`) rather than stripping it as the old local impl did.
-    expect(expandStreetSuffix('268 Mallard Rd.')).toBe('268 Mallard Road.');
+    expect(swapStreetSuffix('268 Mallard Rd.')).toBe('268 Mallard Road.');
   });
 
   it('preserves casing of the rest of the address', () => {
-    expect(expandStreetSuffix('268 MALLARD Rd')).toBe('268 MALLARD Road');
+    expect(swapStreetSuffix('268 MALLARD Rd')).toBe('268 MALLARD Road');
   });
 
   it('only swaps the suffix when it appears at the end of the street', () => {
     // "Rd" in the middle of a name (e.g. "Roderick") shouldn't be touched.
-    expect(expandStreetSuffix('100 Roderick Dr')).toBe('100 Roderick Drive');
+    expect(swapStreetSuffix('100 Roderick Dr')).toBe('100 Roderick Drive');
   });
 });
 

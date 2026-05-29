@@ -429,7 +429,7 @@ export { SUFFIX_PAIRS };
  *
  * CONSOLIDATION: delegates to realty-core's `expandSuffix` (which
  * returns ALL suffix alternates) and takes the first. The single-swap
- * contract is preserved for the resolver / `expandStreetSuffix` callers.
+ * contract is preserved for the resolver's callers.
  */
 export function swapStreetSuffix(address: string): string | null {
   const [first] = expandSuffix(address);

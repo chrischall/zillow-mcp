@@ -3,11 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { formatListing } from './search.js';
-import {
-  buildAddressSlug,
-  resolveAddressFull,
-  swapStreetSuffix,
-} from './resolver.js';
+import { buildAddressSlug, resolveAddressFull } from './resolver.js';
 
 /**
  * `zillow_get_by_address`: resolve a free-text address (and optional
@@ -29,14 +25,8 @@ export interface GetByAddressInput {
   price_max?: number;
 }
 
-// Re-exports kept for backward-compatibility with existing tests.
+// Re-export kept for backward-compatibility with existing tests.
 export { buildAddressSlug };
-/**
- * @deprecated Use `swapStreetSuffix` from `./resolver.js` — both names
- * call the same function. Kept exported so existing tests / callers
- * continue to compile.
- */
-export const expandStreetSuffix = swapStreetSuffix;
 
 export interface GetByAddressResult {
   resolved: boolean;
