@@ -91,6 +91,18 @@ describe('extractFeatures', () => {
     it('returns "unknown" when "basement" is mentioned without qualifier', () => {
       expect(extractFeatures('Includes a basement', baseCommunities).basement).toBe('unknown');
     });
+    it('does NOT false-positive to "finished" via a free-floating preposition (canonical detector)', () => {
+      // Behavior delta from adopting realty-core's canonical detector:
+      // the tight BASEMENT_CONNECTOR class only bridges "basement" to a
+      // state word across is/was/are/were/punctuation — NOT prepositions
+      // like "with". The old looser `[^.!?]{0,30}?` window crossed "with"
+      // and mis-tagged "basement with finished oak shelving" as
+      // 'finished' (the shelving is finished, not the basement). It now
+      // correctly resolves to 'unknown'.
+      expect(
+        extractFeatures('Basement with finished oak shelving', baseCommunities).basement
+      ).toBe('unknown');
+    });
     it('returns null when no basement language is present', () => {
       expect(extractFeatures('Three bedroom home', baseCommunities).basement).toBeNull();
     });
