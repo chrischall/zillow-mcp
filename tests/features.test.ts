@@ -185,6 +185,28 @@ describe('extractFeatures', () => {
     it('matches "marina" as the most general option', () => {
       expect(extractFeatures('Walk to the marina', baseCommunities).dock).toBe('marina');
     });
+    // CANONICAL DELTA (realty-mcp#1, realty-core 0.4.0): the marina detector
+    // now guards against place-names — "Marina Bay" / "Marina del Rey" /
+    // "Marina Dr" are addresses/neighborhoods, NOT a real marina amenity, so
+    // they no longer false-positive to `dock: 'marina'`. Genuine marina
+    // language (a marina with boat access / steps from the marina) still maps.
+    it('does NOT treat the place-name "Marina Bay" as a marina amenity', () => {
+      expect(extractFeatures('Marina Bay', baseCommunities).dock).toBeNull();
+    });
+    it('does NOT treat the place-name "Marina del Rey" as a marina amenity', () => {
+      expect(extractFeatures('Marina del Rey', baseCommunities).dock).toBeNull();
+    });
+    it('does NOT treat a "Marina Dr" street name as a marina amenity', () => {
+      expect(extractFeatures('123 Marina Dr', baseCommunities).dock).toBeNull();
+    });
+    it('still matches a genuine marina-with-boat-access description', () => {
+      expect(
+        extractFeatures('Beautiful home in marina with boat access', baseCommunities).dock
+      ).toBe('marina');
+    });
+    it('still matches "Steps from the marina."', () => {
+      expect(extractFeatures('Steps from the marina.', baseCommunities).dock).toBe('marina');
+    });
     it('returns null when no dock language is present', () => {
       expect(extractFeatures('Mountain views', baseCommunities).dock).toBeNull();
     });

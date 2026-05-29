@@ -194,6 +194,14 @@ describe('normalizePriceEvent', () => {
     expect(typeOf('Closed')).toBe('Sold');
   });
 
+  // CANONICAL DELTA (realty-mcp#1, realty-core 0.4.0): `mapEventType` now
+  // recognizes "completed" as a close-of-sale synonym, so "Sale Completed" /
+  // "Completed" classify as Sold (were Listed by default under the old mapper).
+  it('DELTA: "completed" sale synonyms now classify as Sold', () => {
+    expect(typeOf('Sale Completed')).toBe('Sold');
+    expect(typeOf('Completed')).toBe('Sold');
+  });
+
   it('carries date/price/source_mls/price_change_pct through', () => {
     const normalized = normalizePriceEvent({
       date: '2025-01-15',
