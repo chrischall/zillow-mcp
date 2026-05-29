@@ -8,7 +8,11 @@ import {
 } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
-import { resolveAddressFull, type ResolverInput } from './resolver.js';
+import {
+  resolveAddressFull,
+  type ResolverInput,
+  type ResolverVia,
+} from './resolver.js';
 import { parseFreeTextAddress } from './address-parse.js';
 
 /**
@@ -59,13 +63,15 @@ export interface ResolveAddressesRow {
   /**
    * How the match was made.
    * - `exact`            — rung 1 direct hit.
-   * - `suffix_expansion` — rung 2 (issue #51 + #76).
-   * - `locality_remap`   — rung 3 (issue #75) — city-drop / alias.
-   * - `search_fallback`  — rung 4 (issue #52 + #74).
+   * - `autocomplete`     — rung 2 (issue #101) — canonical typeahead.
+   * - `suffix_expansion` — rung 3 (issue #51 + #76).
+   * - `locality_remap`   — rung 4 (issue #75) — city-drop / alias.
+   * - `search_fallback`  — rung 5 (issue #52 + #74).
    * - `none`             — all rungs missed.
    */
   confidence:
     | 'exact'
+    | 'autocomplete'
     | 'suffix_expansion'
     | 'locality_remap'
     | 'search_fallback'
@@ -104,9 +110,10 @@ function normalizeRow(row: ResolveAddressesInputRow): ResolverInput & {
 
 /** Map a ResolverVia onto the bulk-row confidence string. */
 function viaToConfidence(
-  via: 'direct' | 'suffix_expansion' | 'locality_remap' | 'search_fallback'
+  via: ResolverVia
 ):
   | 'exact'
+  | 'autocomplete'
   | 'suffix_expansion'
   | 'locality_remap'
   | 'search_fallback' {
@@ -233,10 +240,10 @@ export function registerResolveAddressesTools(
         `Resolve up to ${RESOLVE_ADDRESSES_MAX} free-text or structured addresses to Zillow zpids + canonical URLs in one call. ` +
         'Each row may be a bare string or `{address, city?, state?, zip?, price_hint?}`. ' +
         'IMPORTANT: `price_hint` (USD) is frequently load-bearing — for rural / mountain-MLS / locality-mismatched rows the search-fallback rung is often the ONLY rung that hits, and without a price band it cannot disambiguate. The resolver derives a ±0.5% band from the hint. Always pass `price_hint` for any row where you have a sense of the price. ' +
-        'Runs the same 4-rung resolver as `zillow_get_by_address` (direct → suffix-expansion → locality-remap → search-fallback) — bulk and single walk the same ladder via the shared resolver, so they match the same partition for the same inputs. ' +
+        'Runs the same 5-rung resolver as `zillow_get_by_address` (direct → autocomplete-typeahead → suffix-expansion → locality-remap → search-fallback) — bulk and single walk the same ladder via the shared resolver, so they match the same partition for the same inputs. ' +
         'Locality-remap rung handles real-world mountain-MLS cases (Lake Lure <-> Rutherfordton, Beech/Sugar Mountain <-> Banner Elk) where Zillow indexes the parent locality; when it fires, `queried_city` (what you sent) and `resolved_city` (what Zillow returned) are both set so the caller can see the substitution. ' +
         'Concurrent fan-out — a 60-address batch returns in roughly one round trip instead of 60. Per-row error capture so one bad address never fails the batch. ' +
-        '`confidence` is `"exact"` for direct hits, `"suffix_expansion"` / `"locality_remap"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
+        '`confidence` is `"exact"` for direct hits, `"autocomplete"` / `"suffix_expansion"` / `"locality_remap"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
         'Read-only, no auth required.',
       annotations: {
         title: 'Bulk-resolve addresses → Zillow zpids',
