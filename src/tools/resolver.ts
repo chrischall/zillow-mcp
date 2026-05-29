@@ -21,6 +21,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import {
   SUFFIX_PAIRS,
+  addressMatch,
   buildVariants,
   compoundSplits,
   expandSuffix,
@@ -33,7 +34,6 @@ import {
   buildSearchQueryState,
   extractSearchPageState,
   formatListing,
-  listingsMatchLocation,
   locationTokens,
   resolveLocationOrListings,
   type RawListing,
@@ -82,12 +82,46 @@ export function buildAddressSlug(
 }
 
 /**
- * One direct-resolver pass: fetch `/homes/<slug>_rb/` and return the
- * first listing if it matches the input tokens. Returns null on miss.
+ * Pull the listing's own street address (the canonical street line) from a
+ * raw result, preferring the structured `hdpData.homeInfo.streetAddress`
+ * and falling back to the flat fields. The leading comma-segment of the
+ * flat `address` is taken so a `"4242 Foo Way, Lake Lure, NC"` blob
+ * collapses to just `"4242 Foo Way"`.
+ */
+function listingStreetAddress(raw: RawListing): string {
+  const info = raw.hdpData?.homeInfo ?? {};
+  const fromFlat = raw.addressStreet ?? raw.address?.split(',')[0];
+  return (info.streetAddress ?? fromFlat ?? '').trim();
+}
+
+/**
+ * One direct-resolver pass: fetch `/homes/<slug>_rb/` and return the first
+ * listing ONLY when its street address genuinely matches the query street.
+ * Returns null on miss.
+ *
+ * Match guard (PR #109 follow-up): the acceptance gate is realty-core's
+ * `addressMatch(street, listing.streetAddress)`, which anchors on the
+ * leading numeric token (the house number MUST match exactly) and then
+ * requires a strict-majority (>0.5) overlap of the remaining street
+ * tokens. The previous gate — `listingsMatchLocation` over
+ * `locationTokens(slug)` — accepted on ANY non-state token overlap,
+ * INCLUDING city tokens, so a junk greedy street-variant slug like
+ * `"1 Str Eet Lake Lure NC"` (now emitted by realty-core's broader
+ * `compoundSplits`) mis-resolved an unrelated `"4242 Totally Unrelated
+ * Way, Lake Lure, NC"` purely because `lake`/`lure` overlapped. Anchoring
+ * on the street number closes that hole while still accepting exact /
+ * strong street matches.
+ *
+ * `street` is the street portion of the query (the caller already has it
+ * parsed — e.g. `input.address` or a street variant). An empty / zero-token
+ * street tokenizes to nothing discriminating, so `addressMatch` returns
+ * `matched: false` and we refuse — preserving the existing empty-input /
+ * zero-token refusal behavior.
  */
 export async function resolveDirect(
   client: ZillowClient,
-  slug: string
+  slug: string,
+  street: string
 ): Promise<{ raw: RawListing; formatted: NonNullable<ReturnType<typeof formatListing>> } | null> {
   const path = buildSearchPath(slug);
   const html = await client.fetchHtml(path);
@@ -103,7 +137,10 @@ export async function resolveDirect(
   if (!firstRaw) return null;
   const formatted = formatListing(firstRaw);
   if (!formatted) return null;
-  if (!listingsMatchLocation([firstRaw], locationTokens(slug))) return null;
+  // Street-number-anchored guard: reject when the returned listing's street
+  // doesn't genuinely match the query street (house number + strict-majority
+  // street-token overlap), even if the city happens to match.
+  if (!addressMatch(street, listingStreetAddress(firstRaw)).matched) return null;
   return { raw: firstRaw, formatted };
 }
 
@@ -391,8 +428,10 @@ async function autocompleteRung(
   const match = selectAutocompleteMatch(candidates, input.address);
   if (!match) return null;
   // Second hop: resolve the canonical autocomplete address to a zpid via
-  // the resolver's existing direct path.
-  const hit = await resolveDirect(client, match);
+  // the resolver's existing direct path. Anchor the match guard on the
+  // caller's street (the whole-token street-match against `match` already
+  // ran in `selectAutocompleteMatch`).
+  const hit = await resolveDirect(client, match, input.address);
   if (!hit) return null;
   return { ...hit, slug: match };
 }
@@ -555,7 +594,7 @@ async function localityRemap(
   if (input.state || input.zip) {
     const slug = buildAddressSlug({ ...input, city: undefined });
     if (slug.trim().length > 0) {
-      const hit = await resolveDirect(client, slug);
+      const hit = await resolveDirect(client, slug, input.address);
       if (hit) return { ...hit, slug };
     }
   }
@@ -564,7 +603,7 @@ async function localityRemap(
   const aliases = aliasMap[input.city.toLowerCase()] ?? [];
   for (const alias of aliases) {
     const slug = buildAddressSlug({ ...input, city: alias });
-    const hit = await resolveDirect(client, slug);
+    const hit = await resolveDirect(client, slug, input.address);
     if (hit) return { ...hit, slug };
   }
   return null;
@@ -602,10 +641,11 @@ export async function resolveAddressFull(
   // propagates immediately.
   let swallowedTimeout: FetchproxyTimeoutError | null = null;
   const directOrTimeoutMiss = async (
-    slug: string
+    slug: string,
+    street: string
   ): Promise<Awaited<ReturnType<typeof resolveDirect>>> => {
     try {
-      return await resolveDirect(client, slug);
+      return await resolveDirect(client, slug, street);
     } catch (e) {
       if (e instanceof FetchproxyTimeoutError) {
         swallowedTimeout = e;
@@ -616,7 +656,7 @@ export async function resolveAddressFull(
   };
 
   // Rung 1: direct.
-  const direct = await directOrTimeoutMiss(baseSlug);
+  const direct = await directOrTimeoutMiss(baseSlug, input.address);
   if (direct) {
     return {
       hit: {
@@ -663,10 +703,13 @@ export async function resolveAddressFull(
   }
 
   // Rung 3: suffix expansion + compound-token variants (issue #51 + #76).
+  // The variant street `v` is the street portion the direct guard anchors
+  // on — so a junk greedy compound split (`"1 Str Eet"`) is matched against
+  // the returned listing's street number and rejected when they differ.
   const variants = streetAddressVariants(input.address).slice(1); // skip original
   for (const v of variants) {
     const slug = buildAddressSlug({ ...input, address: v });
-    const hit = await directOrTimeoutMiss(slug);
+    const hit = await directOrTimeoutMiss(slug, v);
     if (hit) {
       return {
         hit: {
