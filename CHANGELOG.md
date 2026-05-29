@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/chrischall/zillow-mcp/compare/v0.7.0...v0.8.0) (2026-05-29)
+
+
+### Features
+
+* adopt @chrischall/realty-core 0.4.0 (marina place-name guard + completed→Sold) ([#97](https://github.com/chrischall/zillow-mcp/issues/97)) ([051712e](https://github.com/chrischall/zillow-mcp/commit/051712e826177d678f5a530fd156ab10e34e0045))
+* adopt realty-core extractFeatures (canonical basement detector) + drop inline copy ([#96](https://github.com/chrischall/zillow-mcp/issues/96)) ([ce8846b](https://github.com/chrischall/zillow-mcp/commit/ce8846b467d5e65bd5f712c3d1a571ecc182fe61))
+* consume @chrischall/realty-core 0.3.1 — drop inline hoisted helpers ([#95](https://github.com/chrischall/zillow-mcp/issues/95)) ([0be850a](https://github.com/chrischall/zillow-mcp/commit/0be850a0ca5f3d36fe7fb0ee45eebdf90ae6e376))
+* **properties:** add derived lot_size_acres ([#82](https://github.com/chrischall/zillow-mcp/issues/82)) ([#93](https://github.com/chrischall/zillow-mcp/issues/93)) ([1ad922c](https://github.com/chrischall/zillow-mcp/commit/1ad922c9f5c02c0e66f0e69f3dd3ea04b514e898))
+
+
+### Bug Fixes
+
+* **bulk-get:** classify PerimeterX captcha, throttle, and auto-chunk ([#90](https://github.com/chrischall/zillow-mcp/issues/90)) ([#91](https://github.com/chrischall/zillow-mcp/issues/91)) ([4fb6ac3](https://github.com/chrischall/zillow-mcp/commit/4fb6ac3bdc248eebda42586feebe598476630d2e))
+
 ## [0.7.0](https://github.com/chrischall/zillow-mcp/compare/v0.6.0...v0.7.0) (2026-05-28)
 
 
