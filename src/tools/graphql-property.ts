@@ -53,13 +53,26 @@ export const PROPERTY_DETAIL_OPERATION_NAME = 'PropertyDetail';
  * persisted-query hash. We author the operation by value here so there is
  * nothing to rotate.
  *
- * Field selection: EXACTLY the `property { … }` keys the downstream parser
- * consumes (GraphQL field names == the response keys `format()` /
- * `normalizeLot()` / the history+tax formatters read). The selection set
- * mirrors {@link RawProperty} + {@link RawGraphqlProperty} (lot fields) +
- * the nested `RawResoFacts` / `RawPriceHistoryEntry` / `RawTaxHistoryEntry`
- * / schools shapes. Keep this in sync with those types — an over-broad
- * selection risks a schema rejection that needlessly falls through to SSR.
+ * Field selection: EXACTLY the `property { … }` keys the downstream
+ * parsers consume (GraphQL field names == the response keys their
+ * readers expect). This selection feeds EVERY GraphQL-first tool that
+ * shares `fetchPropertyRecord`, so it covers all of:
+ *   - `format()` / `normalizeLot()` / the history+tax formatters
+ *     (property facts, lot, price/tax history, schools).
+ *   - `photos.ts` — `photos` / `responsivePhotos` / `originalPhotos`
+ *     (with `mixedSources.{jpeg,webp}.{url,width}`, `caption`,
+ *     `subjectType`), `photoCount`, `streetViewImageUrl`, `hiResImageLink`.
+ *     WITHOUT these, `zillow_get_property_photos` returns an empty gallery
+ *     under the inline-primary path (the SSR floor would carry them, but
+ *     GraphQL succeeds first in prod). See `PropertyWithPhotos`.
+ *   - `zestimate.ts` — `homeValueChartData` / `rentValueChartData`
+ *     (each `{ name, points { x y date value } }`) for the Zestimate
+ *     trend. See `RawPropertyWithCharts`.
+ * The selection set mirrors {@link RawProperty} + {@link RawGraphqlProperty}
+ * (lot fields) + the nested `RawResoFacts` / `RawPriceHistoryEntry` /
+ * `RawTaxHistoryEntry` / schools / photo / chart shapes. Keep this in
+ * sync with those types — an over-broad selection risks a schema
+ * rejection that needlessly falls through to SSR.
  *
  * The operation args mirror the persisted query's variables — `zpid`,
  * `altId`, `deviceTypeV2`, `includeLastSoldListing`. The exact arg TYPES
@@ -139,6 +152,72 @@ export const PROPERTY_DETAIL_INLINE_QUERY = `query ${PROPERTY_DETAIL_OPERATION_N
       distance
       type
       studentsPerTeacher
+    }
+    photoCount
+    streetViewImageUrl
+    hiResImageLink
+    photos {
+      caption
+      subjectType
+      url
+      mixedSources {
+        jpeg {
+          url
+          width
+        }
+        webp {
+          url
+          width
+        }
+      }
+    }
+    responsivePhotos {
+      caption
+      subjectType
+      url
+      mixedSources {
+        jpeg {
+          url
+          width
+        }
+        webp {
+          url
+          width
+        }
+      }
+    }
+    originalPhotos {
+      caption
+      subjectType
+      url
+      mixedSources {
+        jpeg {
+          url
+          width
+        }
+        webp {
+          url
+          width
+        }
+      }
+    }
+    homeValueChartData {
+      name
+      points {
+        x
+        y
+        date
+        value
+      }
+    }
+    rentValueChartData {
+      name
+      points {
+        x
+        y
+        date
+        value
+      }
     }
   }
 }`;
