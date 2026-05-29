@@ -14,10 +14,22 @@ import {
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
-const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
+// `fetchPropertyRecord` tries GraphQL first (issue #99); these bulk tests
+// cover the SSR scrape + throttle/deadline machinery, so `fetchJson` is
+// stubbed to reject → the per-row fetch falls back to the SSR `fetchHtml`
+// the assertions drive. (A BotWallError thrown from `fetchHtml` still
+// propagates, exercising the bot-wall path.)
+const mockFetchJson = vi.fn();
+const mockClient = {
+  fetchHtml: mockFetchHtml,
+  fetchJson: mockFetchJson,
+} as unknown as ZillowClient;
 
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
+});
 afterAll(async () => {
   if (harness) await harness.close();
 });
@@ -42,6 +54,10 @@ const FAST_TUNING = {
   backoffBaseMs: 1,
   backoffCapMs: 4,
   rng: () => 1,
+  // Tiny overall deadline (issue #98) so a hung row trips the partial-
+  // results path instantly instead of stalling the suite. Real default
+  // (well under the MCP client timeout) is exercised separately.
+  overallDeadlineMs: 200,
 };
 
 describe('zillow_bulk_get tool', () => {
@@ -309,6 +325,83 @@ describe('zillow_bulk_get tool', () => {
       expect(parsed.rows[0].error_kind).toBe('bot_challenge');
       expect(parsed.rows[0].error).not.toMatch(/redirected/i);
       expect(parsed.rows[0].error).not.toMatch(/no listing found/i);
+    });
+  });
+
+  describe('overall hard deadline → partial results, never wedges (issue #98)', () => {
+    it('returns partial results when a single row hangs, others still resolve', async () => {
+      // zpid 20 never settles; the overall deadline must fire and the
+      // call must return with the other rows' real data plus a per-row
+      // marker for the hung row — NOT hang for the full client timeout.
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? m[1] : '0';
+        if (zpid === '20') {
+          // Never resolves — simulates the wedging row from the report.
+          return new Promise<string>(() => {});
+        }
+        return htmlWith({ zpid: parseInt(zpid, 10), price: 777 });
+      });
+      const r = await harness.callTool(
+        'zillow_bulk_get',
+        { zpids: [10, 20, 30] },
+        // tiny deadline so the test resolves instantly
+      );
+      const parsed = parseToolResult<{
+        count: number;
+        pending?: number;
+        rows: Array<{
+          zpid: string;
+          property?: { price: number };
+          error?: string;
+          error_kind?: string;
+        }>;
+      }>(r);
+      // Every input id still produces exactly one row, in input order.
+      expect(parsed.count).toBe(3);
+      expect(parsed.rows.map((row) => row.zpid)).toEqual(['10', '20', '30']);
+      // The good rows returned real data.
+      expect(parsed.rows[0].property?.price).toBe(777);
+      expect(parsed.rows[2].property?.price).toBe(777);
+      // The hung row is surfaced as pending — distinct, machine-readable,
+      // and NOT a generic miss / not-found.
+      expect(parsed.rows[1].property).toBeUndefined();
+      expect(parsed.rows[1].error_kind).toBe('pending');
+      expect(parsed.rows[1].error).not.toMatch(/could not locate property/i);
+      // The partial-result envelope advertises the pending count.
+      expect(parsed.pending).toBe(1);
+    }, 5000);
+
+    it('does not poison the connection: the handler resolves promptly even with a hung row', async () => {
+      // Regression guard for the wedge: the call must settle well within
+      // the test timeout despite a permanently-hanging row.
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? m[1] : '0';
+        if (zpid === '5') return new Promise<string>(() => {});
+        return htmlWith({ zpid: parseInt(zpid, 10), price: 1 });
+      });
+      const start = Date.now();
+      const r = await harness.callTool('zillow_bulk_get', { zpids: [1, 5, 9] });
+      const elapsed = Date.now() - start;
+      expect(r.isError).toBeFalsy();
+      // The default test deadline is tiny (FAST_TUNING) so this returns fast.
+      expect(elapsed).toBeLessThan(3000);
+    }, 5000);
+
+    it('all rows resolving before the deadline → no pending marker', async () => {
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? parseInt(m[1], 10) : 0;
+        return htmlWith({ zpid, price: zpid });
+      });
+      const r = await harness.callTool('zillow_bulk_get', { zpids: [1, 2] });
+      const parsed = parseToolResult<{
+        pending?: number;
+        rows: Array<{ error_kind?: string }>;
+      }>(r);
+      expect(parsed.pending ?? 0).toBe(0);
+      expect(parsed.rows.every((row) => row.error_kind === undefined)).toBe(true);
     });
   });
 

@@ -9,10 +9,14 @@ import {
   sqftToAcres,
   TAX_SENTINEL_THRESHOLD,
 } from '@chrischall/realty-core';
-import type { ZillowClient } from '../client.js';
+import { BotWallError, type ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
+import {
+  PersistedQueryNotFoundError,
+  fetchPropertyViaGraphql,
+} from './graphql-property.js';
 import {
   extractFeatures,
   loadCommunities,
@@ -350,12 +354,13 @@ export function buildPath(args: {
 }
 
 /**
- * Fetch + parse a Zillow property record. Shared by `zillow_get_property`,
- * `zillow_compare_properties`, `zillow_get_price_history`,
- * `zillow_get_tax_history`, and any other tool that needs the full
- * homedetails JSON. Throws on fetch error or unparseable page state.
+ * SSR fallback: GET `/homedetails/<zpid>_zpid/`, parse `__NEXT_DATA__`,
+ * and pull the property out of `gdpClientCache`. This is the original
+ * scrape path — now the FALLBACK behind the GraphQL endpoint (issue #99)
+ * because it trips PerimeterX at scale. Throws on fetch error or
+ * unparseable page state.
  */
-export async function fetchPropertyRecord(
+export async function fetchPropertyRecordViaSsr(
   client: ZillowClient,
   args: { zpid?: number | string; url?: string }
 ): Promise<{ raw: RawProperty; path: string }> {
@@ -380,6 +385,82 @@ export async function fetchPropertyRecord(
     );
   }
   return { raw: property, path };
+}
+
+/**
+ * Resolve a numeric zpid from `{ zpid, url }` so we can hit the GraphQL
+ * endpoint (which keys on zpid). Returns null for a slug-only URL with
+ * no `_zpid` token — those can only go through the SSR resolver.
+ */
+function resolveZpid(args: {
+  zpid?: number | string;
+  url?: string;
+}): { zpid: number | string; url?: string } | null {
+  if (args.zpid !== undefined) return { zpid: args.zpid, url: args.url };
+  if (args.url) {
+    const fromUrl = extractZpidFromUrl(args.url);
+    if (fromUrl !== null) return { zpid: fromUrl, url: args.url };
+  }
+  return null;
+}
+
+/**
+ * Fetch + parse a Zillow property record. Shared by `zillow_get_property`,
+ * `zillow_compare_properties`, `zillow_get_price_history`,
+ * `zillow_get_tax_history`, `zillow_get_property_photos`, and
+ * `zillow_bulk_get`.
+ *
+ * Issue #99: the PRIMARY fetch is now Zillow's own persistedQuery GraphQL
+ * endpoint (`fetchPropertyViaGraphql`), which serves the same listings
+ * without tripping PerimeterX at the scale the SSR scrape did. The SSR
+ * scrape (`fetchPropertyRecordViaSsr`) is the FALLBACK, used when:
+ *   - the input is a slug-only URL with no zpid (GraphQL needs a zpid), or
+ *   - the GraphQL attempt fails for a non-bot-wall reason (hash rotated,
+ *     shape drift, transport error).
+ *
+ * A `BotWallError` from GraphQL is NOT caught — it propagates so the
+ * caller's bot-wall handling (bulk-get backoff / partial results) kicks
+ * in. Falling back to the (more bot-wall-prone) SSR scrape on a wall
+ * would just trip it again.
+ *
+ * Throws on fetch error or unparseable page state.
+ */
+export async function fetchPropertyRecord(
+  client: ZillowClient,
+  args: { zpid?: number | string; url?: string }
+): Promise<{ raw: RawProperty; path: string }> {
+  const resolved = resolveZpid(args);
+  // No zpid to key the GraphQL query on → SSR resolver is the only path
+  // (it also raises the actionable InvalidPropertyUrlError for slug-only
+  // URLs, preserving the existing contract).
+  if (!resolved) {
+    return fetchPropertyRecordViaSsr(client, args);
+  }
+  try {
+    return await fetchPropertyViaGraphql(client, {
+      zpid: resolved.zpid,
+      url: resolved.url,
+    });
+  } catch (e) {
+    // A bot-wall must surface, not silently downgrade to the SSR scrape.
+    if (e instanceof BotWallError) throw e;
+    // A rotated persisted-query hash is rare, distinct, and carries an
+    // actionable recovery hint (set ZILLOW_PROPERTY_QUERY_HASH). Surface
+    // it ALWAYS — otherwise the GraphQL path silently degrades to the
+    // bot-wall-prone SSR scrape this PR is retiring, with no operator
+    // signal. stderr-only (MCP process owns stdout).
+    if (e instanceof PersistedQueryNotFoundError) {
+      console.error(`[zillow-mcp] ${e.message}`);
+    } else if (process.env.ZILLOW_DEBUG === '1') {
+      // Any other GraphQL failure (shape drift, transport hiccup) → fall
+      // back to the SSR scrape so the tool keeps working.
+      console.error(
+        `[zillow-mcp] GraphQL property fetch failed for zpid ${resolved.zpid}; ` +
+          `falling back to SSR scrape: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+    return fetchPropertyRecordViaSsr(client, args);
+  }
 }
 
 /**

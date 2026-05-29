@@ -7,6 +7,7 @@ import {
   classifyRowError,
   mapWithConcurrency,
   retryOnceOnTimeout,
+  withDeadline,
 } from '@fetchproxy/server';
 import { BotWallError, type ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
@@ -99,6 +100,19 @@ const CAPTCHA_BACKOFF_CAP_MS = 30_000;
 const CAPTCHA_MAX_RETRIES = 3;
 
 /**
+ * Overall hard deadline (ms) for the whole `bulk_get` call (issue #98).
+ * The MCP SDK gives each tool call a finite request deadline (commonly
+ * 60s); a single hung row with no shorter effective deadline wedges the
+ * connection into a `-32001 Request timed out` AND can keep the server
+ * busy afterward (the report: a 59-id call hung for the full client
+ * timeout, then later small calls hung until restart). We cap the whole
+ * batch comfortably below that so a slow/hanging row turns into a
+ * `pending`-marked partial result instead of a wedge. Tuned to ~45s,
+ * leaving margin under a 60s client timeout.
+ */
+const OVERALL_DEADLINE_MS = 45_000;
+
+/**
  * Tuning knobs for the throttle/backoff machinery. Defaults are the
  * production values above; tests inject tiny values so the suite doesn't
  * wait on real wall-clock delays.
@@ -110,6 +124,13 @@ export interface BulkGetTuning {
   backoffCapMs?: number;
   chunkSize?: number;
   maxCaptchaRetries?: number;
+  /**
+   * Overall hard deadline (ms) for the whole call (issue #98). When it
+   * fires, any row that hasn't settled is returned with
+   * `error_kind: 'pending'` and the call resolves with partial results
+   * rather than hanging. Defaults to {@link OVERALL_DEADLINE_MS}.
+   */
+  overallDeadlineMs?: number;
   /** Random source for backoff jitter (defaults to Math.random). */
   rng?: () => number;
 }
@@ -130,6 +151,7 @@ interface BulkGetRow {
     | 'timeout'
     | 'bridge_down'
     | 'protocol'
+    | 'pending'
     | 'other';
 }
 
@@ -237,6 +259,7 @@ export function registerBulkGetTools(
     backoffCapMs: tuning.backoffCapMs ?? CAPTCHA_BACKOFF_CAP_MS,
     chunkSize: tuning.chunkSize ?? BULK_GET_CHUNK_SIZE,
     maxCaptchaRetries: tuning.maxCaptchaRetries ?? CAPTCHA_MAX_RETRIES,
+    overallDeadlineMs: tuning.overallDeadlineMs ?? OVERALL_DEADLINE_MS,
     rng: tuning.rng ?? Math.random,
   };
 
@@ -250,7 +273,8 @@ export function registerBulkGetTools(
         '`{ zpid, property }` on success or `{ zpid, error, error_kind }` on failure — one bad zpid never fails the ' +
         `whole call. Calls fan out concurrently against \`/homedetails/<zpid>_zpid/\` (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions). ` +
         `Big lists are auto-chunked into pages of ${BULK_GET_CHUNK_SIZE} and dispatched sequentially under a per-host requests-per-minute throttle so the batch doesn't trip Zillow's PerimeterX bot-wall (issue #90). ` +
-        'If the bot-wall is hit, the blocked sub-requests are retried with exponential backoff; anything still blocked is reported with `error_kind: "bot_challenge"` (distinct from a missing listing) and the response carries a `{ blocked, retry_after_s }` envelope so you can finish the rest in a second pass.',
+        'If the bot-wall is hit, the blocked sub-requests are retried with exponential backoff; anything still blocked is reported with `error_kind: "bot_challenge"` (distinct from a missing listing) and the response carries a `{ blocked, retry_after_s }` envelope so you can finish the rest in a second pass. ' +
+        'The whole call is bounded by an overall hard deadline (issue #98): a single slow/hung row never wedges the server — when the deadline is reached any row that has not yet settled is returned with `error_kind: "pending"` and the response carries a `{ pending }` count so you can re-run just those ids.',
       annotations: {
         title: 'Bulk-fetch Zillow properties by zpid',
         readOnlyHint: true,
@@ -301,29 +325,76 @@ export function registerBulkGetTools(
       });
       const blockedRetryAfter = { seconds: 0 };
 
+      // Index-addressable result slots, one per input target. A slot
+      // stays `undefined` until its fetch settles; if the overall
+      // deadline (issue #98) fires first, every still-undefined slot is
+      // backfilled with a `pending` marker so the response always has
+      // exactly one row per input, in input order — and the call returns
+      // partial results instead of hanging for the full client timeout.
+      const slots: Array<BulkGetRow | undefined> = targets.map(() => undefined);
+
       // Auto-chunk into safe-sized pages dispatched sequentially (paced
       // dispatch). Within a page, fan out at BRIDGE_CONCURRENCY (#78); the
-      // token bucket still gates the absolute request rate.
-      const pages = chunk(targets, cfg.chunkSize);
-      const rows: BulkGetRow[] = [];
-      for (const page of pages) {
-        const pageRows = await mapWithConcurrency<Target, BulkGetRow>(
-          page,
-          BRIDGE_CONCURRENCY,
-          (t) => fetchOneRow(client, bucket, t, cfg, blockedRetryAfter)
-        );
-        rows.push(...pageRows);
-      }
+      // token bucket still gates the absolute request rate. We address
+      // results by their original index so a partial (deadline-cut) batch
+      // can still report every input slot.
+      const indexed = targets.map((target, index) => ({ target, index }));
+      const pages = chunk(indexed, cfg.chunkSize);
+      const runAll = (async () => {
+        for (const page of pages) {
+          await mapWithConcurrency<{ target: Target; index: number }, void>(
+            page,
+            BRIDGE_CONCURRENCY,
+            async ({ target, index }) => {
+              slots[index] = await fetchOneRow(
+                client,
+                bucket,
+                target,
+                cfg,
+                blockedRetryAfter
+              );
+            }
+          );
+        }
+      })();
+
+      // Issue #98: race the whole batch against an overall hard deadline.
+      // On expiry the in-flight `runAll` promise is abandoned (left to
+      // settle in the background and ignored) — critically, we do NOT
+      // await it, so a permanently-hung row can't wedge the connection.
+      await withDeadline(runAll, cfg.overallDeadlineMs);
+
+      // Backfill any slot the deadline cut off as `pending`. The id comes
+      // from the original target so the row is still identifiable and
+      // re-runnable; a `pending` row is NEVER a generic miss / not-found.
+      const rows: BulkGetRow[] = slots.map((row, index) => {
+        if (row) return row;
+        const target = targets[index];
+        const zpid =
+          target.zpid !== undefined
+            ? String(target.zpid)
+            : (target.url ?? '');
+        return {
+          zpid,
+          error:
+            'bulk_get overall deadline reached before this row settled — ' +
+            'the request is still pending (likely a slow/hung sub-request). ' +
+            'Re-run just the pending ids; a single slow row no longer wedges the batch.',
+          error_kind: 'pending',
+        };
+      });
 
       const blocked = rows.filter(
         (r) => r.error_kind === 'bot_challenge'
       ).length;
+      const pending = rows.filter((r) => r.error_kind === 'pending').length;
 
       const envelope: {
         count: number;
         rows: BulkGetRow[];
         blocked?: number;
         retry_after_s?: number;
+        pending?: number;
       } = { count: rows.length, rows };
       if (blocked > 0) {
         // Partial result — some ids are still bot-walled. Surface the
@@ -332,6 +403,12 @@ export function registerBulkGetTools(
         envelope.blocked = blocked;
         envelope.retry_after_s =
           blockedRetryAfter.seconds > 0 ? blockedRetryAfter.seconds : undefined;
+      }
+      if (pending > 0) {
+        // Partial result — the overall deadline cut some rows off before
+        // they settled (issue #98). Surface the count so the caller can
+        // re-run just the pending ids.
+        envelope.pending = pending;
       }
       return textResult(envelope);
     }
