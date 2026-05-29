@@ -97,11 +97,18 @@ describe('typeahead/direct rung TIMEOUT → search-fallback rung (issue #100)', 
     // Every full-address direct/suffix/locality attempt TIMES OUT (the
     // typeahead-equivalent resolve hangs). The city/state-scoped
     // search-fallback request succeeds and whole-token-matches the street.
+    //
+    // CONSOLIDATION (realty-mcp#1): realty-core's broader `buildVariants`
+    // emits greedy compound splits ("268 Mal Lard Rd") that break the
+    // "mallard" substring, so scope detection must key on the ABSENCE of
+    // the house number `268` (scope = city+state, no street number) rather
+    // than the street name.
     mockFetchHtml.mockImplementation(async (path: string) => {
       const decoded = decodeURIComponent(path).toLowerCase();
-      // The scope-only search-fallback request: city + state, NO street.
+      // The scope-only search-fallback request: city + state, NO street
+      // number (street variants all carry the `268` house number).
       const isScopeSearch =
-        decoded.includes('lake lure') && !decoded.includes('mallard');
+        decoded.includes('lake lure') && !decoded.includes('268');
       if (isScopeSearch) {
         return htmlRegionSearch([
           { ...TARGET, zpid: 999, streetAddress: '1 Other St' },
@@ -129,8 +136,11 @@ describe('typeahead/direct rung TIMEOUT → search-fallback rung (issue #100)', 
   it('still resolves via search-fallback when rung 1 returns EMPTY (regression for the existing fall-through)', async () => {
     mockFetchHtml.mockImplementation(async (path: string) => {
       const decoded = decodeURIComponent(path).toLowerCase();
+      // CONSOLIDATION (realty-mcp#1): key scope detection on the absence
+      // of the `268` house number — greedy compound-split variants break
+      // the "mallard" substring (see the timeout test above).
       const isScopeSearch =
-        decoded.includes('lake lure') && !decoded.includes('mallard');
+        decoded.includes('lake lure') && !decoded.includes('268');
       if (isScopeSearch) {
         return htmlRegionSearch([TARGET]);
       }

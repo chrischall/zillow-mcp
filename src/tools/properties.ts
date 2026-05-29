@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   buildHyperlinkFormula,
   collectAddressAlternates as collectAddressAlternatesCore,
+  daysSince,
   hoaToMonthlyUsd,
   lastSold as lastSoldCore,
   priceDrop as priceDropCore,
@@ -638,12 +639,16 @@ export function format(
 
   // days_on_market: alias of daysOnZillow with a null when missing.
   // (Issue #43.) When daysOnZillow is absent but timeOnZillow is set,
-  // derive from the timestamp. Otherwise null.
+  // derive from the timestamp via realty-core's canonical `daysSince`
+  // (cohort migration realty-mcp#1) — the same floored day-delta the
+  // inlined math computed. `daysSince` does not clamp, so we keep the
+  // `Math.max(0, …)` floor to preserve zillow's non-negative contract
+  // for a (rare) future timestamp. Otherwise null.
   if (typeof raw.daysOnZillow === 'number') {
     out.days_on_market = raw.daysOnZillow;
   } else if (typeof raw.timeOnZillow === 'number') {
-    const delta = Date.now() - raw.timeOnZillow;
-    out.days_on_market = Math.max(0, Math.floor(delta / 86_400_000));
+    const delta = daysSince(raw.timeOnZillow);
+    out.days_on_market = delta === null ? null : Math.max(0, delta);
   } else {
     out.days_on_market = null;
   }

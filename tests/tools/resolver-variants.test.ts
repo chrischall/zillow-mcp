@@ -36,9 +36,13 @@ describe('compoundTokenVariants (space-insensitive)', () => {
     expect(variants).toContain('231 Blue Bird Rd');
   });
 
-  it('joins two adjacent capitalized tokens when the first is a known compound prefix (Blue Bird -> Bluebird)', () => {
+  it('joins two adjacent tokens (Blue Bird -> Bluebird)', () => {
+    // CONSOLIDATION (realty-mcp#1): now delegates to realty-core's
+    // canonical `compoundSplits`. The canonical join lower-cases the
+    // second token's leading char (`Bluebird`), where the old local impl
+    // preserved it (`BlueBird`). Canonical casing is the contract now.
     const variants = compoundTokenVariants('231 Blue Bird Rd');
-    expect(variants).toContain('231 BlueBird Rd');
+    expect(variants).toContain('231 Bluebird Rd');
   });
 
   it('splits Pinegrove -> Pine Grove', () => {

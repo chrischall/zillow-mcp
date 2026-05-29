@@ -74,7 +74,10 @@ describe('expandStreetSuffix', () => {
   });
 
   it('handles a trailing period on an abbreviated suffix (Rd.)', () => {
-    expect(expandStreetSuffix('268 Mallard Rd.')).toBe('268 Mallard Road');
+    // CONSOLIDATION (realty-mcp#1): now delegates to realty-core's
+    // canonical `expandSuffix`, which preserves the trailing period
+    // (`Road.`) rather than stripping it as the old local impl did.
+    expect(expandStreetSuffix('268 Mallard Rd.')).toBe('268 Mallard Road.');
   });
 
   it('preserves casing of the rest of the address', () => {
@@ -304,19 +307,26 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.zpid).toBe('60000');
   });
 
-  it('locality-remap rung: city-drop hits when direct + suffix-expansion miss (rung 3)', async () => {
-    // First two calls (abbrev + expanded) return nothing; the third call
-    // — the locality-remap city-drop direct fetch — returns the listing.
-    // (After #82 the locality-remap rung sits between suffix-expansion and
-    // the scope-resolve search; when the dropped-city slug resolves
-    // directly we never reach rung 4, so `via` is `locality_remap`.)
+  it('suffix/variant rung: city-matching listing hits at the 3rd direct call', async () => {
+    // First two calls (direct + first street variant) return nothing; the
+    // third call returns the listing.
+    //
+    // CONSOLIDATION (realty-mcp#1): rung 3 now uses realty-core's
+    // canonical `buildVariants`, whose variant set is intentionally
+    // BROADER than the old local one (e.g. `142 Hidden Cove Ln` also
+    // yields greedy compound splits like `142 Hid Den Cove Ln`). The
+    // listing therefore resolves via the `suffix_expansion` rung at the
+    // 3rd call — BEFORE the ladder reaches locality-remap — where the old
+    // narrower variant set fell through to `locality_remap`. The result
+    // is unchanged (resolved zpid 70000 in the matching city); only the
+    // winning rung (`via`) moved earlier.
     let call = 0;
     mockFetchHtml.mockImplementation(async () => {
       call++;
       if (call <= 2) {
         return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
       }
-      // The rung-3 city-drop direct fetch returns a listing in the matching city + a token from the address.
+      // The rung-3 direct fetch returns a listing in the matching city + a token from the address.
       return htmlWithFirstListing({
         zpid: 70_000,
         detailUrl: '/homedetails/foo/70000_zpid/',
@@ -339,8 +349,8 @@ describe('zillow_get_by_address tool', () => {
     }>(result);
     expect(parsed.resolved).toBe(true);
     expect(parsed.zpid).toBe('70000');
-    expect(parsed.via).toBe('locality_remap');
-    // direct + expansion + locality-remap (city-drop) = 3 calls
+    expect(parsed.via).toBe('suffix_expansion');
+    // direct + first variant (empty) + second variant (hit) = 3 calls
     expect(call).toBe(3);
   });
 
@@ -438,22 +448,31 @@ describe('zillow_get_by_address tool', () => {
   });
 
   it('search fallback: refuses to match when the address has zero discriminating tokens (round-3 nit)', async () => {
-    // Pathological input: `"1 St"` tokenizes to `["1", "st"]`; both are
-    // shorter than the 3-char discriminating-token threshold, so
-    // `inputTokens.length === 0`. Without an early guard, searchFallback
-    // returns `listings[0]` unchecked — silently mis-resolving free-text
-    // like `"1 St, Lake Lure, NC"` to whatever Zillow returns first.
-    // The strict `every`-token guard must be the single source of truth,
-    // so we must NOT accept the first listing here.
-    let call = 0;
-    mockFetchHtml.mockImplementation(async () => {
-      call++;
-      if (call <= 2) {
-        // direct + suffix-expansion both miss
-        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
-      }
-      // scope-resolve / fallback returns an unrelated listing — we must
-      // NOT silently take it just because we have no tokens to check.
+    // Pathological input: `"1 St"` tokenizes to a single numeric token
+    // (`["1"]` after realty-core's `tokenize` keeps the leading number and
+    // drops the sub-3-char `st`), so after the >=3-char discriminating
+    // filter `inputTokens.length === 0`. Without an early guard,
+    // searchFallback returns `listings[0]` unchecked — silently
+    // mis-resolving free-text like `"1 St, Lake Lure, NC"` to whatever
+    // Zillow returns first. The strict `every`-token guard must be the
+    // single source of truth, so searchFallback must NOT accept the first
+    // listing here.
+    //
+    // CONSOLIDATION (realty-mcp#1): the canonical `buildVariants` is
+    // broader, so the street-variant direct rungs make several
+    // street-bearing calls before the ladder reaches the city-scoped
+    // search fallback. The mock is path-aware: it returns NOTHING for any
+    // street-bearing slug (begins with the house number `1`) and surfaces
+    // the unrelated listing ONLY on the city-scoped fallback search — so
+    // this test still exercises searchFallback's zero-token guard, which
+    // remains the contract.
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const empty =
+        '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      // Street-bearing slug (direct + variant rungs) → no hit.
+      if (/\/homes\/1(%20|\+|\s)/.test(path)) return empty;
+      // City-scoped fallback search → an unrelated listing the
+      // zero-token guard must refuse.
       return htmlWithFirstListing({
         zpid: 99999,
         detailUrl: '/homedetails/totally-unrelated/99999_zpid/',

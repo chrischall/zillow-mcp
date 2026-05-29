@@ -82,10 +82,15 @@ function brooklynListing(zpid: number): RawListing {
 
 describe('locationTokens', () => {
   it('splits on non-alphanumerics, drops short tokens, lowercases', () => {
+    // CONSOLIDATION (realty-mcp#1): now delegates to realty-core's
+    // canonical `tokenize`, which drops sub-3-char tokens (here the
+    // 2-letter state code `nc`) EXCEPT a leading numeric. This is
+    // intentionally broader/cleaner than the old `length >= 2` filter —
+    // and behavior-preserving for `listingsMatchLocation`, which already
+    // excluded state codes from its match set.
     expect(locationTokens('Lake Lure, NC 28746')).toEqual([
       'lake',
       'lure',
-      'nc',
       '28746',
     ]);
   });

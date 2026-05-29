@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { tokenize } from '@chrischall/realty-core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
@@ -183,17 +184,21 @@ export interface ResolvedRegion {
 }
 
 /**
- * Tokenize a freetext location into lowercase alphanumeric words of
- * length 2+, used to fuzzy-validate that returned listings match the
- * caller's query.
+ * Tokenize a freetext location into lowercase alphanumeric words, used
+ * to fuzzy-validate that returned listings match the caller's query.
+ *
+ * CONSOLIDATION (cohort migration realty-mcp#1): delegates to
+ * realty-core's canonical `tokenize`. Canonical behavior is intentionally
+ * BROADER/cleaner than the old local `length >= 2` filter — it drops
+ * sub-3-char tokens (EXCEPT a leading numeric street number), which
+ * absorbs USPS-abbreviation and state-code noise (`Ln`, `St`, `NC`) so
+ * the fuzzy-match signal is more discriminating. The downstream
+ * `listingsMatchLocation` already excluded 2-letter state codes from the
+ * match set, so dropping `nc` at tokenise time is behavior-preserving for
+ * the mismatch guard while removing a class of false positives.
  */
 export function locationTokens(location: string): string[] {
-  return location
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter((t) => t.length >= 2);
+  return tokenize(location);
 }
 
 /**
