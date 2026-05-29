@@ -307,34 +307,39 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.zpid).toBe('60000');
   });
 
-  it('suffix/variant rung: city-matching listing hits at the 3rd direct call', async () => {
-    // First two calls (direct + first street variant) return nothing; the
-    // third call returns the listing.
+  it('suffix/variant rung: a street-matching variant resolves via suffix_expansion', async () => {
+    // CONSOLIDATION (realty-mcp#1): rung 3 uses realty-core's canonical
+    // `buildVariants`, whose variant set is intentionally BROADER than the
+    // old local one (`142 Hidden Cove Ln` yields the legitimate Lane
+    // expansion `142 Hidden Cove Lane` PLUS greedy compound splits like
+    // `142 Hid Den Cove Ln`).
     //
-    // CONSOLIDATION (realty-mcp#1): rung 3 now uses realty-core's
-    // canonical `buildVariants`, whose variant set is intentionally
-    // BROADER than the old local one (e.g. `142 Hidden Cove Ln` also
-    // yields greedy compound splits like `142 Hid Den Cove Ln`). The
-    // listing therefore resolves via the `suffix_expansion` rung at the
-    // 3rd call — BEFORE the ladder reaches locality-remap — where the old
-    // narrower variant set fell through to `locality_remap`. The result
-    // is unchanged (resolved zpid 70000 in the matching city); only the
-    // winning rung (`via`) moved earlier.
-    let call = 0;
-    mockFetchHtml.mockImplementation(async () => {
-      call++;
-      if (call <= 2) {
-        return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+    // GENUINE GUARD (PR #109 follow-up): resolveDirect is now anchored on
+    // the street number + strict-majority street-token overlap via
+    // realty-core's `addressMatch`, so the listing must be returned on a
+    // variant slug whose street GENUINELY matches the listing — not just on
+    // an arbitrary call index. The old call-count mock surfaced the listing
+    // at "the 3rd call", which under the broader variant set is the greedy
+    // split `142 Hid Den Cove Ln` (score 0.5 — NOT a match), so it would
+    // now be correctly rejected. This path-aware mock returns the listing
+    // on the legitimate `142 Hidden Cove Lane` expansion, which the
+    // street-anchored guard accepts — proving suffix_expansion still
+    // resolves real matches.
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const empty =
+        '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      const decoded = decodeURIComponent(path).toLowerCase();
+      if (decoded.includes('142 hidden cove lane')) {
+        return htmlWithFirstListing({
+          zpid: 70_000,
+          detailUrl: '/homedetails/foo/70000_zpid/',
+          streetAddress: '142 Hidden Cove Ln',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        });
       }
-      // The rung-3 direct fetch returns a listing in the matching city + a token from the address.
-      return htmlWithFirstListing({
-        zpid: 70_000,
-        detailUrl: '/homedetails/foo/70000_zpid/',
-        streetAddress: '142 Hidden Cove Ln',
-        city: 'Lake Lure',
-        state: 'NC',
-        zipcode: '28746',
-      });
+      return empty;
     });
     const result = await harness.callTool('zillow_get_by_address', {
       address: '142 Hidden Cove Ln',
@@ -350,8 +355,6 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.resolved).toBe(true);
     expect(parsed.zpid).toBe('70000');
     expect(parsed.via).toBe('suffix_expansion');
-    // direct + first variant (empty) + second variant (hit) = 3 calls
-    expect(call).toBe(3);
   });
 
   it('search fallback: takes the region branch + filtered call when scope resolve returns a pinned region', async () => {
@@ -458,30 +461,26 @@ describe('zillow_get_by_address tool', () => {
     // single source of truth, so searchFallback must NOT accept the first
     // listing here.
     //
-    // CONSOLIDATION (realty-mcp#1): the canonical `buildVariants` is
-    // broader, so the street-variant direct rungs make several
-    // street-bearing calls before the ladder reaches the city-scoped
-    // search fallback. The mock is path-aware: it returns NOTHING for any
-    // street-bearing slug (begins with the house number `1`) and surfaces
-    // the unrelated listing ONLY on the city-scoped fallback search — so
-    // this test still exercises searchFallback's zero-token guard, which
-    // remains the contract.
-    mockFetchHtml.mockImplementation(async (path: string) => {
-      const empty =
-        '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
-      // Street-bearing slug (direct + variant rungs) → no hit.
-      if (/\/homes\/1(%20|\+|\s)/.test(path)) return empty;
-      // City-scoped fallback search → an unrelated listing the
-      // zero-token guard must refuse.
-      return htmlWithFirstListing({
+    // GENUINE GUARD (PR #109 follow-up): resolveDirect is now anchored on
+    // the street number via realty-core's `addressMatch`, so the direct +
+    // variant rungs reject the unrelated `4242 Totally Unrelated Way`
+    // listing even when it carries the matching city. We can therefore
+    // return that SAME unrelated listing for EVERY fetch — direct, every
+    // street variant, the locality-remap retries, AND the city-scoped
+    // search fallback — and the ladder must still refuse it end-to-end.
+    // (Previously this test needed a path-aware mock that hid the listing
+    // from the street-bearing slugs, masking resolveDirect's weak guard;
+    // that workaround is gone now that the guard is real.)
+    mockFetchHtml.mockResolvedValue(
+      htmlWithFirstListing({
         zpid: 99999,
         detailUrl: '/homedetails/totally-unrelated/99999_zpid/',
         streetAddress: '4242 Totally Unrelated Way',
         city: 'Lake Lure',
         state: 'NC',
         zipcode: '28746',
-      });
-    });
+      })
+    );
     const result = await harness.callTool('zillow_get_by_address', {
       address: '1 St',
       city: 'Lake Lure',
@@ -492,6 +491,90 @@ describe('zillow_get_by_address tool', () => {
     );
     expect(parsed.resolved).toBe(false);
     expect(parsed.zpid).toBeUndefined();
+  });
+
+  it('rung-3 (suffix_expansion): refuses an unrelated listing whose only overlap is the city (issue: greedy compoundSplits)', async () => {
+    // realty-core's broader `buildVariants('1 Street')` now emits the
+    // greedy compound split `"1 Str Eet"` (verified:
+    // buildVariants('1 Street') === ['1 Street','1 St','1 Str Eet']). The
+    // rung-3 direct fetch therefore runs with slug
+    // `"1 Str Eet Lake Lure NC"`. Zillow returns an UNRELATED listing —
+    // `4242 Totally Unrelated Way, Lake Lure, NC` — that shares only the
+    // CITY tokens (`lake`/`lure`) with the query. The OLD guard
+    // (`listingsMatchLocation`) accepted on any non-state overlap, so it
+    // mis-resolved this junk variant to the wrong property (house number 1
+    // vs 4242, a completely different street). The street-anchored
+    // `addressMatch` guard must REFUSE it: `addressMatch('1 Str Eet',
+    // '4242 Totally Unrelated Way')` → 0 (no shared numeric anchor).
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const empty =
+        '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      const decoded = decodeURIComponent(path).toLowerCase();
+      // The greedy compound-split variant slug — the rung-3 fetch that
+      // would have been mis-accepted under the weak city-token guard.
+      if (decoded.includes('1 str eet')) {
+        return htmlWithFirstListing({
+          zpid: 99999,
+          detailUrl: '/homedetails/totally-unrelated/99999_zpid/',
+          streetAddress: '4242 Totally Unrelated Way',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        });
+      }
+      // Everything else (direct slug, other variants, locality remap,
+      // scope-resolve) misses cleanly.
+      return empty;
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '1 Street',
+      city: 'Lake Lure',
+      state: 'NC',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(
+      result
+    );
+    expect(parsed.resolved).toBe(false);
+    expect(parsed.zpid).toBeUndefined();
+  });
+
+  it('rung-3 (suffix_expansion): still ACCEPTS a strong street match via a real variant', async () => {
+    // The flip side of the guard: a real abbreviated → expanded variant
+    // (`268 Mallard Rd` → `268 Mallard Road`) whose street number AND
+    // street tokens match the returned listing must STILL resolve. This
+    // proves the street-number anchor tightens precision without breaking
+    // legitimate suffix-expansion hits.
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const empty =
+        '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+      const decoded = decodeURIComponent(path).toLowerCase();
+      if (decoded.includes('268 mallard road')) {
+        return htmlWithFirstListing({
+          zpid: 50001,
+          detailUrl:
+            '/homedetails/268-Mallard-Road-Lake-Lure-NC-28746/50001_zpid/',
+          streetAddress: '268 Mallard Road',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        });
+      }
+      return empty;
+    });
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '268 Mallard Rd',
+      city: 'Lake Lure',
+      state: 'NC',
+      zip: '28746',
+    });
+    const parsed = parseToolResult<{
+      resolved: boolean;
+      zpid?: string;
+      via?: string;
+    }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('50001');
+    expect(parsed.via).toBe('suffix_expansion');
   });
 
   it('builds an absolute URL when detailUrl is missing — falls back to zpid path', async () => {
