@@ -16,6 +16,7 @@
  *                          through to bulk in issue #74)
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { FetchproxyTimeoutError } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { ParseError } from '../next-data.js';
 import {
@@ -509,8 +510,33 @@ export async function resolveAddressFull(
 ): Promise<{ hit: ResolverHit; finalSlug: string } | { miss: ResolverMiss }> {
   const baseSlug = buildAddressSlug(input);
 
+  // Issue #100 (P1-2): the typeahead/direct rungs (1-3) hit
+  // `/homes/<slug>_rb/`. If one of those resolves TIMES OUT, it must NOT
+  // abort the whole ladder before the search-fallback rung (rung 4)
+  // runs — a slow typeahead shouldn't skip the first-class search
+  // fallback. So we swallow a `FetchproxyTimeoutError` from a direct rung
+  // (treating it as a miss for ladder-progression) BUT remember it, so a
+  // ladder that ultimately misses *because everything timed out* still
+  // re-throws the timeout (issue #78: a timeout must never collapse onto
+  // the generic "no listing found" miss). Any non-timeout error still
+  // propagates immediately.
+  let swallowedTimeout: FetchproxyTimeoutError | null = null;
+  const directOrTimeoutMiss = async (
+    slug: string
+  ): Promise<Awaited<ReturnType<typeof resolveDirect>>> => {
+    try {
+      return await resolveDirect(client, slug);
+    } catch (e) {
+      if (e instanceof FetchproxyTimeoutError) {
+        swallowedTimeout = e;
+        return null;
+      }
+      throw e;
+    }
+  };
+
   // Rung 1: direct.
-  const direct = await resolveDirect(client, baseSlug);
+  const direct = await directOrTimeoutMiss(baseSlug);
   if (direct) {
     return {
       hit: {
@@ -527,7 +553,7 @@ export async function resolveAddressFull(
   const variants = streetAddressVariants(input.address).slice(1); // skip original
   for (const v of variants) {
     const slug = buildAddressSlug({ ...input, address: v });
-    const hit = await resolveDirect(client, slug);
+    const hit = await directOrTimeoutMiss(slug);
     if (hit) {
       return {
         hit: {
@@ -542,8 +568,19 @@ export async function resolveAddressFull(
   }
 
   // Rung 3: locality remap (issue #75). Try city-drop and known aliases
-  // before falling all the way through to the scope-resolve search.
-  const remap = await localityRemap(client, input);
+  // before falling all the way through to the scope-resolve search. A
+  // timeout inside the remap is swallowed the same way (it walks the same
+  // direct resolver) so it can't skip rung 4 either.
+  let remap: Awaited<ReturnType<typeof localityRemap>> = null;
+  try {
+    remap = await localityRemap(client, input);
+  } catch (e) {
+    if (e instanceof FetchproxyTimeoutError) {
+      swallowedTimeout = e;
+    } else {
+      throw e;
+    }
+  }
   if (remap) {
     return {
       hit: {
@@ -556,7 +593,9 @@ export async function resolveAddressFull(
     };
   }
 
-  // Rung 4: search fallback (issue #52 / #74).
+  // Rung 4: search fallback (issue #52 / #74) — a FIRST-CLASS rung, not a
+  // last-ditch a rung-1 timeout could skip (issue #100). It does a
+  // city/state-scoped search + whole-token street match.
   const fallbackHit = await searchFallback(client, input);
   if (fallbackHit) {
     const formatted = formatListing(fallbackHit);
@@ -572,6 +611,12 @@ export async function resolveAddressFull(
       };
     }
   }
+
+  // The ladder missed. If a direct rung timed out along the way and
+  // nothing recovered it, re-throw the timeout so the caller surfaces it
+  // distinctly (issue #78) instead of reporting a clean "no listing
+  // found" for what was really a bridge timeout.
+  if (swallowedTimeout) throw swallowedTimeout;
 
   return { miss: { slug: baseSlug } };
 }
