@@ -293,8 +293,11 @@ describe('fetchPropertyRecord — GraphQL primary, SSR fallback (issue #99)', ()
     const { raw } = await fetchPropertyRecord(mockClient, { zpid: 777 });
     expect(raw.price).toBe(12345);
     // GraphQL was hit; the SSR scrape was NOT (the bot-wall-prone path).
+    // "Shirk the hash": the primary call is an inline POST to the bare
+    // /graphql/ endpoint (no persistedQuery query string).
     expect(mockFetchJson).toHaveBeenCalledTimes(1);
-    expect(mockFetchJson.mock.calls[0][0]).toContain('/graphql/?');
+    expect(mockFetchJson.mock.calls[0][0]).toBe('/graphql/');
+    expect(mockFetchJson.mock.calls[0][1].method).toBe('POST');
     expect(mockFetchHtml).not.toHaveBeenCalled();
   });
 
@@ -331,6 +334,22 @@ describe('fetchPropertyRecord — GraphQL primary, SSR fallback (issue #99)', ()
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('falls back to the SSR scrape when the inline GraphQL op fails validation', async () => {
+    // The inline query is the PRIMARY path now (no hash). If Zillow's schema
+    // rejects it (a curated field drifted), the SSR floor must still serve
+    // the listing — never a regression vs the hash-based path.
+    const { GraphqlValidationError } = await import(
+      '../../src/tools/graphql-property.js'
+    );
+    mockFetchJson.mockRejectedValue(
+      new GraphqlValidationError(123, 'Cannot query field "x".')
+    );
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 123, price: 42 }));
+    const { raw } = await fetchPropertyRecord(mockClient, { zpid: 123 });
+    expect(raw.price).toBe(42);
+    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT fall back to SSR on a GraphQL bot-wall — it propagates', async () => {

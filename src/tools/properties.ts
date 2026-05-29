@@ -14,6 +14,7 @@ import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
 import {
+  GraphqlValidationError,
   PersistedQueryNotFoundError,
   fetchPropertyViaGraphql,
 } from './graphql-property.js';
@@ -410,13 +411,17 @@ function resolveZpid(args: {
  * `zillow_get_tax_history`, `zillow_get_property_photos`, and
  * `zillow_bulk_get`.
  *
- * Issue #99: the PRIMARY fetch is now Zillow's own persistedQuery GraphQL
- * endpoint (`fetchPropertyViaGraphql`), which serves the same listings
+ * Issues #99/#102 + "shirk the hash": the PRIMARY fetch is Zillow's own
+ * GraphQL endpoint (`fetchPropertyViaGraphql`) — now an INLINE POST that
+ * carries a full query string by value, so there is no persisted-query
+ * hash to manage or rotate (a pinned hash going stale silently dropped us
+ * to SSR, which trips PerimeterX). GraphQL serves the same listings
  * without tripping PerimeterX at the scale the SSR scrape did. The SSR
- * scrape (`fetchPropertyRecordViaSsr`) is the FALLBACK, used when:
+ * scrape (`fetchPropertyRecordViaSsr`) is the FLOOR, used when:
  *   - the input is a slug-only URL with no zpid (GraphQL needs a zpid), or
- *   - the GraphQL attempt fails for a non-bot-wall reason (hash rotated,
- *     shape drift, transport error).
+ *   - the GraphQL attempt fails for a non-bot-wall reason (inline op
+ *     rejected by the schema, persisted hash rotated, shape drift,
+ *     transport error).
  *
  * A `BotWallError` from GraphQL is NOT caught — it propagates so the
  * caller's bot-wall handling (bulk-get backoff / partial results) kicks
@@ -451,6 +456,14 @@ export async function fetchPropertyRecord(
     // signal. stderr-only (MCP process owns stdout).
     if (e instanceof PersistedQueryNotFoundError) {
       console.error(`[zillow-mcp] ${e.message}`);
+    } else if (e instanceof GraphqlValidationError) {
+      // The inline op's curated selection drifted from Zillow's current
+      // schema. Falling through to SSR keeps the tool working (never a
+      // regression vs the hash path); a debug hint surfaces the drift so
+      // the curated query can be re-synced. stderr-only (MCP owns stdout).
+      if (process.env.ZILLOW_DEBUG === '1') {
+        console.error(`[zillow-mcp] ${e.message}`);
+      }
     } else if (process.env.ZILLOW_DEBUG === '1') {
       // Any other GraphQL failure (shape drift, transport hiccup) → fall
       // back to the SSR scrape so the tool keeps working.
