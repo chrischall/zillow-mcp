@@ -11,10 +11,19 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const mockFetchHtml = vi.fn();
-const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
+// `fetchPropertyRecord` tries GraphQL first (issue #99); these tests
+// cover the SSR scrape, so `fetchJson` is stubbed to reject → fall back.
+const mockFetchJson = vi.fn();
+const mockClient = {
+  fetchHtml: mockFetchHtml,
+  fetchJson: mockFetchJson,
+} as unknown as ZillowClient;
 
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
+});
 afterAll(async () => {
   if (harness) await harness.close();
 });

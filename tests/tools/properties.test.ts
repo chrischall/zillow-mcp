@@ -4,6 +4,7 @@ import {
   InvalidPropertyUrlError,
   buildPath,
   extractZpidFromUrl,
+  fetchPropertyRecord,
   findPropertyInPageProps,
   format,
   lotSizeAcres,
@@ -14,10 +15,23 @@ import { createTestHarness, parseToolResult } from '../helpers.js';
 import type { ExtractedFeatures } from '../../src/features.js';
 
 const mockFetchHtml = vi.fn();
-const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
+// `fetchPropertyRecord` now tries the GraphQL endpoint first (issue #99)
+// and falls back to the SSR scrape. These SSR-focused tests stub
+// `fetchJson` to reject so the fallback path (the `fetchHtml` scrape they
+// assert on) is exercised; the GraphQL-primary behavior has its own
+// tests in graphql-property.test.ts + the block below.
+const mockFetchJson = vi.fn();
+const mockClient = {
+  fetchHtml: mockFetchHtml,
+  fetchJson: mockFetchJson,
+} as unknown as ZillowClient;
 
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Default: GraphQL "unavailable" → fall back to the SSR scrape.
+  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
+});
 afterAll(async () => {
   if (harness) await harness.close();
 });
@@ -264,6 +278,48 @@ describe('format() — FormattedProperty contract', () => {
     expect(out.lot_size).toBe(200);
     expect(out.lot_size_acres).toBeNull();
     expect(out.lot_size_acres).not.toBe(0);
+  });
+});
+
+describe('fetchPropertyRecord — GraphQL primary, SSR fallback (issue #99)', () => {
+  function graphqlProperty(raw: RawProperty) {
+    return { data: { property: raw } };
+  }
+
+  it('uses the GraphQL endpoint as the PRIMARY fetch (no SSR scrape on success)', async () => {
+    mockFetchJson.mockResolvedValue(
+      graphqlProperty({ zpid: 777, price: 12345 })
+    );
+    const { raw } = await fetchPropertyRecord(mockClient, { zpid: 777 });
+    expect(raw.price).toBe(12345);
+    // GraphQL was hit; the SSR scrape was NOT (the bot-wall-prone path).
+    expect(mockFetchJson).toHaveBeenCalledTimes(1);
+    expect(mockFetchJson.mock.calls[0][0]).toContain('/graphql/?');
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the SSR scrape when GraphQL fails (e.g. hash rotated)', async () => {
+    mockFetchJson.mockRejectedValue(new Error('PersistedQueryNotFound'));
+    mockFetchHtml.mockResolvedValue(
+      htmlWithProperty({ zpid: 888, price: 999 })
+    );
+    const { raw } = await fetchPropertyRecord(mockClient, { zpid: 888 });
+    expect(raw.price).toBe(999);
+    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
+    expect(mockFetchHtml.mock.calls[0][0]).toBe('/homedetails/888_zpid/');
+  });
+
+  it('does NOT fall back to SSR on a GraphQL bot-wall — it propagates', async () => {
+    // The whole point of the GraphQL path is bot-wall resistance; if even
+    // it is walled, surface the BotWallError so bulk-get's backoff /
+    // partial-results handle it. Falling back to the (more walled) SSR
+    // scrape would just trip the wall again.
+    const { BotWallError } = await import('../../src/client.js');
+    mockFetchJson.mockRejectedValue(new BotWallError('/graphql/'));
+    await expect(
+      fetchPropertyRecord(mockClient, { zpid: 999 })
+    ).rejects.toBeInstanceOf(BotWallError);
+    expect(mockFetchHtml).not.toHaveBeenCalled();
   });
 });
 

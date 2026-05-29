@@ -14,10 +14,22 @@ import {
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
-const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;
+// `fetchPropertyRecord` tries GraphQL first (issue #99); these bulk tests
+// cover the SSR scrape + throttle/deadline machinery, so `fetchJson` is
+// stubbed to reject → the per-row fetch falls back to the SSR `fetchHtml`
+// the assertions drive. (A BotWallError thrown from `fetchHtml` still
+// propagates, exercising the bot-wall path.)
+const mockFetchJson = vi.fn();
+const mockClient = {
+  fetchHtml: mockFetchHtml,
+  fetchJson: mockFetchJson,
+} as unknown as ZillowClient;
 
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
+});
 afterAll(async () => {
   if (harness) await harness.close();
 });
