@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  calculateMortgage,
+  type MortgageInput as CoreMortgageInput,
+} from '@chrischall/realty-core';
 import { textResult } from '../mcp.js';
 
 /**
@@ -13,6 +17,14 @@ import { textResult } from '../mcp.js';
  *   Insurance  — homeowner's insurance (annual / 12)
  *   HOA        — monthly HOA dues
  *   PMI        — when LTV > 80% and pmi_rate provided
+ *
+ * As of the cohort migration (realty-mcp#1) the PITI math lives
+ * canonically in `@chrischall/realty-core` (`calculateMortgage`) — the
+ * canonical shape was modelled on zillow's, so it's the same formula and
+ * the same field values. `computeMortgage` is now a thin adapter: it
+ * delegates to the core and projects the result back to zillow's exact
+ * output contract (the core carries one extra echoed `home_price` field
+ * that zillow's shape doesn't expose, dropped here).
  */
 
 export interface MortgageInput {
@@ -45,75 +57,13 @@ export interface MortgageBreakdown {
 }
 
 export function computeMortgage(input: MortgageInput): MortgageBreakdown {
-  if (input.home_price <= 0) {
-    throw new Error('home_price must be positive');
-  }
-  if (input.interest_rate < 0) {
-    throw new Error('interest_rate must be non-negative');
-  }
-  const term_years = input.loan_term_years ?? 30;
-  if (term_years <= 0) throw new Error('loan_term_years must be positive');
-
-  const down =
-    input.down_payment !== undefined
-      ? input.down_payment
-      : input.down_payment_percent !== undefined
-        ? (input.home_price * input.down_payment_percent) / 100
-        : input.home_price * 0.2;
-  const loan = Math.max(0, input.home_price - down);
-
-  const monthly_rate = input.interest_rate / 100 / 12;
-  const n_months = term_years * 12;
-
-  // Amortization formula. Guard rate==0 (no-interest loan).
-  let monthly_pi: number;
-  if (monthly_rate === 0) {
-    monthly_pi = loan / n_months;
-  } else {
-    const factor = Math.pow(1 + monthly_rate, n_months);
-    monthly_pi = (loan * monthly_rate * factor) / (factor - 1);
-  }
-
-  const monthly_tax =
-    input.property_tax_annual !== undefined
-      ? input.property_tax_annual / 12
-      : input.property_tax_rate !== undefined
-        ? (input.home_price * input.property_tax_rate) / 100 / 12
-        : 0;
-  const monthly_ins = (input.insurance_annual ?? 0) / 12;
-  const monthly_hoa = input.hoa_monthly ?? 0;
-
-  // PMI applies when LTV > 80%. Computed against the loan balance.
-  const ltv = (loan / input.home_price) * 100;
-  const monthly_pmi =
-    input.pmi_rate !== undefined && ltv > 80
-      ? (loan * input.pmi_rate) / 100 / 12
-      : 0;
-
-  const total_interest = monthly_pi * n_months - loan;
-  const total_paid = monthly_pi * n_months;
-
-  return {
-    loan_amount: round2(loan),
-    down_payment: round2(down),
-    monthly_principal_interest: round2(monthly_pi),
-    monthly_property_tax: round2(monthly_tax),
-    monthly_insurance: round2(monthly_ins),
-    monthly_hoa: round2(monthly_hoa),
-    monthly_pmi: round2(monthly_pmi),
-    monthly_total: round2(
-      monthly_pi + monthly_tax + monthly_ins + monthly_hoa + monthly_pmi
-    ),
-    total_interest_paid: round2(total_interest),
-    total_paid_over_loan: round2(total_paid),
-    loan_term_years: term_years,
-    interest_rate: input.interest_rate,
-    ltv_percent: round2(ltv),
-  };
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+  // Delegate to realty-core's canonical PITI calculator (same math,
+  // same validation, same field values — modelled on zillow's), then
+  // drop the extra echoed `home_price` to preserve zillow's output shape.
+  const { home_price: _home_price, ...rest } = calculateMortgage(
+    input as CoreMortgageInput
+  );
+  return rest;
 }
 
 export function registerMortgageTools(server: McpServer): void {

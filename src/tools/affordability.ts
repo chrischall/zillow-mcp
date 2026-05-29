@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  calculateAffordability,
+  type AffordabilityInput as CoreAffordabilityInput,
+  type AffordabilityResult,
+} from '@chrischall/realty-core';
 import { textResult } from '../mcp.js';
 
 /**
@@ -18,111 +23,46 @@ import { textResult } from '../mcp.js';
  * All inputs are validated; outputs are deterministic. Results are
  * informational — they do not replace a lender's pre-approval or
  * an accountant's tax planning.
+ *
+ * As of the cohort migration (realty-mcp#1) the affordability solver
+ * lives canonically in `@chrischall/realty-core` (`calculateAffordability`
+ * — same 28/36-DTI inversion, same output shape, same validation
+ * messages). `computeAffordability` re-exports it under the local name +
+ * input/result types so existing call sites + tests keep working.
+ *
+ * The rent-vs-buy projection (`computeRentVsBuy`) is KEPT INLINE: zillow's
+ * `RentVsBuyResult` carries top-level summary fields
+ * (`buy_total_cost_after_sale` / `rent_total_cost` / `net_difference` /
+ * `buy_wins`), a default horizon of 7 (not 10), and per-year
+ * `cumulative_buy_cost` figures that are GROSS cash outflow — whereas
+ * realty-core's `estimateRentVsBuy` exposes a `{ inputs, years,
+ * break_even_year }` superset whose per-year `cumulative_buy_cost` is the
+ * NET-if-sold figure. Projecting the canonical result back to this tool's
+ * output would be a lossy adapter that changes the
+ * `zillow_estimate_rent_vs_buy` contract, so we keep zillow's model.
  */
 
 // ---- Affordability ---------------------------------------------------
 
-export interface AffordabilityInput {
-  monthly_income: number;
-  monthly_debts?: number;
-  down_payment: number;
-  interest_rate: number; // annual %
-  loan_term_years?: number;
-  property_tax_rate?: number; // annual % of home price
-  insurance_annual?: number;
-  hoa_monthly?: number;
-  /** Front-end (housing/income) cap. Default 0.28. */
-  front_end_dti?: number;
-  /** Back-end (housing+debts/income) cap. Default 0.36. */
-  back_end_dti?: number;
-}
-
-export interface AffordabilityResult {
-  max_home_price: number;
-  max_monthly_piti: number;
-  binding_constraint: 'front_end' | 'back_end';
-  monthly_principal_interest: number;
-  monthly_property_tax: number;
-  monthly_insurance: number;
-  monthly_hoa: number;
-  loan_amount: number;
-  down_payment: number;
-  front_end_dti_used: number;
-  back_end_dti_used: number;
-}
+// Re-export the canonical input/result types under the local names so
+// existing imports (`from './affordability'`) keep working. The shape is
+// identical to zillow's old inline definitions.
+export type AffordabilityInput = CoreAffordabilityInput;
+export type { AffordabilityResult };
 
 /**
  * Solve for the max home price under the 28/36 DTI rule.
  * The binding constraint is whichever cap (front-end OR back-end)
  * limits the monthly PITI more tightly.
+ *
+ * Thin re-export of realty-core's `calculateAffordability` — same math,
+ * same `{ max_home_price, max_monthly_piti, binding_constraint, ... }`
+ * output, same validation error messages.
  */
 export function computeAffordability(
   input: AffordabilityInput
 ): AffordabilityResult {
-  if (input.monthly_income <= 0)
-    throw new Error('monthly_income must be positive');
-  if (input.down_payment < 0) throw new Error('down_payment must be >= 0');
-  if (input.interest_rate < 0)
-    throw new Error('interest_rate must be >= 0');
-
-  const term_years = input.loan_term_years ?? 30;
-  const monthly_debts = input.monthly_debts ?? 0;
-  const front_dti = input.front_end_dti ?? 0.28;
-  const back_dti = input.back_end_dti ?? 0.36;
-  const tax_rate = input.property_tax_rate ?? 1.1;
-  const insurance_annual = input.insurance_annual ?? 0;
-  const hoa_monthly = input.hoa_monthly ?? 0;
-
-  // Max monthly PITI under each constraint.
-  const front_max = input.monthly_income * front_dti;
-  const back_max = input.monthly_income * back_dti - monthly_debts;
-  const max_piti = Math.max(0, Math.min(front_max, back_max));
-  const binding: 'front_end' | 'back_end' =
-    front_max <= back_max ? 'front_end' : 'back_end';
-
-  // PITI minus the non-loan components leaves the available P&I budget.
-  // Insurance and HOA are flat. Property tax scales with home price,
-  // which is what we're solving for — so include it inside the per-$1
-  // home-price coefficient.
-  const monthly_ins = insurance_annual / 12;
-  const monthly_tax_per_dollar = tax_rate / 100 / 12; // tax/mo per $1 of home
-  const monthly_pi_budget = Math.max(
-    0,
-    max_piti - monthly_ins - hoa_monthly
-  );
-
-  // P&I = loan * factor. Loan = home_price - down_payment.
-  const r = input.interest_rate / 100 / 12;
-  const n = term_years * 12;
-  const factor =
-    r === 0 ? 1 / n : (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
-
-  // home_price * (tax/$) + (home_price - down) * factor = monthly_pi_budget
-  // home_price * (tax/$ + factor) = monthly_pi_budget + down * factor
-  const coeff = monthly_tax_per_dollar + factor;
-  const max_home_price =
-    coeff === 0
-      ? input.down_payment
-      : (monthly_pi_budget + input.down_payment * factor) / coeff;
-
-  const loan_amount = Math.max(0, max_home_price - input.down_payment);
-  const monthly_pi =
-    r === 0 ? loan_amount / n : loan_amount * factor;
-  const monthly_tax = max_home_price * monthly_tax_per_dollar;
-
-  return {
-    max_home_price: round2(max_home_price),
-    max_monthly_piti: round2(max_piti),
-    binding_constraint: binding,
-    monthly_principal_interest: round2(monthly_pi),
-    monthly_property_tax: round2(monthly_tax),
-    monthly_insurance: round2(monthly_ins),
-    monthly_hoa: round2(hoa_monthly),
-    loan_amount: round2(loan_amount),
-    down_payment: round2(input.down_payment),
-    front_end_dti_used: front_dti,
-    back_end_dti_used: back_dti,
-  };
+  return calculateAffordability(input);
 }
 
 // ---- Rent vs buy -----------------------------------------------------
