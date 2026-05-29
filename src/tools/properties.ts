@@ -13,7 +13,10 @@ import { BotWallError, type ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
-import { fetchPropertyViaGraphql } from './graphql-property.js';
+import {
+  PersistedQueryNotFoundError,
+  fetchPropertyViaGraphql,
+} from './graphql-property.js';
 import {
   extractFeatures,
   loadCommunities,
@@ -441,9 +444,16 @@ export async function fetchPropertyRecord(
   } catch (e) {
     // A bot-wall must surface, not silently downgrade to the SSR scrape.
     if (e instanceof BotWallError) throw e;
-    // Any other GraphQL failure (rotated hash, shape drift, transport
-    // hiccup) → fall back to the SSR scrape so the tool keeps working.
-    if (process.env.ZILLOW_DEBUG === '1') {
+    // A rotated persisted-query hash is rare, distinct, and carries an
+    // actionable recovery hint (set ZILLOW_PROPERTY_QUERY_HASH). Surface
+    // it ALWAYS — otherwise the GraphQL path silently degrades to the
+    // bot-wall-prone SSR scrape this PR is retiring, with no operator
+    // signal. stderr-only (MCP process owns stdout).
+    if (e instanceof PersistedQueryNotFoundError) {
+      console.error(`[zillow-mcp] ${e.message}`);
+    } else if (process.env.ZILLOW_DEBUG === '1') {
+      // Any other GraphQL failure (shape drift, transport hiccup) → fall
+      // back to the SSR scrape so the tool keeps working.
       console.error(
         `[zillow-mcp] GraphQL property fetch failed for zpid ${resolved.zpid}; ` +
           `falling back to SSR scrape: ${e instanceof Error ? e.message : String(e)}`

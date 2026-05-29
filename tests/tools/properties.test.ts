@@ -309,6 +309,30 @@ describe('fetchPropertyRecord — GraphQL primary, SSR fallback (issue #99)', ()
     expect(mockFetchHtml.mock.calls[0][0]).toBe('/homedetails/888_zpid/');
   });
 
+  it('logs PersistedQueryNotFoundError to stderr (recovery hint) even without ZILLOW_DEBUG, then falls back', async () => {
+    const { PersistedQueryNotFoundError } = await import(
+      '../../src/tools/graphql-property.js'
+    );
+    delete process.env.ZILLOW_DEBUG;
+    const err = new PersistedQueryNotFoundError('deadbeefhash');
+    mockFetchJson.mockRejectedValue(err);
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 555, price: 1 }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { raw } = await fetchPropertyRecord(mockClient, { zpid: 555 });
+      expect(raw.price).toBe(1);
+      // SSR fallback still happened.
+      expect(mockFetchHtml).toHaveBeenCalledTimes(1);
+      // The actionable recovery hint reached stderr.
+      expect(spy).toHaveBeenCalled();
+      const logged = spy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(logged).toContain('ZILLOW_PROPERTY_QUERY_HASH');
+      expect(logged).toMatch(/re-extract/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('does NOT fall back to SSR on a GraphQL bot-wall — it propagates', async () => {
     // The whole point of the GraphQL path is bot-wall resistance; if even
     // it is walled, surface the BotWallError so bulk-get's backoff /

@@ -92,7 +92,9 @@ interface GraphqlArgs {
   /** Optional homedetails slug (the `<slug>` in `/homedetails/<slug>/<zpid>_zpid/`)
    *  used to build a realistic referer. Defaults to the bare zpid path. */
   slug?: string;
-  /** A full Zillow homedetails URL/path; the zpid + slug are derived from it. */
+  /** A full Zillow homedetails URL/path. The zpid is derived from it, and
+   *  the slug is too when the url carries the `/homedetails/<slug>/<zpid>_zpid/`
+   *  form (an explicit `slug` takes precedence). */
   url?: string;
 }
 
@@ -155,13 +157,26 @@ function normalizeLot(raw: RawGraphqlProperty): RawProperty {
   return { ...raw, lotSize: sqft };
 }
 
+/** Capture the `<slug>` from a `/homedetails/<slug>/<zpid>_zpid/` url. */
+const HOMEDETAILS_SLUG_RE = /\/homedetails\/([^/]+)\/\d+_zpid(?:\/|$)/;
+
+/** Extract the homedetails slug from a url, or undefined if none is present. */
+function extractSlugFromUrl(url: string): string | undefined {
+  const m = HOMEDETAILS_SLUG_RE.exec(url);
+  return m ? m[1] : undefined;
+}
+
 /**
  * Derive zpid + slug from a GraphqlArgs that may carry a `url` instead.
+ * An explicit `slug` wins; otherwise the slug is derived from the `url`
+ * (when it carries the `/homedetails/<slug>/<zpid>_zpid/` form) so the
+ * referer uses the full slugged path rather than the bare-zpid fallback.
  */
 function resolveTarget(args: GraphqlArgs): { zpid: number | string; slug?: string } {
   if (args.url) {
     const zpid = extractZpidFromUrl(args.url) ?? args.zpid;
-    return { zpid, slug: args.slug };
+    const slug = args.slug ?? extractSlugFromUrl(args.url);
+    return { zpid, slug };
   }
   return { zpid: args.zpid, slug: args.slug };
 }

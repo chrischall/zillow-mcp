@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SQFT_PER_ACRE } from '@chrischall/realty-core';
 import type { ZillowClient } from '../../src/client.js';
 import {
   PROPERTY_DETAIL_SHA256_HASH,
@@ -70,12 +71,24 @@ describe('persistedQuery request construction (issue #99)', () => {
     }
   });
 
-  it('uses the caller-supplied slug in the referer when a url is given', () => {
+  it('uses the caller-supplied slug in the referer', () => {
     const headers = graphqlPropertyHeaders({
       zpid: 12345,
       slug: '268-Mallard-Rd-Lake-Lure-NC-28746',
     });
     expect(headers['referer']).toBe(
+      'https://www.zillow.com/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746/12345_zpid/'
+    );
+  });
+
+  it('derives the slug from a full homedetails url for the referer', async () => {
+    mockFetchJson.mockResolvedValue(sanitizedResponse());
+    await fetchPropertyViaGraphql(mockClient, {
+      zpid: 12345,
+      url: '/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746/12345_zpid/',
+    });
+    const [, init] = mockFetchJson.mock.calls[0];
+    expect(init.headers['referer']).toBe(
       'https://www.zillow.com/homedetails/268-Mallard-Rd-Lake-Lure-NC-28746/12345_zpid/'
     );
   });
@@ -144,6 +157,35 @@ describe('persistedQuery response parsing (issue #99)', () => {
     expect(init.headers['client-id']).toBe(
       'not-for-sale-sub-app-browser-client'
     );
+  });
+});
+
+describe('normalizeLot — GraphQL lot fields → canonical lotSize (sqft)', () => {
+  function lotResponse(
+    lot: Partial<{
+      lotSize: number;
+      lotAreaValue: number;
+      lotAreaUnits: string;
+    }>
+  ): GraphqlPropertyResponse {
+    return { data: { property: { zpid: 12345, ...lot } } };
+  }
+
+  it('converts an acre lotAreaValue to sqft via SQFT_PER_ACRE', async () => {
+    mockFetchJson.mockResolvedValue(
+      lotResponse({ lotAreaValue: 1.05, lotAreaUnits: 'acres' })
+    );
+    const { raw } = await fetchPropertyViaGraphql(mockClient, { zpid: 12345 });
+    expect(raw.lotSize).toBeCloseTo(SQFT_PER_ACRE * 1.05);
+    expect(format(raw).lot_size_acres).toBe(1.05);
+  });
+
+  it('uses an explicit sqft lotAreaValue verbatim', async () => {
+    mockFetchJson.mockResolvedValue(
+      lotResponse({ lotAreaValue: 45738, lotAreaUnits: 'sqft' })
+    );
+    const { raw } = await fetchPropertyViaGraphql(mockClient, { zpid: 12345 });
+    expect(raw.lotSize).toBe(45738);
   });
 });
 
