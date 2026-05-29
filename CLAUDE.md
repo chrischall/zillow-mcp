@@ -4,7 +4,7 @@ Guidance for Claude working in this repo.
 
 ## TL;DR
 
-v0.1.0: Zillow MCP server. Default and only transport: localhost WebSocket via [`@fetchproxy/server`](https://github.com/chrischall/fetchproxy) — the companion browser extension is installed separately rather than embedded. Every HTTP call to zillow.com is dispatched through the user's signed-in Chrome tab — each request rides their existing session (cookies, TLS, JS context) exactly as if they'd clicked it themselves.
+v0.8.0: Zillow MCP server. Default and only transport: localhost WebSocket via [`@fetchproxy/server`](https://github.com/chrischall/fetchproxy) — the companion browser extension is installed separately rather than embedded. Every HTTP call to zillow.com is dispatched through the user's signed-in Chrome tab — each request rides their existing session (cookies, TLS, JS context) exactly as if they'd clicked it themselves.
 
 This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not "Pattern B" (one bootstrap call then direct fetch). Zillow validates each request at the session level, so the in-session routing has to be per-call.
 
@@ -13,25 +13,31 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | Tool | File | Endpoint | Kind |
 | --- | --- | --- | --- |
 | `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
-| `zillow_get_property` | `tools/properties.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
-| `zillow_get_by_address` | `tools/get-by-address.ts` | GET `/homes/<address-slug>_rb/` SSR — first `listResults[]` row | read |
-| `zillow_get_property_photos` | `tools/photos.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.photos[]) | read |
-| `zillow_get_zestimate_history` | `tools/zestimate.ts` | GET `/homedetails/<zpid>_zpid/` SSR | read |
-| `zillow_get_price_history` | `tools/history.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.priceHistory) | read |
-| `zillow_get_tax_history` | `tools/history.ts` | GET `/homedetails/<zpid>_zpid/` SSR (property.taxHistory) | read |
-| `zillow_compare_properties` | `tools/compare.ts` | GET `/homedetails/<zpid>_zpid/` SSR ×N (concurrent) | read |
+| `zillow_get_property` | `tools/properties.ts` | POST `/graphql/` (inline `PropertyDetail`) → SSR `/homedetails/<zpid>_zpid/` floor | read |
+| `zillow_get_by_address` | `tools/get-by-address.ts` | GET `/homes/<address-slug>_rb/` SSR — shared 4-rung resolver (`resolver.ts`) | read |
+| `zillow_resolve_addresses` | `tools/resolve-addresses.ts` | Batch over the shared resolver (`resolver.ts`), bridge-concurrency-bounded | read |
+| `zillow_bulk_get` | `tools/bulk-get.ts` | `fetchPropertyRecord` ×N (GraphQL-first, SSR floor), concurrency-bounded | read |
+| `zillow_get_property_photos` | `tools/photos.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `property.photos[]` | read |
+| `zillow_get_zestimate_history` | `tools/zestimate.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `homeValueChartData` | read |
+| `zillow_get_price_history` | `tools/history.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `property.priceHistory` | read |
+| `zillow_get_tax_history` | `tools/history.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `property.taxHistory` | read |
+| `zillow_compare_properties` | `tools/compare.ts` | `fetchPropertyRecord` ×N (GraphQL-first, SSR floor), concurrent | read |
 | `zillow_get_saved_searches` | `tools/saved.ts` | GET `/myzillow/SavedSearches` SSR | read (auth) |
 | `zillow_get_saved_homes` | `tools/saved.ts` | GET `/myzillow/favorites` SSR (collectionsResponse[].homes) | read (auth) |
 | `zillow_get_market_report` | `tools/market.ts` | GET `/home-values/<region>/` SSR | read |
 | `zillow_calculate_mortgage` | `tools/mortgage.ts` | (local; no network) | read |
 | `zillow_calculate_affordability` | `tools/affordability.ts` | (local; no network) | read |
-| `zillow_calculate_rent_vs_buy` | `tools/affordability.ts` | (local; no network) | read |
+| `zillow_estimate_rent_vs_buy` | `tools/affordability.ts` | (local; no network) | read |
 | `zillow_healthcheck` | `tools/healthcheck.ts` | GET `/robots.txt` round-trip + bridge status snapshot | read |
 | `zillow_register_session` | `tools/sessions.ts` | (local; no network) | write (registry) |
 | `zillow_set_active_session` | `tools/sessions.ts` | (local; no network) | write (registry) |
 | `zillow_get_session_context` | `tools/sessions.ts` | (local; no network) | read |
 
-All SSR tools parse `<script id="__NEXT_DATA__">` from the response. Zillow is a Next.js app; `__NEXT_DATA__.props.pageProps` is the canonical hydration root.
+**Property fetch is GraphQL-first (issues #99/#102).** `zillow_get_property` and every tool that shares `fetchPropertyRecord` (compare, bulk_get, price/tax history, photos, zestimate) PRIMARY-fetch via an INLINE POST to Zillow's own `/graphql/` endpoint (`tools/graphql-property.ts`, operation `PropertyDetail`, no persisted-query hash — see that file's header). The SSR `/homedetails/<zpid>_zpid/` scrape is the FLOOR, used when the input is a slug-only URL with no zpid or when the GraphQL attempt fails for a non-bot-wall reason. The search/saved/market/resolver tools stay SSR-only.
+
+Both the GraphQL `property { … }` payload and the SSR `__NEXT_DATA__` cache carry the same field names, so the downstream parsers (`format()`, the photo/chart/history formatters) read them identically. SSR tools parse `<script id="__NEXT_DATA__">` from the response — Zillow is a Next.js app and `__NEXT_DATA__.props.pageProps` is the canonical hydration root.
+
+`get_by_address` + `resolve_addresses` share a 4-rung resolver (`tools/resolver.ts`): direct → autocomplete typeahead → suffix/compound variants → locality remap → scope-resolve search. Address parsing/variant/tokenize/day-count helpers come from `@chrischall/realty-core` (see `address-parse` removal + the realty-core helpers in `resolver.ts`/`search.ts`/`properties.ts`).
 
 ## Architecture
 
@@ -49,13 +55,28 @@ src/
   url.ts                # urlToPath — reduce a Zillow URL or bare path
                         #   to its path+search portion
   mcp.ts                # textResult() result-wrapper
+  features.ts           # extractFeatures + community vocabulary loader
+                        #   (override via ZILLOW_*_FILE env vars)
   tools/
-    search.ts           # zillow_search_properties (buildSearchBody + formatListing)
-    properties.ts       # zillow_get_property (findPropertyInPageProps)
-    zestimate.ts        # zillow_get_zestimate_history (extractZestimateHistory)
+    search.ts           # zillow_search_properties (buildSearchQueryState + formatListing)
+    properties.ts       # zillow_get_property + the shared fetchPropertyRecord
+                        #   (GraphQL-first, SSR floor) + format()
+    graphql-property.ts # the inline-POST PropertyDetail GraphQL fetch
+                        #   (fetchPropertyViaGraphql) — primary property path
+    resolver.ts         # shared 4-rung address resolver (resolveAddressFull)
+    get-by-address.ts   # zillow_get_by_address (thin wrapper over resolver.ts)
+    resolve-addresses.ts# zillow_resolve_addresses (batch over the resolver)
+    bulk-get.ts         # zillow_bulk_get (fetchPropertyRecord ×N)
+    compare.ts          # zillow_compare_properties (fetchPropertyRecord ×N)
+    history.ts          # zillow_get_price_history, zillow_get_tax_history
+    zestimate.ts        # zillow_get_zestimate_history (extractZestimateHistory,
+                        #   via fetchPropertyRecord)
+    photos.ts           # zillow_get_property_photos (via fetchPropertyRecord)
     saved.ts            # zillow_get_saved_searches, zillow_get_saved_homes
     market.ts           # zillow_get_market_report
     mortgage.ts         # zillow_calculate_mortgage (local PITI)
+    affordability.ts    # zillow_calculate_affordability, zillow_estimate_rent_vs_buy
+    sessions.ts         # zillow_{register,set_active}_session, get_session_context
     healthcheck.ts      # zillow_healthcheck (bridge round-trip diagnostics)
 
 tests/                  # 1:1 mirror of src/, plus tests/helpers.ts harness.
@@ -125,8 +146,6 @@ Version appears in EIGHT places — all must match:
 7. `.claude-plugin/marketplace.json` → `metadata.version` + `plugins[].version`
 
 `release-please-config.json` registers all of these as `extra-files` so the release-please workflow rewrites them in one PR per release.
-
-release-please-config.json registers all of these as `extra-files` so the release-please workflow rewrites them in one PR per release.
 
 ### Release flow
 

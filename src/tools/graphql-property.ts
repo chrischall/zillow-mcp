@@ -234,9 +234,17 @@ export const PROPERTY_DETAIL_SHA256_HASH =
   '28d4cee0936bc44b55b4f101de016bd409ed667a842848cf6086aa48e6c792f0';
 
 /**
- * Resolve the active property-detail hash. Prefers the
- * `ZILLOW_PROPERTY_QUERY_HASH` env override (the rotation escape hatch)
- * and falls back to the documented constant.
+ * The `sha256Hash` the persisted-query FALLBACK rides. Returns the
+ * `ZILLOW_PROPERTY_QUERY_HASH` env value when set, else the documented
+ * {@link PROPERTY_DETAIL_SHA256_HASH} constant.
+ *
+ * Note the FALLBACK only runs when an operator HAS set
+ * `ZILLOW_PROPERTY_QUERY_HASH` (see {@link fetchPropertyViaGraphql} —
+ * `hasPersistedHashOverride`), so in normal operation this resolves to
+ * the env value. The constant is the default only for the (rare) case
+ * where the override is set to an empty/whitespace string; it is NOT a
+ * silently-used fallback on the primary path, which carries the full
+ * inline query and needs no hash at all.
  */
 export function propertyDetailHash(): string {
   const override = process.env.ZILLOW_PROPERTY_QUERY_HASH?.trim();
