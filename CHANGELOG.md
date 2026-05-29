@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/chrischall/zillow-mcp/compare/v0.8.0...v0.9.0) (2026-05-29)
+
+
+### Features
+
+* canonical GetAutocompleteResults typeahead rung in address resolver ([#105](https://github.com/chrischall/zillow-mcp/issues/105)) ([b780fa4](https://github.com/chrischall/zillow-mcp/commit/b780fa4fadfc597a2bfba283fa4763d3167f834c))
+* **deps:** adopt @fetchproxy/server 0.11.0 + @chrischall/realty-core 0.4.1 ([#111](https://github.com/chrischall/zillow-mcp/issues/111)) ([d8baa6a](https://github.com/chrischall/zillow-mcp/commit/d8baa6a41976b26ec483eb08245bdf9a3f2a2bfe))
+* inline-first GraphQL property fetch — shirk the static persisted-query hash ([#104](https://github.com/chrischall/zillow-mcp/issues/104)) ([9c08b0e](https://github.com/chrischall/zillow-mcp/commit/9c08b0ef68744f0fad96378b58dcf1539ab5db19))
+
+
+### Bug Fixes
+
+* **ci:** arm auto-merge from verdict comment when structured_output is empty ([#108](https://github.com/chrischall/zillow-mcp/issues/108)) ([49bd246](https://github.com/chrischall/zillow-mcp/commit/49bd2464300cc73c38cad82c85b559fdb1629f0b))
+* **ci:** treat instant-merge race as success in auto-merge arm ([#107](https://github.com/chrischall/zillow-mcp/issues/107)) ([dbcbfbe](https://github.com/chrischall/zillow-mcp/commit/dbcbfbe13b39ecc5cceddf115c491997b3f631df))
+* **resolver:** anchor resolveDirect match on street number ([#110](https://github.com/chrischall/zillow-mcp/issues/110)) ([01148fe](https://github.com/chrischall/zillow-mcp/commit/01148fe7bb8940fc88fba3e7647eb74a290c9a01))
+
 ## [0.8.0](https://github.com/chrischall/zillow-mcp/compare/v0.7.0...v0.8.0) (2026-05-29)
 
 
