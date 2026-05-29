@@ -55,7 +55,12 @@ export interface GetByAddressResult {
   /** The slug we passed through the resolver — useful for debugging an unexpected miss. */
   query?: string;
   /** Which rung of the resolution ladder produced the result. */
-  via?: 'direct' | 'suffix_expansion' | 'locality_remap' | 'search_fallback';
+  via?:
+    | 'direct'
+    | 'autocomplete'
+    | 'suffix_expansion'
+    | 'locality_remap'
+    | 'search_fallback';
 }
 
 function formatResolvedResult(
@@ -95,7 +100,7 @@ export function registerGetByAddressTools(
     {
       title: 'Resolve an address to its Zillow canonical URL + zpid',
       description:
-        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. IMPORTANT: for rural / mountain-MLS / locality-mismatched addresses (the search-fallback rung is often the ONLY rung that hits), ALWAYS pass `price_min` and `price_max` if you have any sense of the property's price band — without them the city/state search can't disambiguate and the call returns `{ resolved: false }`. The price params are not optional niceties; they are frequently load-bearing. Tries up to 4 rungs: (1) direct resolver hit, (2) bidirectional street-token swap (\"Rd\" <-> \"Road\", \"Hts\" <-> \"Heights\", \"Bluebird\" <-> \"Blue Bird\"), (3) locality remap — city-drop + locality-alias substitution when the caller-supplied city fails (real-world cases: Lake Lure <-> Rutherfordton, Beech/Sugar Mountain <-> Banner Elk), (4) city/state search fallback bounded by the price band. Returns `via: \"direct\" | \"suffix_expansion\" | \"locality_remap\" | \"search_fallback\"` so the caller knows how the match was made; when the locality remap fires, `queried_city` (what you sent) and `resolved_city` (what Zillow returned) are both set so the caller can see the substitution. Degrades to `{ resolved: false }` when ALL rungs miss — does not throw. Read-only, no auth required.",
+        "Resolve a free-text address (with optional city/state/zip) to its Zillow canonical homedetails URL and zpid. IMPORTANT: for rural / mountain-MLS / locality-mismatched addresses (the search-fallback rung is often the ONLY rung that hits), ALWAYS pass `price_min` and `price_max` if you have any sense of the property's price band — without them the city/state search can't disambiguate and the call returns `{ resolved: false }`. The price params are not optional niceties; they are frequently load-bearing. Tries up to 5 rungs: (1) direct resolver hit, (2) autocomplete typeahead — Zillow's own canonical address suggestions, whole-token street-matched then resolved to a zpid (high recall), (3) bidirectional street-token swap (\"Rd\" <-> \"Road\", \"Hts\" <-> \"Heights\", \"Bluebird\" <-> \"Blue Bird\"), (4) locality remap — city-drop + locality-alias substitution when the caller-supplied city fails (real-world cases: Lake Lure <-> Rutherfordton, Beech/Sugar Mountain <-> Banner Elk), (5) city/state search fallback bounded by the price band. Returns `via: \"direct\" | \"autocomplete\" | \"suffix_expansion\" | \"locality_remap\" | \"search_fallback\"` so the caller knows how the match was made; when the locality remap fires, `queried_city` (what you sent) and `resolved_city` (what Zillow returned) are both set so the caller can see the substitution. Degrades to `{ resolved: false }` when ALL rungs miss — does not throw. Read-only, no auth required.",
       annotations: {
         title: 'Resolve an address to its Zillow canonical URL + zpid',
         readOnlyHint: true,

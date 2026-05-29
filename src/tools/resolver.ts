@@ -1,5 +1,5 @@
 /**
- * Shared 4-rung address-resolution strategy used by both
+ * Shared 5-rung address-resolution strategy used by both
  * `zillow_get_by_address` (single) and `zillow_resolve_addresses` (bulk).
  *
  * Issue #73 — bulk used to run only rung 1 (direct), so a real-world
@@ -9,9 +9,12 @@
  *
  * Ladder (each rung tried only when the prior misses):
  *   1. Direct          — `/homes/<slug>_rb/`
- *   2. Suffix expansion — `Rd <-> Road`, `Hts <-> Heights` (issue #51 + #76)
- *   3. Locality remap   — city-drop + alias substitution (issue #75)
- *   4. Search fallback  — city/state-scoped search bounded by an
+ *   2. Autocomplete    — Zillow's canonical `GetAutocompleteResults`
+ *                          typeahead → street-match → address→zpid
+ *                          (high-recall; issue #101)
+ *   3. Suffix expansion — `Rd <-> Road`, `Hts <-> Heights` (issue #51 + #76)
+ *   4. Locality remap   — city-drop + alias substitution (issue #75)
+ *   5. Search fallback  — city/state-scoped search bounded by an
  *                          optional price band (issue #52, plumbed
  *                          through to bulk in issue #74)
  */
@@ -42,6 +45,7 @@ export interface ResolverInput {
 
 export type ResolverVia =
   | 'direct'
+  | 'autocomplete'
   | 'suffix_expansion'
   | 'locality_remap'
   | 'search_fallback';
@@ -157,6 +161,242 @@ export async function searchFallback(
     if (inputTokens.every((t) => haystack.includes(t))) return l;
   }
   return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Autocomplete typeahead rung (issue #101).
+ *
+ * Zillow's own address typeahead is a GraphQL endpoint that returns clean
+ * suggestions and sends the query INLINE (the full operation text in the
+ * body — NOT a persisted-query sha256 hash), so it carries no
+ * hash-rotation fragility (unlike the property-detail persistedQuery
+ * endpoint in graphql-property.ts). The bridge supplies cookies
+ * AMBIENTLY; this rung NEVER sets, reads, logs, or stores a cookie — the
+ * headers below are explicitly cookie-free.
+ *
+ * Scope guard (issue #101): this GraphQL call is kept self-contained in
+ * the resolver module. A parallel PR is adding shared inline-GraphQL POST
+ * infra to graphql-property.ts; we deliberately do NOT depend on it here
+ * to avoid a merge collision. Minor helper duplication is intentional and
+ * will be deduped later.
+ *
+ * Endpoint:
+ *   POST https://www.zillow.com/zg-graph
+ *     ?query=<q>&resultType=REGIONS&resultType=FORSALE&...
+ *     &shouldRequestSpellCorrectedMetadata=false
+ *     &operationName=GetAutocompleteResults
+ *   body: { operationName, query: <inline GraphQL>, variables, resultType,
+ *           shouldRequestSpellCorrectedMetadata }
+ *
+ * Response: { data: { searchAssistanceResult: { requestId, results } } }
+ * where each `SearchAssistanceAddressResult.id` is the full address
+ * string (e.g. "3538 Trent St Charlotte, NC 28209").
+ * ------------------------------------------------------------------ */
+
+/** GraphQL operation name for the typeahead endpoint. */
+export const AUTOCOMPLETE_OPERATION_NAME = 'GetAutocompleteResults';
+
+/** The `resultType` set the site sends (REGIONS first, then listings). */
+const AUTOCOMPLETE_RESULT_TYPES = [
+  'REGIONS',
+  'FORSALE',
+  'RENTALS',
+  'SOLD',
+  'COMMUNITIES',
+  'SCHOOLS',
+  'SCHOOL_DISTRICTS',
+  'SEMANTIC_REGIONS',
+  'BUILDER_COMMUNITIES',
+] as const;
+
+/**
+ * The INLINE GraphQL query text. Sent verbatim in the request body — no
+ * persisted-query hash, so nothing here rotates. The fragment selects the
+ * `id` (full address string) off `SearchAssistanceAddressResult`, which
+ * is the only field this rung consumes.
+ */
+const AUTOCOMPLETE_QUERY = `query GetAutocompleteResults($query: String!, $queryOptions: SearchAssistanceQueryOptions, $resultType: [SearchAssistanceResultType], $shouldRequestSpellCorrectedMetadata: Boolean = false) {
+  searchAssistanceResult: zgsAutocompleteRequest(query: $query, queryOptions: $queryOptions, resultType: $resultType, shouldRequestSpellCorrectedMetadata: $shouldRequestSpellCorrectedMetadata) {
+    requestId
+    results {
+      __typename
+      ... on SearchAssistanceAddressResult {
+        id
+      }
+    }
+  }
+}`;
+
+/** Shape of the `GetAutocompleteResults` POST body. */
+export interface AutocompleteBody {
+  operationName: string;
+  query: string;
+  variables: {
+    query: string;
+    queryOptions?: Record<string, unknown>;
+    resultType: string[];
+    shouldRequestSpellCorrectedMetadata: boolean;
+  };
+  resultType: string[];
+  shouldRequestSpellCorrectedMetadata: boolean;
+}
+
+/**
+ * Build the `/zg-graph?...` request path. The `operationName`, `query`,
+ * each `resultType`, and the spell-correction flag ride the query string
+ * (mirroring the site). Returns a path (origin prepended by the
+ * transport), not a full URL.
+ */
+export function buildAutocompletePath(query: string): string {
+  const qs = new URLSearchParams();
+  qs.set('query', query);
+  for (const t of AUTOCOMPLETE_RESULT_TYPES) qs.append('resultType', t);
+  qs.set('shouldRequestSpellCorrectedMetadata', 'false');
+  qs.set('operationName', AUTOCOMPLETE_OPERATION_NAME);
+  return `/zg-graph?${qs.toString()}`;
+}
+
+/**
+ * Build the request headers. Cookie-free by construction — the bridge
+ * supplies the session ambiently. The `referer` mimics a real
+ * for-sale-page navigation (the endpoint is gated on a plausible referer)
+ * and `x-caller-id` matches the site's static search page client.
+ */
+export function autocompleteHeaders(): Record<string, string> {
+  return {
+    'content-type': 'application/json',
+    origin: 'https://www.zillow.com',
+    referer: 'https://www.zillow.com/homes/for_sale/',
+    'x-caller-id': 'static-search-page-graphql',
+  };
+}
+
+/**
+ * Build the POST body with the INLINE query (no persisted hash). The
+ * caller may pass `queryOptions` (viewPort / userLocation) to scope the
+ * search to a local area for better recall.
+ */
+export function buildAutocompleteBody(
+  query: string,
+  queryOptions?: Record<string, unknown>
+): AutocompleteBody {
+  const resultType = [...AUTOCOMPLETE_RESULT_TYPES];
+  return {
+    operationName: AUTOCOMPLETE_OPERATION_NAME,
+    query: AUTOCOMPLETE_QUERY,
+    variables: {
+      query,
+      ...(queryOptions ? { queryOptions } : {}),
+      resultType,
+      shouldRequestSpellCorrectedMetadata: false,
+    },
+    resultType,
+    shouldRequestSpellCorrectedMetadata: false,
+  };
+}
+
+/** Minimal typed view of the autocomplete response (success arm). */
+interface AutocompleteResponse {
+  data?: {
+    searchAssistanceResult?: {
+      requestId?: unknown;
+      results?: Array<{ __typename?: string; id?: unknown } | null> | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * Query the typeahead endpoint and return the `SearchAssistanceAddressResult`
+ * `id` strings (each a full address). POSTs through `client.fetchJson`, so
+ * bot-wall / sign-in / non-2xx mapping stays on the client. A transport
+ * fault (incl. `FetchproxyTimeoutError`) propagates to the caller, which
+ * decides how to classify it (issue #100 taxonomy). A well-formed-but-
+ * unexpected response shape degrades to `[]` (never a throw).
+ */
+export async function fetchAutocompleteAddressCandidates(
+  client: ZillowClient,
+  query: string,
+  queryOptions?: Record<string, unknown>
+): Promise<string[]> {
+  const resp = await client.fetchJson<AutocompleteResponse>(
+    buildAutocompletePath(query),
+    {
+      method: 'POST',
+      headers: autocompleteHeaders(),
+      body: buildAutocompleteBody(query, queryOptions),
+    }
+  );
+  const results = resp?.data?.searchAssistanceResult?.results;
+  if (!Array.isArray(results)) return [];
+  const out: string[] = [];
+  for (const r of results) {
+    if (
+      r &&
+      r.__typename === 'SearchAssistanceAddressResult' &&
+      typeof r.id === 'string' &&
+      r.id.trim().length > 0
+    ) {
+      out.push(r.id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Whole-token street-match the caller's input address against the
+ * autocomplete candidate ids. A candidate wins only when EVERY
+ * discriminating input token (length >= 3) appears as a WHOLE token in the
+ * candidate — i.e. set membership, not substring containment, so a
+ * partial-street near-miss ("Trent St" vs "Trenton Ave") never matches.
+ * (This is stricter than the search-fallback rung's substring match: the
+ * autocomplete corpus is small + already street-scoped, so we can afford
+ * the precision and avoid "Trent" matching "Trenton".)
+ *
+ * Returns the first matching candidate, or null. Pathological input that
+ * tokenizes to nothing discriminating returns null (no blanket first-hit).
+ */
+export function selectAutocompleteMatch(
+  candidates: string[],
+  inputAddress: string
+): string | null {
+  const inputTokens = locationTokens(inputAddress).filter((t) => t.length >= 3);
+  if (inputTokens.length === 0) return null;
+  for (const cand of candidates) {
+    const candTokens = new Set(locationTokens(cand));
+    if (inputTokens.every((t) => candTokens.has(t))) return cand;
+  }
+  return null;
+}
+
+/**
+ * Autocomplete typeahead rung (issue #101). Queries Zillow's canonical
+ * `GetAutocompleteResults` endpoint, whole-token street-matches the
+ * candidates against the input, then resolves the matched canonical
+ * address string to a zpid via the existing direct address→zpid path
+ * (`resolveDirect`). Returns the hit or null on any miss.
+ *
+ * Throws only on a transport fault from the autocomplete POST or the
+ * follow-up direct resolve — the caller swallows `FetchproxyTimeoutError`
+ * for ladder progression (remembering it so an all-timeout ladder still
+ * re-throws) and swallows non-timeout autocomplete failures as a graceful
+ * miss so this enhancement rung never regresses the existing ladder.
+ */
+async function autocompleteRung(
+  client: ZillowClient,
+  input: ResolverInput
+): Promise<{ raw: RawListing; formatted: NonNullable<ReturnType<typeof formatListing>>; slug: string } | null> {
+  // Query with the fullest scope we have so the typeahead disambiguates.
+  const query = buildAddressSlug(input);
+  if (query.trim().length === 0) return null;
+  const candidates = await fetchAutocompleteAddressCandidates(client, query);
+  if (candidates.length === 0) return null;
+  const match = selectAutocompleteMatch(candidates, input.address);
+  if (!match) return null;
+  // Second hop: resolve the canonical autocomplete address to a zpid via
+  // the resolver's existing direct path.
+  const hit = await resolveDirect(client, match);
+  if (!hit) return null;
+  return { ...hit, slug: match };
 }
 
 /**
@@ -493,16 +733,17 @@ async function localityRemap(
 }
 
 /**
- * Run the full 4-rung ladder against a single address. Returns the
+ * Run the full 5-rung ladder against a single address. Returns the
  * first hit (with `via` marking which rung produced it) or null when
  * all rungs miss. Throws on transport errors — callers in the bulk
  * path wrap this in per-row error capture.
  *
  * Rungs:
  *   1. Direct
- *   2. Street-variant retry (suffix swap + compound splits)
- *   3. Locality remap (city-drop + alias substitution) — issue #75
- *   4. Search fallback (city/state-scoped + price band)
+ *   2. Autocomplete typeahead (canonical GetAutocompleteResults) — issue #101
+ *   3. Street-variant retry (suffix swap + compound splits)
+ *   4. Locality remap (city-drop + alias substitution) — issue #75
+ *   5. Search fallback (city/state-scoped + price band)
  */
 export async function resolveAddressFull(
   client: ZillowClient,
@@ -510,9 +751,10 @@ export async function resolveAddressFull(
 ): Promise<{ hit: ResolverHit; finalSlug: string } | { miss: ResolverMiss }> {
   const baseSlug = buildAddressSlug(input);
 
-  // Issue #100 (P1-2): the typeahead/direct rungs (1-3) hit
-  // `/homes/<slug>_rb/`. If one of those resolves TIMES OUT, it must NOT
-  // abort the whole ladder before the search-fallback rung (rung 4)
+  // Issue #100 (P1-2): the direct rungs (1-4) hit `/homes/<slug>_rb/`
+  // (the autocomplete rung's follow-up resolve walks the same path). If
+  // one of those resolves TIMES OUT, it must NOT abort the whole ladder
+  // before the search-fallback rung (rung 5)
   // runs — a slow typeahead shouldn't skip the first-class search
   // fallback. So we swallow a `FetchproxyTimeoutError` from a direct rung
   // (treating it as a miss for ladder-progression) BUT remember it, so a
@@ -549,7 +791,40 @@ export async function resolveAddressFull(
     };
   }
 
-  // Rung 2: suffix expansion + compound-token variants (issue #51 + #76).
+  // Rung 2: autocomplete typeahead (issue #101). A high-recall rung
+  // backed by Zillow's own canonical `GetAutocompleteResults` endpoint:
+  // query typeahead → whole-token street-match the candidates → resolve
+  // the matched canonical address to a zpid via the direct path.
+  //
+  // Failure handling honors the #100 timeout taxonomy AND the
+  // "never a regression" guarantee: a `FetchproxyTimeoutError` from the
+  // autocomplete POST (or its follow-up direct resolve) is swallowed for
+  // ladder progression but REMEMBERED (so an all-timeout ladder still
+  // re-throws). A NON-timeout autocomplete failure is swallowed as a
+  // graceful miss — this is an enhancement rung and must never abort the
+  // ladder before the existing fallback rungs run.
+  let autocomplete: Awaited<ReturnType<typeof autocompleteRung>> = null;
+  try {
+    autocomplete = await autocompleteRung(client, input);
+  } catch (e) {
+    if (e instanceof FetchproxyTimeoutError) {
+      swallowedTimeout = e;
+    }
+    // Any non-timeout autocomplete error is a graceful miss (fall through).
+  }
+  if (autocomplete) {
+    return {
+      hit: {
+        raw: autocomplete.raw,
+        formatted: autocomplete.formatted,
+        via: 'autocomplete',
+        slug: autocomplete.slug,
+      },
+      finalSlug: autocomplete.slug,
+    };
+  }
+
+  // Rung 3: suffix expansion + compound-token variants (issue #51 + #76).
   const variants = streetAddressVariants(input.address).slice(1); // skip original
   for (const v of variants) {
     const slug = buildAddressSlug({ ...input, address: v });
@@ -567,10 +842,10 @@ export async function resolveAddressFull(
     }
   }
 
-  // Rung 3: locality remap (issue #75). Try city-drop and known aliases
+  // Rung 4: locality remap (issue #75). Try city-drop and known aliases
   // before falling all the way through to the scope-resolve search. A
   // timeout inside the remap is swallowed the same way (it walks the same
-  // direct resolver) so it can't skip rung 4 either.
+  // direct resolver) so it can't skip rung 5 either.
   let remap: Awaited<ReturnType<typeof localityRemap>> = null;
   try {
     remap = await localityRemap(client, input);
@@ -593,7 +868,7 @@ export async function resolveAddressFull(
     };
   }
 
-  // Rung 4: search fallback (issue #52 / #74) — a FIRST-CLASS rung, not a
+  // Rung 5: search fallback (issue #52 / #74) — a FIRST-CLASS rung, not a
   // last-ditch a rung-1 timeout could skip (issue #100). It does a
   // city/state-scoped search + whole-token street match.
   const fallbackHit = await searchFallback(client, input);
