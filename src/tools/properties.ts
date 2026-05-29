@@ -1,5 +1,14 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  buildHyperlinkFormula,
+  collectAddressAlternates as collectAddressAlternatesCore,
+  hoaToMonthlyUsd,
+  lastSold as lastSoldCore,
+  priceDrop as priceDropCore,
+  sqftToAcres,
+  TAX_SENTINEL_THRESHOLD,
+} from '@chrischall/realty-core';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
@@ -377,80 +386,42 @@ export async function fetchPropertyRecord(
  * Build the Sheets-paste-ready hyperlink formula for a listing URL.
  * Pasting the returned string into a Google Sheets cell renders as a
  * clickable "Zillow" link. (Issue #49.)
+ *
+ * Thin adapter over realty-core's `buildHyperlinkFormula(url, label)`
+ * (cohort migration realty-mcp#1) with zillow's fixed "Zillow" label.
+ * CANONICAL FIX: the core escapes embedded `"` in the url (doubling it
+ * for Sheets) — zillow's old inline version did not, so a `"` in the url
+ * silently produced a `#ERROR!` cell. Behavior-identical for every
+ * real Zillow URL (none contain a literal `"`).
  */
 export function buildPortalUrlHyperlink(url: string): string {
-  return `=HYPERLINK("${url}","Zillow")`;
+  return buildHyperlinkFormula(url, 'Zillow');
 }
 
-/**
- * Convert an HOA `{amount, frequency}` pair (in Zillow's
- * `resoFacts.associationFee*` shape) to monthly USD, rounded to the
- * nearest dollar. Returns `null` for unknown frequency strings (with a
- * stderr warning) or when the inputs are absent. (Issue #42.)
- */
-export function hoaToMonthlyUsd(
-  amount: number | undefined,
-  frequency: string | undefined
-): number | null {
-  if (typeof amount !== 'number' || !frequency) return null;
-  let monthly: number;
-  switch (frequency) {
-    case 'Monthly':
-      monthly = amount;
-      break;
-    case 'Annually':
-      monthly = amount / 12;
-      break;
-    case 'Quarterly':
-      monthly = amount / 3;
-      break;
-    case 'SemiAnnually':
-      monthly = amount / 6;
-      break;
-    case 'Weekly':
-      monthly = (amount * 52) / 12;
-      break;
-    default:
-      console.error(
-        `[zillow-mcp] hoa_monthly_usd: unknown associationFeeFrequency "${frequency}" — returning null`
-      );
-      return null;
-  }
-  return Math.round(monthly);
-}
-
-/** Square feet in one acre. */
-const SQFT_PER_ACRE = 43_560;
+// HOA `{amount, frequency}` → monthly USD (Zillow's
+// `resoFacts.associationFee*` shape), rounded to the nearest dollar.
+// Re-export of realty-core's canonical `hoaToMonthlyUsd` (cohort
+// migration realty-mcp#1) — a superset of zillow's old inline switch
+// (same MLS-enum divisors: Monthly / Annually / Quarterly /
+// SemiAnnually / Weekly), so it returns the same value for every input
+// zillow feeds it. Returns null for an absent amount, missing
+// frequency, or unrecognized frequency string (the last logs a stderr
+// warning). (Issue #42.)
+export { hoaToMonthlyUsd };
 
 /**
  * Derive lot size in acres from a square-foot lot size, rounded to 2 dp
  * (#82). Pairs with the raw `lot_size` — acreage is the unit that matters
  * for rural/mountain/land listings.
  *
- * Null-safe: returns `null` (never `0`) when the input is missing,
- * non-numeric, or `0` — a `0` lot is treated as absent (condos / missing
- * data), matching how `lot_size` itself nulls out rather than reporting a
- * real "0 acre" lot.
+ * Re-export of realty-core's `sqftToAcres` (cohort migration
+ * realty-mcp#1) under zillow's local name. Same `round(sqft / 43560, 2)`
+ * math AND the same null-safety contract zillow's #93 review locked in:
+ * returns `null` (never `0`) for a missing / non-finite / non-positive
+ * input AND for a positive lot too small to round to a non-zero acreage
+ * (below ~218 sqft). Behavior-identical to the old inline version.
  */
-export function lotSizeAcres(
-  lotSqFt: number | undefined | null
-): number | null {
-  if (typeof lotSqFt !== 'number' || !Number.isFinite(lotSqFt) || lotSqFt <= 0) {
-    return null;
-  }
-  const acres = Math.round((lotSqFt / SQFT_PER_ACRE) * 100) / 100;
-  return acres > 0 ? acres : null;
-}
-
-/**
- * Normalize an address for equality checks — collapse whitespace, drop
- * punctuation, and lowercase. Used to dedupe `address_alternates`
- * against the primary `address.streetAddress`.
- */
-function normalizeAddressForCompare(s: string | undefined): string {
-  if (!s) return '';
-  return s.toLowerCase().replace(/[,#.]/g, '').replace(/\s+/g, ' ').trim();
-}
+export { sqftToAcres as lotSizeAcres };
 
 /**
  * Collect alternate address strings from the raw payload, excluding
@@ -458,59 +429,60 @@ function normalizeAddressForCompare(s: string | undefined): string {
  * disagrees with `address.streetAddress`) and any `altAddresses[]`
  * that may be present. Returns an empty array when nothing differs.
  * (Issue #50.)
+ *
+ * Thin gather-then-delegate wrapper over realty-core's canonical
+ * `collectAddressAlternates(primary, candidates)` (cohort migration
+ * realty-mcp#1) — zillow gathers its portal-specific candidate fields
+ * (`mlsStreetAddress` + `altAddresses[]`) and hands them to the shared
+ * normalize-then-dedup helper. Byte-identical internals.
  */
 export function collectAddressAlternates(
   primary: string | undefined,
   raw: RawProperty
 ): string[] {
-  const primaryNorm = normalizeAddressForCompare(primary);
-  const candidates: string[] = [];
+  const candidates: Array<string | undefined> = [];
   if (raw.mlsStreetAddress) candidates.push(raw.mlsStreetAddress);
   if (raw.altAddresses) candidates.push(...raw.altAddresses);
-  const seen = new Set<string>();
-  const alternates: string[] = [];
-  for (const candidate of candidates) {
-    const norm = normalizeAddressForCompare(candidate);
-    if (!norm) continue;
-    if (norm === primaryNorm) continue;
-    if (seen.has(norm)) continue;
-    seen.add(norm);
-    alternates.push(candidate);
-  }
-  return alternates;
+  return collectAddressAlternatesCore(primary, candidates);
 }
 
 /**
  * Find the most recent `Sold` event in a price history series.
  * Picks by date (or epoch `time`), preferring the latest. (Issue #57.)
+ *
+ * Thin adapter over realty-core's generic accessor-based `lastSold`
+ * (cohort migration realty-mcp#1): we supply zillow's
+ * `{ event, date (ISO), time (epoch ms), price }` accessors — falling
+ * back to `time` when `date` is absent — and reshape the echoed-back
+ * date to zillow's `YYYY-MM-DD` form. Sold-event detection now goes
+ * through realty-core's `mapEventType` (so "Sold (Public Records)" /
+ * "Sold (MLS)" / "Closed" all count, while "Foreclosed" no longer
+ * false-matches) rather than a raw `/sold/i` substring test, and the
+ * core requires a numeric `price` exactly as the old inline scan did.
  */
 export function findLastSold(
   history: RawPriceHistoryEntry[] | undefined
 ): { date: string; price: number } | null {
   if (!history || history.length === 0) return null;
-  let best: { ts: number; date: string; price: number } | null = null;
-  for (const ev of history) {
-    if (!ev.event || !/sold/i.test(ev.event)) continue;
-    if (typeof ev.price !== 'number') continue;
-    let ts: number | null = null;
-    let date: string | null = null;
-    if (ev.date) {
-      const parsed = Date.parse(ev.date);
-      if (!Number.isNaN(parsed)) {
-        ts = parsed;
-        date = ev.date.slice(0, 10);
-      }
-    }
-    if (ts === null && typeof ev.time === 'number') {
-      ts = ev.time;
-      date = new Date(ev.time).toISOString().slice(0, 10);
-    }
-    if (ts === null || !date) continue;
-    if (best === null || ts > best.ts) {
-      best = { ts, date, price: ev.price };
-    }
-  }
-  return best ? { date: best.date, price: best.price } : null;
+  // Only events with a numeric price were ever eligible (the old scan
+  // skipped price-less events); pre-filter so the core's recency pick
+  // matches zillow's old behavior exactly.
+  const priced = history.filter((ev) => typeof ev.price === 'number');
+  const top = lastSoldCore(priced, {
+    // Prefer the ISO `date`, but fall back to the epoch `time` when
+    // `date` is absent OR present-but-unparseable — exactly as the old
+    // inline scan did (`Date.parse(date)` NaN → use `time`).
+    date: (e) =>
+      e.date && !Number.isNaN(Date.parse(e.date)) ? e.date : e.time,
+    price: (e) => e.price,
+    type: (e) => e.event,
+  });
+  if (!top || top.price === null) return null;
+  const date =
+    typeof top.date === 'number'
+      ? new Date(top.date).toISOString().slice(0, 10)
+      : top.date.slice(0, 10);
+  return { date, price: top.price };
 }
 
 export function format(
@@ -541,7 +513,7 @@ export function format(
     baths: raw.bathrooms,
     living_area: raw.livingArea,
     lot_size: lotSize,
-    lot_size_acres: lotSizeAcres(lotSize),
+    lot_size_acres: sqftToAcres(lotSize),
     // Fall back to MLS RESO yearBuilt when the top-level is missing (issue #29).
     year_built: raw.yearBuilt ?? raw.resoFacts?.yearBuilt,
     home_type: raw.homeType,
@@ -582,16 +554,21 @@ export function format(
     out.days_on_market = null;
   }
 
-  // price_drop_*: null when either side is missing or previous is zero.
-  // (Issue #43.)
-  if (
-    typeof raw.price === 'number' &&
-    typeof raw.previousPrice === 'number' &&
-    raw.previousPrice > 0
-  ) {
-    const drop = raw.previousPrice - raw.price;
-    out.price_drop_amount = drop;
-    out.price_drop_percent = Math.round((drop / raw.previousPrice) * 1000) / 10;
+  // price_drop_*: derived via realty-core's canonical `priceDrop`
+  // (cohort migration realty-mcp#1), which takes (previous, current) and
+  // returns `{ amount, percent } | null`. Reshaped to zillow's verbose
+  // `price_drop_*` keys. (Issue #43.)
+  //
+  // CANONICAL DELTA: the core returns null when there's NO real drop
+  // (current >= previous), so a price RISE now yields `{ null, null }`.
+  // zillow's old inline math emitted a NEGATIVE drop on a rise — which
+  // is semantically wrong for a field named `price_drop_*` (a rise is
+  // not a drop). Identical to the old behavior for an actual drop, a
+  // missing input, or a non-positive previous.
+  const drop = priceDropCore(raw.previousPrice, raw.price);
+  if (drop) {
+    out.price_drop_amount = drop.amount;
+    out.price_drop_percent = drop.percent;
   } else {
     out.price_drop_amount = null;
     out.price_drop_percent = null;
@@ -608,12 +585,22 @@ export function format(
     );
   }
 
-  // tax_annual + tax_status (issues #44, #77): null out the 0/1
-  // not-yet-assessed sentinels and disambiguate "no tax data" from
+  // tax_annual + tax_status (issues #44, #77): null out the
+  // not-yet-assessed placeholder and disambiguate "no tax data" from
   // "lookup failed". Fall back to resoFacts when top-level is missing.
+  //
+  // CANONICAL DELTA: the placeholder threshold widened from zillow's
+  // `<= 1` to realty-core's `TAX_SENTINEL_THRESHOLD` (< 10) — calibrated
+  // by homes-mcp against real new-build listings that returned
+  // `tax_annual` values of 2–9 (cohort migration realty-mcp#1). Those
+  // 2–9 values are now flagged `new_construction` rather than treated as
+  // a real bill. We keep zillow's tri-state `tax_status` output contract
+  // (`new_construction` / `available` / `unavailable`) rather than adopt
+  // `cleanTaxAnnual`'s `not_yet_assessed` shape — only the threshold is
+  // hoisted, via the shared constant.
   const rawTax = raw.taxAnnualAmount ?? raw.resoFacts?.taxAnnualAmount;
   if (typeof rawTax === 'number') {
-    if (rawTax <= 1) {
+    if (rawTax < TAX_SENTINEL_THRESHOLD) {
       out.tax_annual = null;
       out.tax_status = 'new_construction';
     } else {

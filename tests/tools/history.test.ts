@@ -182,6 +182,18 @@ describe('normalizePriceEvent', () => {
     expect(typeOf('Some weird future event')).toBe('Listed');
   });
 
+  // CANONICAL DELTA (realty-mcp#1): `normalizeEventType` now delegates to
+  // realty-core's `mapEventType` (collapsing its `Unknown` sentinel back
+  // to zillow's `Listed` default). It produces identical results to the
+  // old inline mapper for every event zillow has surfaced, AND adds the
+  // wider cohort synonym set — so a few labels that the old mapper let
+  // fall through to the `Listed` default now classify more specifically.
+  it('DELTA: wider cohort synonyms now classify (were Listed by default)', () => {
+    expect(typeOf('Off Market')).toBe('Delisted');
+    expect(typeOf('Price Drop')).toBe('PriceChange');
+    expect(typeOf('Closed')).toBe('Sold');
+  });
+
   it('carries date/price/source_mls/price_change_pct through', () => {
     const normalized = normalizePriceEvent({
       date: '2025-01-15',

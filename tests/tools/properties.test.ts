@@ -580,6 +580,45 @@ describe('zillow_get_property tool', () => {
       expect(parsed.price_drop_percent).toBeNull();
     });
 
+    // CANONICAL DELTA (realty-mcp#1): `price_drop_*` now comes from
+    // realty-core's `priceDrop`, which returns null on NO real drop
+    // (current >= previous). zillow's old inline math emitted a NEGATIVE
+    // drop on a price RISE — semantically wrong for a `price_drop_*`
+    // field (a rise is not a drop). A rise / unchanged price now nulls.
+    it('DELTA: a price RISE yields null price_drop_* (was a negative drop)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          price: 500_000,
+          previousPrice: 480_000,
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        price_drop_amount: number | null;
+        price_drop_percent: number | null;
+      }>(result);
+      expect(parsed.price_drop_amount).toBeNull();
+      expect(parsed.price_drop_percent).toBeNull();
+    });
+
+    it('DELTA: an unchanged price yields null price_drop_*', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          price: 500_000,
+          previousPrice: 500_000,
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        price_drop_amount: number | null;
+        price_drop_percent: number | null;
+      }>(result);
+      expect(parsed.price_drop_amount).toBeNull();
+      expect(parsed.price_drop_percent).toBeNull();
+    });
+
     it('surfaces days_on_market (alias for daysOnZillow) (issue #43)', async () => {
       mockFetchHtml.mockResolvedValue(
         htmlWithProperty({ zpid: 1, daysOnZillow: 30 } as RawProperty)
@@ -632,6 +671,51 @@ describe('zillow_get_property tool', () => {
         tax_status: string;
       }>(result);
       expect(parsed.tax_annual).toBe(5432);
+      expect(parsed.tax_status).toBe('available');
+    });
+
+    // CANONICAL DELTA (realty-mcp#1): the not-yet-assessed placeholder
+    // threshold widened from zillow's `<= 1` to realty-core's
+    // `TAX_SENTINEL_THRESHOLD` (< 10) — calibrated by homes-mcp against
+    // real new-build listings that returned tax_annual values of 2–9.
+    // Those now flag `new_construction` rather than passing through as a
+    // real bill. zillow keeps its tri-state `tax_status` output contract.
+    it('DELTA: tax_annual 5 → new_construction (was a real bill under <= 1)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, taxAnnualAmount: 5 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBeNull();
+      expect(parsed.tax_status).toBe('new_construction');
+    });
+
+    it('DELTA: tax_annual 9 → new_construction (top of the placeholder band)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, taxAnnualAmount: 9 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBeNull();
+      expect(parsed.tax_status).toBe('new_construction');
+    });
+
+    it('DELTA: tax_annual 10 → available (threshold boundary, exclusive)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({ zpid: 1, taxAnnualAmount: 10 } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        tax_annual: number | null;
+        tax_status: string;
+      }>(result);
+      expect(parsed.tax_annual).toBe(10);
       expect(parsed.tax_status).toBe('available');
     });
 
@@ -809,6 +893,51 @@ describe('zillow_get_property tool', () => {
       }>(result);
       expect(parsed.last_sold_date).toBeNull();
       expect(parsed.last_sold_price).toBeNull();
+    });
+
+    // last_sold detection now classifies via realty-core's `mapEventType`
+    // (cohort migration realty-mcp#1) instead of a raw `/sold/i`
+    // substring test. "Sold (Public Records)" / "Sold (MLS)" still count
+    // (behavior-preserving for zillow's strings).
+    it('matches "Sold (Public Records)" as a Sold event', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          priceHistory: [
+            { date: '2025-01-01', event: 'Listed for sale', price: 600_000 },
+            { date: '2021-05-01', event: 'Sold (Public Records)', price: 540_000 },
+          ],
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        last_sold_date: string | null;
+        last_sold_price: number | null;
+      }>(result);
+      expect(parsed.last_sold_date).toBe('2021-05-01');
+      expect(parsed.last_sold_price).toBe(540_000);
+    });
+
+    // CANONICAL DELTA (realty-mcp#1): the shared mapper adds `\bclosed\b`
+    // as a Sold synonym, so an MLS "Closed" event now counts as a sale —
+    // zillow's old raw `/sold/i` substring test did NOT match "Closed"
+    // (no "sold" substring), so this is a net-new correct classification.
+    it('DELTA: "Closed" now counts as a Sold event (was missed by /sold/i)', async () => {
+      mockFetchHtml.mockResolvedValue(
+        htmlWithProperty({
+          zpid: 1,
+          priceHistory: [{ date: '2024-02-01', event: 'Closed', price: 610_000 }],
+        } as RawProperty)
+      );
+      const result = await harness.callTool('zillow_get_property', { zpid: 1 });
+      const parsed = parseToolResult<{
+        last_sold_date: string | null;
+        last_sold_price: number | null;
+        last_sold_status: string;
+      }>(result);
+      expect(parsed.last_sold_date).toBe('2024-02-01');
+      expect(parsed.last_sold_price).toBe(610_000);
+      expect(parsed.last_sold_status).toBe('available');
     });
 
     it('computes zest_vs_list_pct = (list - zest) / zest * 100 (issue #57)', async () => {
