@@ -53,13 +53,26 @@ export const PROPERTY_DETAIL_OPERATION_NAME = 'PropertyDetail';
  * persisted-query hash. We author the operation by value here so there is
  * nothing to rotate.
  *
- * Field selection: EXACTLY the `property { … }` keys the downstream parser
- * consumes (GraphQL field names == the response keys `format()` /
- * `normalizeLot()` / the history+tax formatters read). The selection set
- * mirrors {@link RawProperty} + {@link RawGraphqlProperty} (lot fields) +
- * the nested `RawResoFacts` / `RawPriceHistoryEntry` / `RawTaxHistoryEntry`
- * / schools shapes. Keep this in sync with those types — an over-broad
- * selection risks a schema rejection that needlessly falls through to SSR.
+ * Field selection: EXACTLY the `property { … }` keys the downstream
+ * parsers consume (GraphQL field names == the response keys their
+ * readers expect). This selection feeds EVERY GraphQL-first tool that
+ * shares `fetchPropertyRecord`, so it covers all of:
+ *   - `format()` / `normalizeLot()` / the history+tax formatters
+ *     (property facts, lot, price/tax history, schools).
+ *   - `photos.ts` — `photos` / `responsivePhotos` / `originalPhotos`
+ *     (with `mixedSources.{jpeg,webp}.{url,width}`, `caption`,
+ *     `subjectType`), `photoCount`, `streetViewImageUrl`, `hiResImageLink`.
+ *     WITHOUT these, `zillow_get_property_photos` returns an empty gallery
+ *     under the inline-primary path (the SSR floor would carry them, but
+ *     GraphQL succeeds first in prod). See `PropertyWithPhotos`.
+ *   - `zestimate.ts` — `homeValueChartData` / `rentValueChartData`
+ *     (each `{ name, points { x y date value } }`) for the Zestimate
+ *     trend. See `RawPropertyWithCharts`.
+ * The selection set mirrors {@link RawProperty} + {@link RawGraphqlProperty}
+ * (lot fields) + the nested `RawResoFacts` / `RawPriceHistoryEntry` /
+ * `RawTaxHistoryEntry` / schools / photo / chart shapes. Keep this in
+ * sync with those types — an over-broad selection risks a schema
+ * rejection that needlessly falls through to SSR.
  *
  * The operation args mirror the persisted query's variables — `zpid`,
  * `altId`, `deviceTypeV2`, `includeLastSoldListing`. The exact arg TYPES
@@ -140,6 +153,72 @@ export const PROPERTY_DETAIL_INLINE_QUERY = `query ${PROPERTY_DETAIL_OPERATION_N
       type
       studentsPerTeacher
     }
+    photoCount
+    streetViewImageUrl
+    hiResImageLink
+    photos {
+      caption
+      subjectType
+      url
+      mixedSources {
+        jpeg {
+          url
+          width
+        }
+        webp {
+          url
+          width
+        }
+      }
+    }
+    responsivePhotos {
+      caption
+      subjectType
+      url
+      mixedSources {
+        jpeg {
+          url
+          width
+        }
+        webp {
+          url
+          width
+        }
+      }
+    }
+    originalPhotos {
+      caption
+      subjectType
+      url
+      mixedSources {
+        jpeg {
+          url
+          width
+        }
+        webp {
+          url
+          width
+        }
+      }
+    }
+    homeValueChartData {
+      name
+      points {
+        x
+        y
+        date
+        value
+      }
+    }
+    rentValueChartData {
+      name
+      points {
+        x
+        y
+        date
+        value
+      }
+    }
   }
 }`;
 
@@ -155,9 +234,17 @@ export const PROPERTY_DETAIL_SHA256_HASH =
   '28d4cee0936bc44b55b4f101de016bd409ed667a842848cf6086aa48e6c792f0';
 
 /**
- * Resolve the active property-detail hash. Prefers the
- * `ZILLOW_PROPERTY_QUERY_HASH` env override (the rotation escape hatch)
- * and falls back to the documented constant.
+ * The `sha256Hash` the persisted-query FALLBACK rides. Returns the
+ * `ZILLOW_PROPERTY_QUERY_HASH` env value when set, else the documented
+ * {@link PROPERTY_DETAIL_SHA256_HASH} constant.
+ *
+ * Note the FALLBACK only runs when an operator HAS set
+ * `ZILLOW_PROPERTY_QUERY_HASH` (see {@link fetchPropertyViaGraphql} —
+ * `hasPersistedHashOverride`), so in normal operation this resolves to
+ * the env value. The constant is the default only for the (rare) case
+ * where the override is set to an empty/whitespace string; it is NOT a
+ * silently-used fallback on the primary path, which carries the full
+ * inline query and needs no hash at all.
  */
 export function propertyDetailHash(): string {
   const override = process.env.ZILLOW_PROPERTY_QUERY_HASH?.trim();

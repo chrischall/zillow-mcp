@@ -19,6 +19,12 @@
  *                          through to bulk in issue #74)
  */
 import { existsSync, readFileSync } from 'node:fs';
+import {
+  SUFFIX_PAIRS,
+  buildVariants,
+  compoundSplits,
+  expandSuffix,
+} from '@chrischall/realty-core';
 import { FetchproxyTimeoutError } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { ParseError } from '../next-data.js';
@@ -394,212 +400,52 @@ async function autocompleteRung(
 /**
  * Generate ordered street-address variants to try in rung 2. The first
  * is always the original (already tried in rung 1 by the caller — the
- * caller skips index 0). Subsequent entries cover:
+ * caller skips index 0). Subsequent entries cover bidirectional suffix
+ * swaps (`Rd` <-> `Road`, `Hts` <-> `Heights`) and space-insensitive
+ * compound-token splits/joins (`Bluebird` <-> `Blue Bird`).
  *
- *   - bidirectional suffix swap (`Rd` <-> `Road`, `Hts` <-> `Heights`)
- *     — issue #76
- *   - space-insensitive compound-token splits/joins
- *     (`Bluebird` <-> `Blue Bird`, `Pinegrove` <-> `Pine Grove`)
- *     — issue #76
- *
- * Deduplicates while preserving order.
+ * CONSOLIDATION (cohort migration realty-mcp#1): this is now a thin
+ * pass-through to realty-core's canonical `buildVariants`, which hoisted
+ * this repo's former resolver machinery (suffix table + compound
+ * splits) and merged in redfin's superset. The canonical version is
+ * intentionally BROADER than the old local impl — it emits every viable
+ * compound split (not just known-prefix ones) and a wider USPS suffix
+ * table — so the resolver tries more variants before missing. Original
+ * first, deduped, order preserved.
  */
 export function streetAddressVariants(address: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const push = (v: string | null | undefined) => {
-    if (!v) return;
-    const k = v.trim();
-    if (k.length === 0 || seen.has(k.toLowerCase())) return;
-    seen.add(k.toLowerCase());
-    out.push(k);
-  };
-  push(address);
-  // Suffix swap (bidirectional).
-  push(swapStreetSuffix(address));
-  // Compound-token splits/joins.
-  for (const v of compoundTokenVariants(address)) push(v);
-  // Compound-then-suffix-swap and vice-versa to catch addresses that
-  // need both (e.g. "Bluebird Rd" -> "Blue Bird Road").
-  const suffixSwapped = swapStreetSuffix(address);
-  if (suffixSwapped) {
-    for (const v of compoundTokenVariants(suffixSwapped)) push(v);
-  }
-  for (const v of compoundTokenVariants(address)) {
-    push(swapStreetSuffix(v));
-  }
-  return out;
+  return buildVariants(address);
 }
 
-/**
- * Bidirectional street-suffix expansion table. Each pair is registered
- * both ways: `Rd <-> Road`, `Hts <-> Heights`. USPS publication 28
- * lists ~250 suffixes; we cover the common ones we've seen miss-and-
- * retry in real sessions. Add as needed.
- */
-const SUFFIX_PAIRS: Array<[string, string]> = [
-  ['ave', 'Avenue'],
-  ['blvd', 'Boulevard'],
-  ['cir', 'Circle'],
-  ['ct', 'Court'],
-  ['dr', 'Drive'],
-  ['hwy', 'Highway'],
-  ['hts', 'Heights'],
-  ['ln', 'Lane'],
-  ['mtn', 'Mountain'],
-  ['pl', 'Place'],
-  ['pkwy', 'Parkway'],
-  ['rd', 'Road'],
-  ['sq', 'Square'],
-  ['st', 'Street'],
-  ['ter', 'Terrace'],
-  ['trl', 'Trail'],
-];
-
-const SUFFIX_EXPANSIONS: Record<string, string> = Object.fromEntries(
-  SUFFIX_PAIRS.map(([abbr, full]) => [abbr, full])
-);
-const SUFFIX_CONTRACTIONS: Record<string, string> = Object.fromEntries(
-  SUFFIX_PAIRS.map(([abbr, full]) => [full.toLowerCase(), titleCase(abbr)])
-);
-
-function titleCase(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+// Re-export realty-core's canonical USPS suffix table (a superset of the
+// old local pairs) so any in-repo consumer keeps importing `SUFFIX_PAIRS`
+// from the resolver.
+export { SUFFIX_PAIRS };
 
 /**
- * Bidirectional suffix swap. Anchored to the LAST whitespace-separated
- * token so mid-name occurrences ("Roderick Dr") swap "Dr", not "Rd".
- * Returns null when no recognized suffix sits at the end.
+ * Bidirectional suffix swap, anchored to the trailing street suffix
+ * ("Roderick Dr" swaps "Dr", not "Rd"). Returns the swapped string, or
+ * null when no recognized suffix sits at the end.
+ *
+ * CONSOLIDATION: delegates to realty-core's `expandSuffix` (which
+ * returns ALL suffix alternates) and takes the first. The single-swap
+ * contract is preserved for the resolver's callers.
  */
 export function swapStreetSuffix(address: string): string | null {
-  const trimmed = address.trim();
-  const m = /(\s+)([A-Za-z]+)(\.?)\s*$/.exec(trimmed);
-  if (!m) return null;
-  const [, lead, token] = m;
-  const key = token.toLowerCase();
-  const head = trimmed.slice(0, m.index);
-  if (SUFFIX_EXPANSIONS[key]) {
-    return `${head}${lead}${SUFFIX_EXPANSIONS[key]}`;
-  }
-  if (SUFFIX_CONTRACTIONS[key]) {
-    return `${head}${lead}${SUFFIX_CONTRACTIONS[key]}`;
-  }
-  return null;
+  const [first] = expandSuffix(address);
+  return first ?? null;
 }
 
 /**
- * Compound-token split/join (issue #76). For each candidate street-name
- * token, emit a variant that splits it (`Bluebird` -> `Blue Bird`) and
- * a variant that joins consecutive capitalized tokens (`Blue Bird` ->
- * `Bluebird`). The address is tokenized on whitespace; the leading
- * house-number token and the trailing suffix are preserved verbatim.
- *
- * Heuristic split: a CamelCase boundary OR a known two-word compound
- * (Blue, Pine, Oak, etc.). To keep things conservative we only split
- * when the resulting halves are both at least 3 chars.
+ * Space-insensitive compound-token splits/joins (`Bluebird` <-> `Blue
+ * Bird`). CONSOLIDATION: delegates to realty-core's canonical
+ * `compoundSplits`, which is deliberately greedy — it emits EVERY viable
+ * split (not just known-prefix ones) plus join variants. Broader than
+ * the old local heuristic by design; the address-match scorer at the
+ * consumer end rejects false positives cheaply.
  */
 export function compoundTokenVariants(address: string): string[] {
-  const out: string[] = [];
-  const tokens = address.trim().split(/\s+/);
-  if (tokens.length === 0) return out;
-  // Splits: for each interior token, attempt a split.
-  for (let i = 0; i < tokens.length; i++) {
-    for (const split of splitCompoundToken(tokens[i])) {
-      const next = [...tokens.slice(0, i), split, ...tokens.slice(i + 1)].join(' ');
-      out.push(next);
-    }
-  }
-  // Joins: only emit a join when the first half is a recognized
-  // compound prefix ("Blue", "Pine", "Oak", ...). This avoids
-  // hallucinating "HiddenCove" or "RidgeRunner" style merges that
-  // never appear as a real Zillow address.
-  for (let i = 0; i < tokens.length - 1; i++) {
-    const a = tokens[i];
-    const b = tokens[i + 1];
-    if (
-      isJoinableToken(a) &&
-      isJoinableToken(b) &&
-      COMPOUND_PREFIXES.includes(a.toLowerCase())
-    ) {
-      const joined = a + b;
-      const next = [
-        ...tokens.slice(0, i),
-        joined,
-        ...tokens.slice(i + 2),
-      ].join(' ');
-      out.push(next);
-    }
-  }
-  return out;
-}
-
-// Known prefix words that frequently appear as the first half of a
-// compound street name in the markets this resolver targets (Lake
-// Lure / mountain-NC). Used to suggest a split when the heuristic
-// CamelCase boundary doesn't fire.
-const COMPOUND_PREFIXES = [
-  'blue',
-  'pine',
-  'oak',
-  'red',
-  'white',
-  'black',
-  'green',
-  'high',
-  'long',
-  'old',
-  'new',
-  'silver',
-  'gold',
-  'sun',
-  'moon',
-  'stone',
-  'lake',
-  'river',
-  'mountain',
-  'rock',
-  'fox',
-  'deer',
-  'wolf',
-  'bear',
-  'eagle',
-  'hawk',
-];
-
-function splitCompoundToken(token: string): string[] {
-  const out: string[] = [];
-  if (token.length < 6 || !/^[A-Za-z]+$/.test(token)) return out;
-  // CamelCase split.
-  const camel = /^([A-Z][a-z]+)([A-Z][a-z]+)$/.exec(token);
-  if (camel) {
-    out.push(`${camel[1]} ${camel[2]}`);
-  }
-  // Known-prefix split.
-  const lower = token.toLowerCase();
-  for (const pref of COMPOUND_PREFIXES) {
-    if (lower.startsWith(pref) && lower.length - pref.length >= 3) {
-      const head = token.slice(0, pref.length);
-      const tail = token.slice(pref.length);
-      // Title-case tail if the original was capitalized.
-      const tailOut =
-        token[0] === token[0].toUpperCase()
-          ? tail.charAt(0).toUpperCase() + tail.slice(1)
-          : tail;
-      const split = `${head} ${tailOut}`;
-      if (!out.includes(split)) out.push(split);
-    }
-  }
-  return out;
-}
-
-function isJoinableToken(token: string): boolean {
-  if (token.length < 3) return false;
-  if (!/^[A-Za-z]+$/.test(token)) return false;
-  // Don't join across a recognized street suffix — "Cove Rd" must stay split.
-  const lower = token.toLowerCase();
-  if (SUFFIX_EXPANSIONS[lower] || SUFFIX_CONTRACTIONS[lower]) return false;
-  return true;
+  return compoundSplits(address);
 }
 
 /**

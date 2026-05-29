@@ -198,6 +198,25 @@ describe('inline GraphQL request construction (no hash — shirk the hash)', () 
       'taxHistory',
       'schools',
       'studentsPerTeacher',
+      // Photo gallery fields the photos tool reads (issue: P0 — photos
+      // returned empty under the inline GraphQL path because the
+      // selection omitted these). See photos.ts `PropertyWithPhotos`.
+      'photos',
+      'responsivePhotos',
+      'originalPhotos',
+      'photoCount',
+      'streetViewImageUrl',
+      'hiResImageLink',
+      'mixedSources',
+      'jpeg',
+      'webp',
+      'caption',
+      'subjectType',
+      // Zestimate-chart fields the zestimate tool reads. See
+      // zestimate.ts `RawPropertyWithCharts`.
+      'homeValueChartData',
+      'rentValueChartData',
+      'points',
     ]) {
       expect(q, `expected curated field "${field}"`).toContain(field);
     }

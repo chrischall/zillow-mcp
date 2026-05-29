@@ -2,18 +2,22 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
-import { extractNextData, getPageProps } from '../next-data.js';
-import { urlToPath } from '../url.js';
-import { findPropertyInPageProps } from './properties.js';
+import { fetchPropertyRecord } from './properties.js';
 
 /**
- * Zillow embeds Zestimate history inside the homedetails page's
- * gdpClientCache under either:
+ * Zillow embeds Zestimate history inside the property record under
+ * either:
  *   - `homeValueChartData` (array of `{ points: [...] }` series), OR
  *   - `priceHistory` (the price-change feed; superset of estimates).
  *
  * For the v0 surface we expose the cleaner homeValueChartData if
  * present, falling back to a derived series from priceHistory.
+ *
+ * The record is fetched through the shared `fetchPropertyRecord`, which
+ * is GraphQL-first (issue #99) with the SSR scrape as the floor — the
+ * same source every other property tool uses, so the chart fields are
+ * selected by the inline GraphQL query and arrive without a second
+ * homedetails scrape.
  */
 
 export interface ZestimatePoint {
@@ -113,28 +117,15 @@ export function registerZestimateTools(
       },
     },
     async ({ zpid, url }) => {
-      const path = url
-        ? urlToPath(url)
-        : zpid !== undefined
-          ? `/homedetails/${zpid}_zpid/`
-          : null;
-      if (!path) {
+      if (zpid === undefined && !url) {
         throw new Error(
           'zillow_get_zestimate_history: must provide either zpid or url'
         );
       }
-      const html = await client.fetchHtml(path);
-      const nextData = extractNextData(html);
-      const pageProps = getPageProps(nextData);
-      const property = findPropertyInPageProps(pageProps);
-      if (!property) {
-        throw new Error(
-          `Could not locate property data in __NEXT_DATA__ at ${path}.`
-        );
-      }
-      const series = extractZestimateHistory(property as RawPropertyWithCharts);
+      const { raw } = await fetchPropertyRecord(client, { zpid, url });
+      const series = extractZestimateHistory(raw as RawPropertyWithCharts);
       return textResult({
-        zpid: String((property as { zpid?: number | string }).zpid ?? zpid ?? ''),
+        zpid: String(raw.zpid ?? zpid ?? ''),
         points: series,
       });
     }

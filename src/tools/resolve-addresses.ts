@@ -8,12 +8,12 @@ import {
 } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
+import { parseAddress } from '@chrischall/realty-core';
 import {
   resolveAddressFull,
   type ResolverInput,
   type ResolverVia,
 } from './resolver.js';
-import { parseFreeTextAddress } from './address-parse.js';
 
 /**
  * `zillow_resolve_addresses`: batch address → zpid resolver.
@@ -84,16 +84,20 @@ export interface ResolveAddressesRow {
 
 /**
  * Normalize a single row to the resolver-input struct. Free-text rows
- * are split into `{address, city, state, zip}` via the address-parse
- * helper so the bulk tool's existing string-only callers keep working.
+ * are split into `{address, city, state, zip}` via realty-core's shared
+ * `parseAddress` (hoisted from this repo's former `address-parse.ts`) so
+ * the bulk tool's existing string-only callers keep working and every
+ * cohort MCP splits free-text addresses identically. `parseAddress`
+ * returns an OPTIONAL `address` (empty `{}` for blank input); we fall
+ * back to the raw row so `ResolverInput.address` is always a string.
  */
 function normalizeRow(row: ResolveAddressesInputRow): ResolverInput & {
   raw: string;
   price_hint?: number;
 } {
   if (typeof row === 'string') {
-    const parsed = parseFreeTextAddress(row);
-    return { raw: row, ...parsed };
+    const parsed = parseAddress(row);
+    return { raw: row, ...parsed, address: parsed.address ?? row };
   }
   const raw = [row.address, row.city, row.state, row.zip]
     .filter((p) => p && p.trim().length > 0)

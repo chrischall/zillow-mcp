@@ -136,4 +136,55 @@ describe('zillow_get_property_photos tool', () => {
     expect(parsed.count).toBe(0);
     expect(parsed.photos).toEqual([]);
   });
+
+  // P0 regression: in production `fetchPropertyRecord` succeeds via the
+  // inline GraphQL POST, so photos MUST come through the GraphQL arm —
+  // not just the SSR floor. (The SSR-only tests above stub `fetchJson`
+  // to reject; here we let GraphQL SUCCEED and assert the gallery flows.)
+  it('returns the gallery via the GraphQL path (no SSR fallback)', async () => {
+    mockFetchJson.mockReset();
+    mockFetchJson.mockResolvedValueOnce({
+      data: {
+        property: {
+          zpid: 7,
+          photos: [
+            {
+              caption: 'Front',
+              subjectType: 'EXTERIOR',
+              url: 'https://a/1.jpg',
+              mixedSources: {
+                jpeg: [{ url: 'https://a/1-1536.jpg', width: 1536 }],
+                webp: [{ url: 'https://a/1-1536.webp', width: 1536 }],
+              },
+            },
+            { url: 'https://a/2.jpg', caption: 'Kitchen' },
+          ],
+          photoCount: 2,
+          streetViewImageUrl: 'https://a/streetview.jpg',
+          hiResImageLink: 'https://a/hires.jpg',
+        },
+      },
+    });
+    const r = await harness.callTool('zillow_get_property_photos', { zpid: 7 });
+    expect(r.isError).toBeFalsy();
+    // GraphQL POST served it — the SSR scrape was never reached.
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+
+    const parsed = parseToolResult<{
+      zpid: string;
+      count: number;
+      photos: Array<{ url: string; url_large?: string }>;
+      street_view_url?: string;
+      high_res_url?: string;
+    }>(r);
+    expect(parsed.zpid).toBe('7');
+    expect(parsed.count).toBe(2);
+    expect(parsed.photos.map((p) => p.url)).toEqual([
+      'https://a/1.jpg',
+      'https://a/2.jpg',
+    ]);
+    expect(parsed.photos[0].url_large).toBe('https://a/1-1536.jpg');
+    expect(parsed.street_view_url).toBe('https://a/streetview.jpg');
+    expect(parsed.high_res_url).toBe('https://a/hires.jpg');
+  });
 });
