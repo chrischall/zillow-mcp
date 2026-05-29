@@ -233,7 +233,6 @@ export interface AutocompleteBody {
   query: string;
   variables: {
     query: string;
-    queryOptions?: Record<string, unknown>;
     resultType: string[];
     shouldRequestSpellCorrectedMetadata: boolean;
   };
@@ -272,21 +271,15 @@ export function autocompleteHeaders(): Record<string, string> {
 }
 
 /**
- * Build the POST body with the INLINE query (no persisted hash). The
- * caller may pass `queryOptions` (viewPort / userLocation) to scope the
- * search to a local area for better recall.
+ * Build the POST body with the INLINE query (no persisted hash).
  */
-export function buildAutocompleteBody(
-  query: string,
-  queryOptions?: Record<string, unknown>
-): AutocompleteBody {
+export function buildAutocompleteBody(query: string): AutocompleteBody {
   const resultType = [...AUTOCOMPLETE_RESULT_TYPES];
   return {
     operationName: AUTOCOMPLETE_OPERATION_NAME,
     query: AUTOCOMPLETE_QUERY,
     variables: {
       query,
-      ...(queryOptions ? { queryOptions } : {}),
       resultType,
       shouldRequestSpellCorrectedMetadata: false,
     },
@@ -315,15 +308,14 @@ interface AutocompleteResponse {
  */
 export async function fetchAutocompleteAddressCandidates(
   client: ZillowClient,
-  query: string,
-  queryOptions?: Record<string, unknown>
+  query: string
 ): Promise<string[]> {
   const resp = await client.fetchJson<AutocompleteResponse>(
     buildAutocompletePath(query),
     {
       method: 'POST',
       headers: autocompleteHeaders(),
-      body: buildAutocompleteBody(query, queryOptions),
+      body: buildAutocompleteBody(query),
     }
   );
   const results = resp?.data?.searchAssistanceResult?.results;
