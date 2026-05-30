@@ -26,7 +26,7 @@ import {
   compoundSplits,
   expandSuffix,
 } from '@chrischall/realty-core';
-import { FetchproxyTimeoutError } from '@fetchproxy/server';
+import { FetchproxyTimeoutError } from '@chrischall/mcp-utils/fetchproxy';
 import type { ZillowClient } from '../client.js';
 import { ParseError } from '../next-data.js';
 import {

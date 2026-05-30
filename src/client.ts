@@ -5,7 +5,11 @@
 //
 // Error mapping (non-2xx, sign-in interstitial, empty 204 body) lives
 // here so tool authors never have to think about it.
-import { classifyBotWall, type FetchErrorKind } from '@fetchproxy/server';
+import { truncateErrorMessage } from '@chrischall/mcp-utils';
+import {
+  classifyBotWall,
+  type FetchErrorKind,
+} from '@chrischall/mcp-utils/fetchproxy';
 import type {
   BridgeStatus,
   FetchResult,
@@ -177,11 +181,12 @@ export class ZillowClient {
 
   private throwIfNotOk(result: FetchResult, method: string, path: string): void {
     if (result.status >= 200 && result.status < 300) return;
-    const bodyPreview = result.body
-      ? ` — ${result.body.slice(0, 500).replace(/\s+/g, ' ').trim()}${
-          result.body.length > 500 ? '…' : ''
-        }`
-      : '';
+    // Collapse whitespace to keep the preview single-line, then run it
+    // through the shared truncateErrorMessage: caps the body at 500 chars
+    // AND redacts bearer tokens / JWTs so an upstream error page can't leak
+    // a credential into our error string.
+    const collapsed = result.body.replace(/\s+/g, ' ').trim();
+    const bodyPreview = collapsed ? ` — ${truncateErrorMessage(collapsed)}` : '';
     throw new Error(
       `Zillow API error: ${result.status} for ${method} ${path}${bodyPreview}`
     );

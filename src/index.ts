@@ -7,13 +7,19 @@
 //      separately, not in this repo — connects here.
 //      See https://github.com/chrischall/fetchproxy.
 //   2. ZillowClient.start() — brings the transport up.
-//   3. Register tool handlers against the MCP server.
-//   4. Connect the MCP server to stdio for the host client.
+//   3. runMcp() — builds the MCP server, applies every tool registrar,
+//      prints the stderr banner, wires SIGINT/SIGTERM to close the
+//      client, and connects stdio for the host client.
 //
-// The transport outlives the MCP session. On SIGINT/SIGTERM we close it
-// so ports/connections don't leak between client restarts.
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+// The transport outlives the MCP session. On SIGINT/SIGTERM the shared
+// graceful-shutdown handler closes the client so ports/connections don't
+// leak between client restarts.
+//
+// Deferred-config-error pattern: the client/transport AND the session
+// registry are constructed HERE (the caller), not inside runMcp — so the
+// host's initial `tools/list` always succeeds and any bridge/auth error
+// surfaces at the first tool call rather than at boot.
+import { runMcp, type ToolRegistrar } from '@chrischall/mcp-utils';
 import { ZillowClient } from './client.js';
 import { FetchproxyTransport } from './transport-fetchproxy.js';
 import { registerSearchTools } from './tools/search.js';
@@ -44,38 +50,43 @@ const transport = new FetchproxyTransport({ port, version: VERSION });
 const client = new ZillowClient({ transport });
 await client.start();
 
-const server = new McpServer({ name: 'zillow-mcp', version: VERSION });
+// The session registry is process-local bookkeeping shared across the
+// saved-data + session tools. Constructed here (not in a registrar) so the
+// same instance is closure-captured by both registrars below.
 const sessions = new SessionRegistry();
 
-registerSearchTools(server, client);
-registerPropertyTools(server, client);
-registerZestimateTools(server, client);
-registerSavedTools(server, client, sessions);
-registerMarketTools(server, client);
-registerMortgageTools(server);
-registerHistoryTools(server, client);
-registerCompareTools(server, client);
-registerAffordabilityTools(server);
-registerPhotosTools(server, client);
-registerHealthcheckTools(server, client);
-registerGetByAddressTools(server, client);
-registerBulkGetTools(server, client);
-registerResolveAddressesTools(server, client);
-registerSessionTools(server, sessions);
+// Most registrars take (server, client); `saved` also needs the session
+// registry and the session tools take (server, registry) alone. The two
+// special cases are wrapped in closures so every entry conforms to
+// ToolRegistrar<ZillowClient>; the local-only calculators (mortgage,
+// affordability) simply ignore the client dep runMcp threads through.
+const tools: ToolRegistrar<ZillowClient>[] = [
+  registerSearchTools,
+  registerPropertyTools,
+  registerZestimateTools,
+  (server, c) => registerSavedTools(server, c, sessions),
+  registerMarketTools,
+  registerMortgageTools,
+  registerHistoryTools,
+  registerCompareTools,
+  registerAffordabilityTools,
+  registerPhotosTools,
+  registerHealthcheckTools,
+  registerGetByAddressTools,
+  registerBulkGetTools,
+  registerResolveAddressesTools,
+  (server) => registerSessionTools(server, sessions),
+];
 
-console.error(
-  `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${port ?? 37149}. ` +
+await runMcp({
+  name: 'zillow-mcp',
+  version: VERSION,
+  tools,
+  deps: client,
+  banner:
+    `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${port ?? 37149}. ` +
     'Install the fetchproxy extension (see https://github.com/chrischall/fetchproxy) ' +
     'and sign into zillow.com. This project was developed and is maintained by AI (Claude). ' +
-    'Use at your own discretion.'
-);
-
-const shutdown = async () => {
-  await client.close();
-  process.exit(0);
-};
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-const stdio = new StdioServerTransport();
-await server.connect(stdio);
+    'Use at your own discretion.',
+  shutdown: { onSignal: () => client.close() },
+});
