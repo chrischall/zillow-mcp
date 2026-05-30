@@ -353,6 +353,28 @@ export function extractSearchPageState(html: string): ZillowPageState | null {
 }
 
 /**
+ * First photo URL off a homedetails property, across the field variants
+ * Zillow uses (`photos` on rich/Showcase pages, `responsivePhotos` on the
+ * lean shape, `originalPhotos` legacy). Gives the adapted listing an
+ * `image_url` like a real search hit. RawProperty doesn't type the photo
+ * arrays (they live on the photos-tool shape), so we read them defensively.
+ */
+function firstPhotoUrl(p: RawProperty): string | undefined {
+  const pp = p as {
+    photos?: Array<{ url?: string }>;
+    responsivePhotos?: Array<{ url?: string }>;
+    originalPhotos?: Array<{ url?: string }>;
+    hiResImageLink?: string;
+  };
+  return (
+    pp.photos?.[0]?.url ??
+    pp.responsivePhotos?.[0]?.url ??
+    pp.originalPhotos?.[0]?.url ??
+    pp.hiResImageLink
+  );
+}
+
+/**
  * Adapt a homedetails `property` (gdpClientCache shape) into the
  * search-result `RawListing` shape so {@link formatListing} can render it
  * identically to a real search hit. Used when a full-address query
@@ -388,6 +410,7 @@ export function listingFromProperty(p: RawProperty): RawListing {
       },
     },
     detailUrl: p.hdpUrl,
+    imgSrc: firstPhotoUrl(p),
   };
 }
 
@@ -395,9 +418,12 @@ export function listingFromProperty(p: RawProperty): RawListing {
  * When a search response carries no `searchPageState`, it may be a
  * homedetails page Zillow served because the query resolved to a single
  * listing. Return that one property adapted to a `RawListing`, or null.
+ * Takes already-parsed `pageProps` (the caller has it) to avoid re-parsing
+ * the SSR `__NEXT_DATA__` blob.
  */
-export function singleListingFromHomedetails(html: string): RawListing | null {
-  const pageProps = getPageProps(extractNextData(html));
+export function singleListingFromPageProps(
+  pageProps: Record<string, unknown>
+): RawListing | null {
   const property = findPropertyInPageProps(pageProps);
   if (!property?.zpid) return null;
   return listingFromProperty(property);
@@ -455,13 +481,16 @@ export async function resolveLocationOrListings(
   location: string
 ): Promise<ResolvedLocation> {
   const html = await client.fetchHtml(buildSearchPath(location));
-  const sps = extractSearchPageState(html);
+  // Parse `__NEXT_DATA__` → pageProps once; both the searchPageState and the
+  // homedetails-redirect property come from the same blob.
+  const pageProps = getPageProps(extractNextData(html));
+  const sps = (pageProps.searchPageState as ZillowPageState | undefined) ?? null;
   if (!sps) {
     // Bug #2: a full-address query can resolve DIRECTLY to one listing —
     // Zillow then serves the homedetails page (gdpClientCache property, no
     // searchPageState) instead of a search-results page. Surface that
     // single property as the resolved listing rather than erroring.
-    const single = singleListingFromHomedetails(html);
+    const single = singleListingFromPageProps(pageProps);
     if (single) {
       return { kind: 'listings', listings: [single] };
     }

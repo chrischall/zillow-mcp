@@ -426,6 +426,8 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
         longitude: -82.19,
         zestimate: 620000,
         rentZestimate: 2500,
+        // Lean (non-Showcase) shape carries photos under responsivePhotos.
+        responsivePhotos: [{ url: 'https://photos/first.jpg' }],
       })
     );
     const result = await harness.callTool('zillow_search_properties', {
@@ -435,13 +437,21 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     // Single round trip — the address resolved directly to the listing.
     expect(mockFetchHtml).toHaveBeenCalledTimes(1);
     const parsed = parseToolResult<
-      Array<{ zpid: string; address: string; price?: number; url?: string }>
+      Array<{
+        zpid: string;
+        address: string;
+        price?: number;
+        url?: string;
+        image_url?: string;
+      }>
     >(result);
     expect(parsed).toHaveLength(1);
     expect(parsed[0].zpid).toBe('2061813066');
     expect(parsed[0].price).toBe(615000);
     expect(parsed[0].address).toContain('1973 Buffalo Creek Rd');
     expect(parsed[0].url).toContain('2061813066_zpid');
+    // Nit (#119): a single-address hit carries an image like a real one.
+    expect(parsed[0].image_url).toBe('https://photos/first.jpg');
   });
 
   it('throws LocationNotResolved when the resolve step detects a silent fallback', async () => {
