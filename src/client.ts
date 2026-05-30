@@ -158,8 +158,20 @@ export class ZillowClient {
    * `captcha-delivery` marker, but on Zillow that interstitial means
    * "sign in", not "rate-limited", so it stays the job of
    * `throwIfSignInPage` below; folding it in here would change behavior.
+   *
+   * Issue #92: `classifyBotWall` (≤ 0.11.0) keys its px arm on
+   * `window._pxAppId`, which Zillow inlines into EVERY SSR page as the px
+   * *sensor* bootstrap — so a real listing false-trips the wall. Guard on
+   * the Next.js hydration blob: a body carrying `__NEXT_DATA__` is a real
+   * SSR page and can never be a px interstitial. Same defense-in-depth
+   * shape as the DataDome `< 80KB` guard in `throwIfSignInPage`. (The
+   * generic classifier can't assume Next.js; this MCP can. Fixed upstream
+   * in fetchproxy too, after which the bump retires the library half.)
    */
   private throwIfBotWall(result: FetchResult, path: string): void {
+    // A real Zillow SSR page always carries the Next.js hydration blob;
+    // a PerimeterX interstitial never does. Skip the wall check for it.
+    if (result.body.includes('__NEXT_DATA__')) return;
     // The bridge's FetchResult doesn't surface response headers, so we
     // pass body + status only (matching the body-only px detection) and
     // fall back to the tuned default retry-after.
