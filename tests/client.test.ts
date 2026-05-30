@@ -294,10 +294,11 @@ describe('ZillowClient', () => {
     it('fetchHtml does NOT flag a real SSR page that embeds the px sensor', async () => {
       // zillow #92: every legitimate Zillow page inlines the PerimeterX
       // *sensor* bootstrap (window._pxAppId = ...) alongside its Next.js
-      // <script id="__NEXT_DATA__"> hydration blob. The shared
-      // classifyBotWall (≤ 0.11.0) keys on window._pxAppId, so without a
-      // guard every real listing false-trips the bot-wall. A body carrying
-      // __NEXT_DATA__ is a real SSR page and can never be a px interstitial.
+      // <script id="__NEXT_DATA__"> hydration blob. classifyBotWall ≤ 0.11.0
+      // keyed on window._pxAppId and false-tripped every real listing; 0.11.1
+      // (the pinned version) dropped that marker. This is the integration
+      // regression guard — if the shared classifier ever re-flags the sensor,
+      // fetchHtml on a real SSR page would throw and this test catches it.
       const legitBody =
         '<html><head><script>window._pxAppId = "PXrealsensor";</script></head>' +
         '<body><main>Austin TX Real Estate &amp; Homes For Sale</main>' +
