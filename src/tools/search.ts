@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
+import { findPropertyInPageProps, type RawProperty } from './properties.js';
 
 /**
  * Zillow's search page is SSR Next.js. We hit it twice:
@@ -352,6 +353,57 @@ export function extractSearchPageState(html: string): ZillowPageState | null {
 }
 
 /**
+ * Adapt a homedetails `property` (gdpClientCache shape) into the
+ * search-result `RawListing` shape so {@link formatListing} can render it
+ * identically to a real search hit. Used when a full-address query
+ * resolves directly to ONE listing — Zillow serves the homedetails page
+ * (no `searchPageState`), so there's a `property` but no `listResults`.
+ */
+export function listingFromProperty(p: RawProperty): RawListing {
+  const zpidNum =
+    typeof p.zpid === 'number'
+      ? p.zpid
+      : typeof p.zpid === 'string' && /^\d+$/.test(p.zpid)
+        ? Number(p.zpid)
+        : undefined;
+  return {
+    zpid: p.zpid,
+    hdpData: {
+      homeInfo: {
+        zpid: zpidNum,
+        price: p.price,
+        bedrooms: p.bedrooms,
+        bathrooms: p.bathrooms,
+        livingArea: p.livingArea,
+        homeType: p.homeType,
+        homeStatus: p.homeStatus,
+        streetAddress: p.address?.streetAddress,
+        city: p.address?.city,
+        state: p.address?.state,
+        zipcode: p.address?.zipcode,
+        latitude: p.latitude,
+        longitude: p.longitude,
+        zestimate: p.zestimate,
+        rentZestimate: p.rentZestimate,
+      },
+    },
+    detailUrl: p.hdpUrl,
+  };
+}
+
+/**
+ * When a search response carries no `searchPageState`, it may be a
+ * homedetails page Zillow served because the query resolved to a single
+ * listing. Return that one property adapted to a `RawListing`, or null.
+ */
+export function singleListingFromHomedetails(html: string): RawListing | null {
+  const pageProps = getPageProps(extractNextData(html));
+  const property = findPropertyInPageProps(pageProps);
+  if (!property?.zpid) return null;
+  return listingFromProperty(property);
+}
+
+/**
  * Result of `resolveLocation`. Either we got a region (city/ZIP-level
  * handle that we can pin into a second filter-step request), OR we got
  * matching listings directly (address- or street-specific queries
@@ -405,6 +457,14 @@ export async function resolveLocationOrListings(
   const html = await client.fetchHtml(buildSearchPath(location));
   const sps = extractSearchPageState(html);
   if (!sps) {
+    // Bug #2: a full-address query can resolve DIRECTLY to one listing —
+    // Zillow then serves the homedetails page (gdpClientCache property, no
+    // searchPageState) instead of a search-results page. Surface that
+    // single property as the resolved listing rather than erroring.
+    const single = singleListingFromHomedetails(html);
+    if (single) {
+      return { kind: 'listings', listings: [single] };
+    }
     throw new LocationNotResolved(
       location,
       'Zillow returned a page with no searchPageState'

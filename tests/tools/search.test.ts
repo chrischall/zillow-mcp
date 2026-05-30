@@ -48,6 +48,21 @@ function htmlWithState(args: {
 }
 
 /**
+ * Build a homedetails SSR page — what Zillow serves when a full-address
+ * query resolves directly to ONE listing (gdpClientCache property, NO
+ * searchPageState).
+ */
+function htmlWithHomedetails(property: Record<string, unknown>): string {
+  const cache = { [`Property:${property.zpid}`]: { property } };
+  const nextData = {
+    props: { pageProps: { gdpClientCache: JSON.stringify(cache) } },
+  };
+  return `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+    nextData
+  )}</script>`;
+}
+
+/**
  * Build a Lake Lure listing — used wherever we want a result that
  * matches the "Lake Lure, NC 28746" input.
  */
@@ -384,6 +399,49 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
 
     const parsed = parseToolResult<Array<{ zpid: string }>>(result);
     expect(parsed.map((p) => p.zpid)).toEqual(['1', '2']);
+  });
+
+  it('returns the single resolved listing when a full address redirects to a homedetails page', async () => {
+    // Bug #2: a full-address query can resolve directly to ONE listing —
+    // Zillow serves the homedetails page (gdpClientCache, no
+    // searchPageState) rather than a search-results page.
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithHomedetails({
+        zpid: 2061813066,
+        hdpUrl:
+          '/homedetails/1973-Buffalo-Creek-Rd-Lake-Lure-NC-28746/2061813066_zpid/',
+        price: 615000,
+        bedrooms: 3,
+        bathrooms: 2,
+        livingArea: 1800,
+        homeType: 'SINGLE_FAMILY',
+        homeStatus: 'FOR_SALE',
+        address: {
+          streetAddress: '1973 Buffalo Creek Rd',
+          city: 'Lake Lure',
+          state: 'NC',
+          zipcode: '28746',
+        },
+        latitude: 35.46,
+        longitude: -82.19,
+        zestimate: 620000,
+        rentZestimate: 2500,
+      })
+    );
+    const result = await harness.callTool('zillow_search_properties', {
+      location: '1973 Buffalo Creek Rd, Lake Lure, NC 28746',
+    });
+    expect(result.isError).toBeFalsy();
+    // Single round trip — the address resolved directly to the listing.
+    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
+    const parsed = parseToolResult<
+      Array<{ zpid: string; address: string; price?: number; url?: string }>
+    >(result);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].zpid).toBe('2061813066');
+    expect(parsed[0].price).toBe(615000);
+    expect(parsed[0].address).toContain('1973 Buffalo Creek Rd');
+    expect(parsed[0].url).toContain('2061813066_zpid');
   });
 
   it('throws LocationNotResolved when the resolve step detects a silent fallback', async () => {
