@@ -287,6 +287,30 @@ describe('ZillowClient', () => {
       ).rejects.toBeInstanceOf(BotWallError);
     });
 
+    it('fetchHtml does NOT flag a real SSR page that embeds the px sensor', async () => {
+      // zillow #92: every legitimate Zillow page inlines the PerimeterX
+      // *sensor* bootstrap (window._pxAppId = ...) alongside its Next.js
+      // <script id="__NEXT_DATA__"> hydration blob. The shared
+      // classifyBotWall (≤ 0.11.0) keys on window._pxAppId, so without a
+      // guard every real listing false-trips the bot-wall. A body carrying
+      // __NEXT_DATA__ is a real SSR page and can never be a px interstitial.
+      const legitBody =
+        '<html><head><script>window._pxAppId = "PXrealsensor";</script></head>' +
+        '<body><main>Austin TX Real Estate &amp; Homes For Sale</main>' +
+        '<script id="__NEXT_DATA__" type="application/json">{"props":{}}</script>' +
+        '</body></html>';
+      const client = new ZillowClient({
+        transport: stubTransport(async () => ({
+          status: 200,
+          body: legitBody,
+          url: 'https://www.zillow.com/homes/Austin,-TX_rb/',
+        })),
+      });
+      await expect(
+        client.fetchHtml('/homes/Austin,-TX_rb/')
+      ).resolves.toContain('__NEXT_DATA__');
+    });
+
     it('BotWallError carries the bot_challenge kind + a retry-after hint', async () => {
       const client = new ZillowClient({
         transport: stubTransport(async () => ({
