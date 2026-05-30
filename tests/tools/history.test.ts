@@ -147,6 +147,47 @@ describe('history tools — MCP integration', () => {
     const parsed = parseToolResult<{ events: unknown[] }>(r);
     expect(parsed.events).toEqual([]);
   });
+
+  // Bug #1 transparency: distinguish "not server-rendered for this listing"
+  // from "genuinely none on record."
+  it('adds an SSR-omission note when priceHistory is absent from the property', async () => {
+    mockFetchHtml.mockResolvedValueOnce(htmlWith({ zpid: 1 })); // no priceHistory key
+    const r = await harness.callTool('zillow_get_price_history', { zpid: 1 });
+    const parsed = parseToolResult<{ events: unknown[]; note?: string }>(r);
+    expect(parsed.events).toEqual([]);
+    expect(parsed.note).toMatch(/server-rendered/i);
+    expect(parsed.note).toMatch(/NOT a confirmed zero/i);
+  });
+
+  it('notes a genuine empty when priceHistory is present but empty', async () => {
+    mockFetchHtml.mockResolvedValueOnce(htmlWith({ zpid: 1, priceHistory: [] }));
+    const r = await harness.callTool('zillow_get_price_history', { zpid: 1 });
+    const parsed = parseToolResult<{ events: unknown[]; note?: string }>(r);
+    expect(parsed.events).toEqual([]);
+    expect(parsed.note).toMatch(/no price history on record/i);
+  });
+
+  it('omits the note entirely when there are events', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWith({
+        zpid: 1,
+        priceHistory: [{ date: '2024-01-01', event: 'Listed for sale', price: 1 }],
+      })
+    );
+    const r = await harness.callTool('zillow_get_price_history', { zpid: 1 });
+    const parsed = parseToolResult<{ events: unknown[]; note?: string }>(r);
+    expect(parsed.events).toHaveLength(1);
+    expect(parsed.note).toBeUndefined();
+  });
+
+  it('adds an SSR-omission note when taxHistory is absent', async () => {
+    mockFetchHtml.mockResolvedValueOnce(htmlWith({ zpid: 9 }));
+    const r = await harness.callTool('zillow_get_tax_history', { zpid: 9 });
+    const parsed = parseToolResult<{ events: unknown[]; note?: string }>(r);
+    expect(parsed.events).toEqual([]);
+    expect(parsed.note).toMatch(/server-rendered/i);
+    expect(parsed.note).toMatch(/tax history/i);
+  });
 });
 
 describe('normalizePriceEvent', () => {

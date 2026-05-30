@@ -258,4 +258,28 @@ describe('zillow_get_zestimate_history tool', () => {
       { date: '2024-06-01', value: 800_000, rent: 3_200 },
     ]);
   });
+
+  // Bug #1 transparency: an empty series should say WHY.
+  it('adds an SSR-omission note when neither chart data nor priceHistory is present', async () => {
+    // htmlWithCharts(undefined) → property has no homeValueChartData key
+    // and no priceHistory (the lean ForSalePriorityQuery shape).
+    mockFetchHtml.mockResolvedValueOnce(htmlWithCharts(undefined));
+    const result = await harness.callTool('zillow_get_zestimate_history', {
+      zpid: 12345,
+    });
+    const parsed = parseToolResult<{ points: unknown[]; note?: string }>(result);
+    expect(parsed.points).toEqual([]);
+    expect(parsed.note).toMatch(/server-rendered/i);
+    expect(parsed.note).toMatch(/Zestimate history/);
+  });
+
+  it('notes a genuine empty when chart data is present but empty', async () => {
+    mockFetchHtml.mockResolvedValueOnce(htmlWithCharts([]));
+    const result = await harness.callTool('zillow_get_zestimate_history', {
+      zpid: 12345,
+    });
+    const parsed = parseToolResult<{ points: unknown[]; note?: string }>(result);
+    expect(parsed.points).toEqual([]);
+    expect(parsed.note).toMatch(/no Zestimate history on record/i);
+  });
 });
