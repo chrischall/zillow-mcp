@@ -230,12 +230,16 @@ describe('ZillowClient', () => {
       '<body><h1>Access to this page has been denied</h1>' +
       '<script>window._pxAppId = "PXabc123";</script></body></html>';
 
-    // Guard that the kit's classifyBotWall still covers each of zillow's
-    // three px markers (the parity bar for dropping the local detector).
-    it('classifyBotWall flags the window._pxAppId marker as perimeterx', () => {
-      const v = classifyBotWall('<script>window._pxAppId="PX1"</script>', 200);
-      expect(v.blocked).toBe(true);
-      if (v.blocked) expect(v.vendor).toBe('perimeterx');
+    // Guard that the kit's classifyBotWall still covers zillow's two
+    // px *block-page* markers (the parity bar for dropping the local
+    // detector).
+    it('classifyBotWall does NOT flag the px sensor bootstrap alone', () => {
+      // 0.11.1 (fetchproxy #95 / zillow #92): window._pxAppId is the px
+      // *sensor*, inlined into every real SSR page — no longer a
+      // block-page marker, so on its own it must not trip the wall.
+      expect(
+        classifyBotWall('<script>window._pxAppId="PX1"</script>', 200).blocked
+      ).toBe(false);
     });
 
     it('classifyBotWall flags the "Access to this page has been denied" marker', () => {
