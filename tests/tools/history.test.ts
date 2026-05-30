@@ -188,6 +188,14 @@ describe('history tools — MCP integration', () => {
     expect(parsed.note).toMatch(/server-rendered/i);
     expect(parsed.note).toMatch(/tax history/i);
   });
+
+  it('notes a genuine empty when taxHistory is present but empty', async () => {
+    mockFetchHtml.mockResolvedValueOnce(htmlWith({ zpid: 9, taxHistory: [] }));
+    const r = await harness.callTool('zillow_get_tax_history', { zpid: 9 });
+    const parsed = parseToolResult<{ events: unknown[]; note?: string }>(r);
+    expect(parsed.events).toEqual([]);
+    expect(parsed.note).toMatch(/no tax history on record/i);
+  });
 });
 
 describe('normalizePriceEvent', () => {
