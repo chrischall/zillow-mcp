@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.1](https://github.com/chrischall/zillow-mcp/compare/v0.9.0...v0.9.1) (2026-05-30)
+
+
+### Bug Fixes
+
+* **client:** guard px bot-wall check with the __NEXT_DATA__ SSR marker ([#112](https://github.com/chrischall/zillow-mcp/issues/112)) ([9ffc7c7](https://github.com/chrischall/zillow-mcp/commit/9ffc7c7db5a1f4be32ef45303ea3ff3d0a25bcba))
+* **deps:** adopt @fetchproxy/server 0.11.1 — fixed classifyBotWall ([#114](https://github.com/chrischall/zillow-mcp/issues/114)) ([76a9527](https://github.com/chrischall/zillow-mcp/commit/76a9527c1295eb89b9ecd88260e278638bf003ed))
+
+
+### Refactor
+
+* **client:** drop the local __NEXT_DATA__ bot-wall guard ([#115](https://github.com/chrischall/zillow-mcp/issues/115)) ([eeb1c66](https://github.com/chrischall/zillow-mcp/commit/eeb1c66157a60312ea0a1e17e25d48fb495acbc1))
+
 ## [0.9.0](https://github.com/chrischall/zillow-mcp/compare/v0.8.0...v0.9.0) (2026-05-29)
 
 
