@@ -12,8 +12,8 @@ import { registerPropertyTools } from '../../src/tools/properties.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
-// `fetchPropertyRecord` tries GraphQL first (issue #99); these tests
-// cover the SSR scrape, so `fetchJson` is stubbed to reject → fall back.
+// `fetchPropertyRecord` is SSR-only; these tests cover the SSR scrape
+// (`fetchHtml`). `mockFetchJson` is vestigial shape parity on the stub.
 const mockFetchJson = vi.fn();
 const mockClient = {
   fetchHtml: mockFetchHtml,
@@ -23,7 +23,6 @@ const mockClient = {
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
 beforeEach(() => {
   vi.clearAllMocks();
-  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
 });
 afterAll(async () => {
   if (harness) await harness.close();

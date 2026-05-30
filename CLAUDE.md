@@ -13,15 +13,15 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | Tool | File | Endpoint | Kind |
 | --- | --- | --- | --- |
 | `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
-| `zillow_get_property` | `tools/properties.ts` | POST `/graphql/` (inline `PropertyDetail`) → SSR `/homedetails/<zpid>_zpid/` floor | read |
+| `zillow_get_property` | `tools/properties.ts` | GET SSR `/homedetails/<zpid>_zpid/` (`__NEXT_DATA__` gdpClientCache) | read |
 | `zillow_get_by_address` | `tools/get-by-address.ts` | GET `/homes/<address-slug>_rb/` SSR — shared 4-rung resolver (`resolver.ts`) | read |
 | `zillow_resolve_addresses` | `tools/resolve-addresses.ts` | Batch over the shared resolver (`resolver.ts`), bridge-concurrency-bounded | read |
-| `zillow_bulk_get` | `tools/bulk-get.ts` | `fetchPropertyRecord` ×N (GraphQL-first, SSR floor), concurrency-bounded | read |
-| `zillow_get_property_photos` | `tools/photos.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `property.photos[]` | read |
-| `zillow_get_zestimate_history` | `tools/zestimate.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `homeValueChartData` | read |
-| `zillow_get_price_history` | `tools/history.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `property.priceHistory` | read |
-| `zillow_get_tax_history` | `tools/history.ts` | `fetchPropertyRecord` (GraphQL-first, SSR floor) → `property.taxHistory` | read |
-| `zillow_compare_properties` | `tools/compare.ts` | `fetchPropertyRecord` ×N (GraphQL-first, SSR floor), concurrent | read |
+| `zillow_bulk_get` | `tools/bulk-get.ts` | `fetchPropertyRecord` ×N (SSR `/homedetails/`), concurrency-bounded | read |
+| `zillow_get_property_photos` | `tools/photos.ts` | `fetchPropertyRecord` (SSR) → `property.photos[]` | read |
+| `zillow_get_zestimate_history` | `tools/zestimate.ts` | `fetchPropertyRecord` (SSR) → `homeValueChartData` | read |
+| `zillow_get_price_history` | `tools/history.ts` | `fetchPropertyRecord` (SSR) → `property.priceHistory` | read |
+| `zillow_get_tax_history` | `tools/history.ts` | `fetchPropertyRecord` (SSR) → `property.taxHistory` | read |
+| `zillow_compare_properties` | `tools/compare.ts` | `fetchPropertyRecord` ×N (SSR), concurrent | read |
 | `zillow_get_saved_searches` | `tools/saved.ts` | GET `/myzillow/SavedSearches` SSR | read (auth) |
 | `zillow_get_saved_homes` | `tools/saved.ts` | GET `/myzillow/favorites` SSR (collectionsResponse[].homes) | read (auth) |
 | `zillow_get_market_report` | `tools/market.ts` | GET `/home-values/<region>/` SSR | read |
@@ -33,9 +33,11 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | `zillow_set_active_session` | `tools/sessions.ts` | (local; no network) | write (registry) |
 | `zillow_get_session_context` | `tools/sessions.ts` | (local; no network) | read |
 
-**Property fetch is GraphQL-first (issues #99/#102).** `zillow_get_property` and every tool that shares `fetchPropertyRecord` (compare, bulk_get, price/tax history, photos, zestimate) PRIMARY-fetch via an INLINE POST to Zillow's own `/graphql/` endpoint (`tools/graphql-property.ts`, operation `PropertyDetail`, no persisted-query hash — see that file's header). The SSR `/homedetails/<zpid>_zpid/` scrape is the FLOOR, used when the input is a slug-only URL with no zpid or when the GraphQL attempt fails for a non-bot-wall reason. The search/saved/market/resolver tools stay SSR-only.
+**Property fetch is SSR-only.** `zillow_get_property` and every tool that shares `fetchPropertyRecord` (compare, bulk_get, price/tax history, photos, zestimate) fetch via the SSR scrape of `/homedetails/<zpid>_zpid/`, parsing the `property` object out of `__NEXT_DATA__`'s gdpClientCache. The search/saved/market/resolver tools are SSR too.
 
-Both the GraphQL `property { … }` payload and the SSR `__NEXT_DATA__` cache carry the same field names, so the downstream parsers (`format()`, the photo/chart/history formatters) read them identically. SSR tools parse `<script id="__NEXT_DATA__">` from the response — Zillow is a Next.js app and `__NEXT_DATA__.props.pageProps` is the canonical hydration root.
+> History (issues #99/#102): a GraphQL-first path once fronted `fetchPropertyRecord` to dodge PerimeterX at scale — first via a pinned persisted-query hash, then via a full INLINE query ("shirk the hash", `tools/graphql-property.ts`). Zillow has since locked `/graphql/` to a persisted-query **safelist**: arbitrary inline operations are rejected (*"operation body was not found in the persisted query safelist"*), so that path always failed and silently fell through to SSR anyway. It was retired (the module deleted). The bulk tools throttle + chunk + back off (issue #90) to stay under the wall instead.
+
+The SSR `__NEXT_DATA__` cache is the canonical, full-shape source — Zillow is a Next.js app and `__NEXT_DATA__.props.pageProps` is the hydration root. The downstream parsers (`format()`, the photo/chart/history formatters) read `property.*` from it.
 
 `get_by_address` + `resolve_addresses` share a 4-rung resolver (`tools/resolver.ts`): direct → autocomplete typeahead → suffix/compound variants → locality remap → scope-resolve search. Address parsing/variant/tokenize/day-count helpers come from `@chrischall/realty-core` (see `address-parse` removal + the realty-core helpers in `resolver.ts`/`search.ts`/`properties.ts`).
 
@@ -60,9 +62,7 @@ src/
   tools/
     search.ts           # zillow_search_properties (buildSearchQueryState + formatListing)
     properties.ts       # zillow_get_property + the shared fetchPropertyRecord
-                        #   (GraphQL-first, SSR floor) + format()
-    graphql-property.ts # the inline-POST PropertyDetail GraphQL fetch
-                        #   (fetchPropertyViaGraphql) — primary property path
+                        #   (SSR /homedetails/ scrape) + format()
     resolver.ts         # shared 4-rung address resolver (resolveAddressFull)
     get-by-address.ts   # zillow_get_by_address (thin wrapper over resolver.ts)
     resolve-addresses.ts# zillow_resolve_addresses (batch over the resolver)
