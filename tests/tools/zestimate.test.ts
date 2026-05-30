@@ -20,7 +20,6 @@ const mockClient = {
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
 beforeEach(() => {
   vi.clearAllMocks();
-  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
 });
 afterAll(async () => {
   if (harness) await harness.close();

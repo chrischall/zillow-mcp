@@ -28,8 +28,6 @@ const mockClient = {
 let harness: Awaited<ReturnType<typeof createTestHarness>>;
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: GraphQL "unavailable" → fall back to the SSR scrape.
-  mockFetchJson.mockRejectedValue(new Error('graphql disabled in this test'));
 });
 afterAll(async () => {
   if (harness) await harness.close();

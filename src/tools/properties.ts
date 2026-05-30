@@ -352,10 +352,9 @@ export function buildPath(args: {
 
 /**
  * GET `/homedetails/<zpid>_zpid/`, parse `__NEXT_DATA__`, and pull the
- * property out of `gdpClientCache`. The property fetch path (a GraphQL
- * fast-path once fronted this — see {@link fetchPropertyRecord} — but
- * Zillow safelisted `/graphql/`, so it was retired). Throws on fetch
- * error or unparseable page state.
+ * property out of `gdpClientCache`. See {@link fetchPropertyRecord} for
+ * the full history of the (now-retired) GraphQL fast-path that once
+ * fronted this. Throws on fetch error or unparseable page state.
  */
 export async function fetchPropertyRecordViaSsr(
   client: ZillowClient,
