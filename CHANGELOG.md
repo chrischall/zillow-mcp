@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.10.0](https://github.com/chrischall/zillow-mcp/compare/v0.9.1...v0.10.0) (2026-05-30)
+
+
+### Features
+
+* **history:** explain empty zestimate/price/tax series with a note (Bug [#1](https://github.com/chrischall/zillow-mcp/issues/1)) ([#120](https://github.com/chrischall/zillow-mcp/issues/120)) ([73349b9](https://github.com/chrischall/zillow-mcp/commit/73349b9ae0fa313b3f80c2cc17f491f10e638991))
+
+
+### Bug Fixes
+
+* **properties:** retire the dead GraphQL property fetch, go SSR-only ([#116](https://github.com/chrischall/zillow-mcp/issues/116)) ([4e1e9c0](https://github.com/chrischall/zillow-mcp/commit/4e1e9c0d728690e22580f2b137d53b592e94b147))
+* **search:** return the single listing when an address resolves to a homedetails page ([#119](https://github.com/chrischall/zillow-mcp/issues/119)) ([be64826](https://github.com/chrischall/zillow-mcp/commit/be6482652130cfc70476e1b09115f42096828916))
+
+
+### Refactor
+
+* **search:** map image_url + parse pageProps once (addresses [#119](https://github.com/chrischall/zillow-mcp/issues/119) nits) ([#122](https://github.com/chrischall/zillow-mcp/issues/122)) ([d274199](https://github.com/chrischall/zillow-mcp/commit/d2741991e50d587bf6bf4acfce1c2d6d9742f107))
+
+
+### Documentation
+
+* **properties:** document zest_vs_list_pct sign convention in the tool description ([#121](https://github.com/chrischall/zillow-mcp/issues/121)) ([55df20d](https://github.com/chrischall/zillow-mcp/commit/55df20dff5acfb05c910356512e4cd5ba2b7a14b))
+* **test:** refresh px-sensor regression-test comment after [#115](https://github.com/chrischall/zillow-mcp/issues/115) ([#117](https://github.com/chrischall/zillow-mcp/issues/117)) ([c778cb8](https://github.com/chrischall/zillow-mcp/commit/c778cb825a78dfbcee4a70115d318b9dad417adc))
+
 ## [0.9.1](https://github.com/chrischall/zillow-mcp/compare/v0.9.0...v0.9.1) (2026-05-30)
 
 
