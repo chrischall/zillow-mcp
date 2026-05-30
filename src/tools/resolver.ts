@@ -211,17 +211,15 @@ export async function searchFallback(
  *
  * Zillow's own address typeahead is a GraphQL endpoint that returns clean
  * suggestions and sends the query INLINE (the full operation text in the
- * body — NOT a persisted-query sha256 hash), so it carries no
- * hash-rotation fragility (unlike the property-detail persistedQuery
- * endpoint in graphql-property.ts). The bridge supplies cookies
+ * body — NOT a persisted-query sha256 hash). The bridge supplies cookies
  * AMBIENTLY; this rung NEVER sets, reads, logs, or stores a cookie — the
  * headers below are explicitly cookie-free.
  *
- * Scope guard (issue #101): this GraphQL call is kept self-contained in
- * the resolver module. A parallel PR is adding shared inline-GraphQL POST
- * infra to graphql-property.ts; we deliberately do NOT depend on it here
- * to avoid a merge collision. Minor helper duplication is intentional and
- * will be deduped later.
+ * NOTE: the property-detail GraphQL path was retired after Zillow locked
+ * `/graphql/` to a persisted-query safelist (inline ops rejected). This
+ * typeahead is a DIFFERENT operation; if it ever starts failing the same
+ * way, the resolver still degrades through its other (SSR) rungs. This
+ * GraphQL call is kept self-contained in the resolver module.
  *
  * Endpoint:
  *   POST https://www.zillow.com/zg-graph

@@ -11,8 +11,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const mockFetchHtml = vi.fn();
-// `fetchPropertyRecord` tries GraphQL first (issue #99); these tests
-// cover the SSR scrape, so `fetchJson` is stubbed to reject → fall back.
+// `fetchPropertyRecord` is SSR-only; these tests cover the SSR scrape
+// (`fetchHtml`). `mockFetchJson` is vestigial shape parity on the stub.
 const mockFetchJson = vi.fn();
 const mockClient = {
   fetchHtml: mockFetchHtml,

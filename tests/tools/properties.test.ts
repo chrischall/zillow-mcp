@@ -15,11 +15,10 @@ import { createTestHarness, parseToolResult } from '../helpers.js';
 import type { ExtractedFeatures } from '../../src/features.js';
 
 const mockFetchHtml = vi.fn();
-// `fetchPropertyRecord` now tries the GraphQL endpoint first (issue #99)
-// and falls back to the SSR scrape. These SSR-focused tests stub
-// `fetchJson` to reject so the fallback path (the `fetchHtml` scrape they
-// assert on) is exercised; the GraphQL-primary behavior has its own
-// tests in graphql-property.test.ts + the block below.
+// `fetchPropertyRecord` is SSR-only — it scrapes /homedetails/<zpid>_zpid/
+// and parses the property out of __NEXT_DATA__. (`mockFetchJson` is kept
+// on the stub client for shape parity but the property path never calls
+// it; the retired GraphQL fast-path used to.)
 const mockFetchJson = vi.fn();
 const mockClient = {
   fetchHtml: mockFetchHtml,
@@ -281,88 +280,37 @@ describe('format() — FormattedProperty contract', () => {
   });
 });
 
-describe('fetchPropertyRecord — GraphQL primary, SSR fallback (issue #99)', () => {
-  function graphqlProperty(raw: RawProperty) {
-    return { data: { property: raw } };
-  }
-
-  it('uses the GraphQL endpoint as the PRIMARY fetch (no SSR scrape on success)', async () => {
-    mockFetchJson.mockResolvedValue(
-      graphqlProperty({ zpid: 777, price: 12345 })
-    );
+describe('fetchPropertyRecord — SSR-only', () => {
+  // Zillow now enforces a persisted-query safelist on /graphql/, so the
+  // inline "shirk the hash" query is rejected and every call silently fell
+  // through to SSR anyway. The GraphQL layer was retired; the property
+  // fetch is the SSR scrape of /homedetails/<zpid>_zpid/.
+  it('uses the SSR scrape and never touches the GraphQL endpoint', async () => {
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 777, price: 12345 }));
     const { raw } = await fetchPropertyRecord(mockClient, { zpid: 777 });
     expect(raw.price).toBe(12345);
-    // GraphQL was hit; the SSR scrape was NOT (the bot-wall-prone path).
-    // "Shirk the hash": the primary call is an inline POST to the bare
-    // /graphql/ endpoint (no persistedQuery query string).
-    expect(mockFetchJson).toHaveBeenCalledTimes(1);
-    expect(mockFetchJson.mock.calls[0][0]).toBe('/graphql/');
-    expect(mockFetchJson.mock.calls[0][1].method).toBe('POST');
-    expect(mockFetchHtml).not.toHaveBeenCalled();
+    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
+    expect(mockFetchHtml.mock.calls[0][0]).toBe('/homedetails/777_zpid/');
+    // No GraphQL round-trip — the /graphql/ POST is gone entirely.
+    expect(mockFetchJson).not.toHaveBeenCalled();
   });
 
-  it('falls back to the SSR scrape when GraphQL fails (e.g. hash rotated)', async () => {
-    mockFetchJson.mockRejectedValue(new Error('PersistedQueryNotFound'));
-    mockFetchHtml.mockResolvedValue(
-      htmlWithProperty({ zpid: 888, price: 999 })
-    );
-    const { raw } = await fetchPropertyRecord(mockClient, { zpid: 888 });
+  it('resolves a zpid from a full homedetails URL via the SSR scrape', async () => {
+    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 888, price: 999 }));
+    const { raw } = await fetchPropertyRecord(mockClient, {
+      url: 'https://www.zillow.com/homedetails/x/888_zpid/',
+    });
     expect(raw.price).toBe(999);
     expect(mockFetchHtml).toHaveBeenCalledTimes(1);
-    expect(mockFetchHtml.mock.calls[0][0]).toBe('/homedetails/888_zpid/');
+    expect(mockFetchJson).not.toHaveBeenCalled();
   });
 
-  it('logs PersistedQueryNotFoundError to stderr (recovery hint) even without ZILLOW_DEBUG, then falls back', async () => {
-    const { PersistedQueryNotFoundError } = await import(
-      '../../src/tools/graphql-property.js'
-    );
-    delete process.env.ZILLOW_DEBUG;
-    const err = new PersistedQueryNotFoundError('deadbeefhash');
-    mockFetchJson.mockRejectedValue(err);
-    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 555, price: 1 }));
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const { raw } = await fetchPropertyRecord(mockClient, { zpid: 555 });
-      expect(raw.price).toBe(1);
-      // SSR fallback still happened.
-      expect(mockFetchHtml).toHaveBeenCalledTimes(1);
-      // The actionable recovery hint reached stderr.
-      expect(spy).toHaveBeenCalled();
-      const logged = spy.mock.calls.map((c) => String(c[0])).join('\n');
-      expect(logged).toContain('ZILLOW_PROPERTY_QUERY_HASH');
-      expect(logged).toMatch(/re-extract/i);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it('falls back to the SSR scrape when the inline GraphQL op fails validation', async () => {
-    // The inline query is the PRIMARY path now (no hash). If Zillow's schema
-    // rejects it (a curated field drifted), the SSR floor must still serve
-    // the listing — never a regression vs the hash-based path.
-    const { GraphqlValidationError } = await import(
-      '../../src/tools/graphql-property.js'
-    );
-    mockFetchJson.mockRejectedValue(
-      new GraphqlValidationError(123, 'Cannot query field "x".')
-    );
-    mockFetchHtml.mockResolvedValue(htmlWithProperty({ zpid: 123, price: 42 }));
-    const { raw } = await fetchPropertyRecord(mockClient, { zpid: 123 });
-    expect(raw.price).toBe(42);
-    expect(mockFetchHtml).toHaveBeenCalledTimes(1);
-  });
-
-  it('does NOT fall back to SSR on a GraphQL bot-wall — it propagates', async () => {
-    // The whole point of the GraphQL path is bot-wall resistance; if even
-    // it is walled, surface the BotWallError so bulk-get's backoff /
-    // partial-results handle it. Falling back to the (more walled) SSR
-    // scrape would just trip the wall again.
+  it('propagates a BotWallError from the SSR scrape (bulk-get backoff handles it)', async () => {
     const { BotWallError } = await import('../../src/client.js');
-    mockFetchJson.mockRejectedValue(new BotWallError('/graphql/'));
+    mockFetchHtml.mockRejectedValue(new BotWallError('/homedetails/999_zpid/'));
     await expect(
       fetchPropertyRecord(mockClient, { zpid: 999 })
     ).rejects.toBeInstanceOf(BotWallError);
-    expect(mockFetchHtml).not.toHaveBeenCalled();
   });
 });
 

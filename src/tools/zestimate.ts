@@ -13,11 +13,10 @@ import { fetchPropertyRecord } from './properties.js';
  * For the v0 surface we expose the cleaner homeValueChartData if
  * present, falling back to a derived series from priceHistory.
  *
- * The record is fetched through the shared `fetchPropertyRecord`, which
- * is GraphQL-first (issue #99) with the SSR scrape as the floor — the
- * same source every other property tool uses, so the chart fields are
- * selected by the inline GraphQL query and arrive without a second
- * homedetails scrape.
+ * The record is fetched through the shared `fetchPropertyRecord` (the SSR
+ * `/homedetails/` scrape) — the same source every other property tool
+ * uses, so the chart fields arrive on the one `__NEXT_DATA__` property
+ * object without a second fetch.
  */
 
 export interface ZestimatePoint {

@@ -7,11 +7,10 @@ import {
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
-// `zillow_get_zestimate_history` now routes through the shared
-// `fetchPropertyRecord`, which tries the inline GraphQL POST first
-// (issue #99) and falls back to the SSR scrape. The SSR-path tests
-// below stub `fetchJson` to reject so the fallback is exercised; the
-// GraphQL-path test lets it succeed.
+// `zillow_get_zestimate_history` routes through the shared
+// `fetchPropertyRecord`, which is SSR-only (scrapes /homedetails/ and
+// reads __NEXT_DATA__). `mockFetchJson` is vestigial shape parity on the
+// stub client — the property path never calls it.
 const mockFetchJson = vi.fn();
 const mockClient = {
   fetchHtml: mockFetchHtml,
@@ -219,36 +218,18 @@ describe('zillow_get_zestimate_history tool', () => {
     expect(text).toMatch(/zpid or url/i);
   });
 
-  // The history tool now shares the GraphQL-first `fetchPropertyRecord`,
-  // so the chart series MUST flow through the GraphQL arm (not just SSR).
-  // Here GraphQL SUCCEEDS and the SSR scrape is never reached.
-  it('returns the series via the GraphQL path (no SSR fallback)', async () => {
-    mockFetchJson.mockReset();
-    mockFetchJson.mockResolvedValueOnce({
-      data: {
-        property: {
-          zpid: 12345,
-          homeValueChartData: [
-            {
-              name: 'This home',
-              points: [{ x: Date.parse('2024-06-01'), y: 800_000 }],
-            },
-          ],
-          rentValueChartData: [
-            {
-              name: 'This home',
-              points: [{ x: Date.parse('2024-06-01'), y: 3_200 }],
-            },
-          ],
-        },
-      },
-    });
+  // Charts arrive with rent values folded in, via the SSR property object.
+  it('returns the series with rent values folded in (SSR property object)', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithCharts(
+        [{ name: 'This home', points: [{ x: Date.parse('2024-06-01'), y: 800_000 }] }],
+        [{ name: 'This home', points: [{ x: Date.parse('2024-06-01'), y: 3_200 }] }]
+      )
+    );
     const result = await harness.callTool('zillow_get_zestimate_history', {
       zpid: 12345,
     });
     expect(result.isError).toBeFalsy();
-    // GraphQL served it — the SSR scrape was never reached.
-    expect(mockFetchHtml).not.toHaveBeenCalled();
     const parsed = parseToolResult<{
       zpid: string;
       points: { date: string; value: number; rent?: number }[];

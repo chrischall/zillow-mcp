@@ -8,8 +8,8 @@ import {
 import { createTestHarness, parseToolResult } from '../helpers.js';
 
 const mockFetchHtml = vi.fn();
-// `fetchPropertyRecord` tries GraphQL first (issue #99); these tests
-// cover the SSR scrape, so `fetchJson` is stubbed to reject → fall back.
+// `fetchPropertyRecord` is SSR-only; these tests cover the SSR scrape
+// (`fetchHtml`). `mockFetchJson` is vestigial shape parity on the stub.
 const mockFetchJson = vi.fn();
 const mockClient = {
   fetchHtml: mockFetchHtml,
@@ -137,14 +137,11 @@ describe('zillow_get_property_photos tool', () => {
     expect(parsed.photos).toEqual([]);
   });
 
-  // P0 regression: in production `fetchPropertyRecord` succeeds via the
-  // inline GraphQL POST, so photos MUST come through the GraphQL arm —
-  // not just the SSR floor. (The SSR-only tests above stub `fetchJson`
-  // to reject; here we let GraphQL SUCCEED and assert the gallery flows.)
-  it('returns the gallery via the GraphQL path (no SSR fallback)', async () => {
-    mockFetchJson.mockReset();
-    mockFetchJson.mockResolvedValueOnce({
-      data: {
+  // Full gallery with mixedSources/street-view/hi-res, served by the SSR
+  // property object (same field names the GraphQL arm once used).
+  it('returns the full gallery with large/street-view/hi-res urls', async () => {
+    const cache = JSON.stringify({
+      'Property:7': {
         property: {
           zpid: 7,
           photos: [
@@ -165,10 +162,13 @@ describe('zillow_get_property_photos tool', () => {
         },
       },
     });
+    mockFetchHtml.mockResolvedValueOnce(
+      `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+        props: { pageProps: { gdpClientCache: cache } },
+      })}</script></html>`
+    );
     const r = await harness.callTool('zillow_get_property_photos', { zpid: 7 });
     expect(r.isError).toBeFalsy();
-    // GraphQL POST served it — the SSR scrape was never reached.
-    expect(mockFetchHtml).not.toHaveBeenCalled();
 
     const parsed = parseToolResult<{
       zpid: string;
