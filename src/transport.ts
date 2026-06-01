@@ -34,7 +34,7 @@ export interface FetchResult {
  * is the canonical shape — `BridgeStatus` is now a type alias so any
  * downstream code that still imports it from here keeps working.
  */
-export type BridgeStatus = import('@fetchproxy/server').BridgeHealth;
+export type BridgeStatus = import('@chrischall/mcp-utils/fetchproxy').BridgeHealth;
 
 /**
  * 0.10.0: the server's discriminated success-arm `FetchResult`
@@ -42,10 +42,10 @@ export type BridgeStatus = import('@fetchproxy/server').BridgeHealth;
  * the raw result alongside the parsed `data` so the client can run its
  * own per-site guards (`throwIfNotOk` / `throwIfSignInPage`) over it.
  */
-export type ServerFetchResult = import('@fetchproxy/server').FetchResult;
+export type ServerFetchResult = import('@chrischall/mcp-utils/fetchproxy').FetchResult;
 
 /** 0.10.0: typed result of `runProbe` — see `BridgeProbeResult`. */
-export type BridgeProbeResult = import('@fetchproxy/server').BridgeProbeResult;
+export type BridgeProbeResult = import('@chrischall/mcp-utils/fetchproxy').BridgeProbeResult;
 
 /** Options accepted by `ZillowTransport.requestJson` (mirrors the server's). */
 export interface RequestJsonInit {
