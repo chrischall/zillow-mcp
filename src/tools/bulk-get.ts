@@ -4,14 +4,11 @@ import {
   BRIDGE_CONCURRENCY,
   TokenBucket,
   backoffDelayMs,
+  classifyRowError,
   mapWithConcurrency,
   retryOnceOnTimeout,
   withDeadline,
 } from '@chrischall/mcp-utils/fetchproxy';
-// classifyRowError is not re-exported by mcp-utils/fetchproxy, so it stays a
-// direct @fetchproxy/server import — same installed 0.11.x instance the
-// subpath re-exports from, no version split-brain.
-import { classifyRowError } from '@fetchproxy/server';
 import { BotWallError, type ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import {

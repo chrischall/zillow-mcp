@@ -2,13 +2,10 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   BRIDGE_CONCURRENCY,
+  classifyRowError,
   mapWithConcurrency,
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
-// classifyRowError is not re-exported by mcp-utils/fetchproxy, so it stays a
-// direct @fetchproxy/server import — same installed 0.11.x instance the
-// subpath re-exports from, no version split-brain.
-import { classifyRowError } from '@fetchproxy/server';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { parseAddress } from '@chrischall/realty-core';
