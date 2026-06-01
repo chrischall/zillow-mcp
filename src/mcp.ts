@@ -1,15 +1,10 @@
 /**
  * Small helpers for shaping tool responses that the MCP SDK expects.
+ *
+ * The `textResult` wrapper now lives in `@chrischall/mcp-utils` (the
+ * single most-duplicated snippet across the fleet). It's re-exported
+ * here so the `zillow_*` tools keep importing it from `'../mcp.js'`
+ * exactly as before — the indirection is intentional, see CLAUDE.md
+ * ("Don't hand-roll the wrapper").
  */
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-
-/**
- * Wrap any JSON-serializable value as a text-content MCP tool result.
- * Every `zillow_*` tool returns exactly one text block; this removes
- * boilerplate at the bottom of each handler.
- */
-export function textResult(data: unknown): CallToolResult {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-  };
-}
+export { textResult } from '@chrischall/mcp-utils';

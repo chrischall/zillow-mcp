@@ -27,6 +27,13 @@
 //   - Tab selection (which zillow.com tab the SW picked)
 //   - The window.fetch() that actually runs in the page
 
+// This adapter is the ONE place that constructs the FetchproxyServer, and the
+// transport spec mocks `@fetchproxy/server`'s constructor to capture opts —
+// so the server class (and the typed-error re-exports below) stay direct
+// imports rather than routing through `@chrischall/mcp-utils/fetchproxy`,
+// which would bypass that mock. The bridge *primitives* (classifyBotWall,
+// mapWithConcurrency, TokenBucket, …) DO route through the shared subpath in
+// client.ts and the batch tools.
 import {
   FetchproxyServer,
   type FetchproxyServerOpts,

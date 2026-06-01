@@ -8,7 +8,7 @@ describe('SessionRegistry', () => {
   });
 
   it('starts empty with no active session', () => {
-    const ctx = registry.context();
+    const ctx = registry.getContext();
     expect(ctx.sessions).toEqual([]);
     expect(ctx.active_session_id).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('SessionRegistry', () => {
     const a = registry.register({ account_identity: 'a' });
     const b = registry.register({ account_identity: 'b' });
     registry.setActive(b.session_id);
-    const ctx = registry.context();
+    const ctx = registry.getContext();
     expect(ctx.sessions).toHaveLength(2);
     expect(ctx.active_session_id).toBe(b.session_id);
     const identities = ctx.sessions.map((s) => s.account_identity).sort();

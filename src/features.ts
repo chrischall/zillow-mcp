@@ -11,6 +11,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { readEnvVar } from '@chrischall/mcp-utils';
 
 export { extractFeatures } from '@chrischall/realty-core';
 export type { ExtractedFeatures } from '@chrischall/realty-core';
@@ -51,7 +52,9 @@ let cachedFailurePath: string | null = null;
  * keyed by the env-var value — both the positive AND negative result.
  */
 export function loadCommunities(): string[] {
-  const path = process.env.ZILLOW_COMMUNITIES_FILE?.trim();
+  // readEnvVar trims and treats empty/`undefined`/`null`/`${...}` placeholder
+  // values as unset — the placeholder-leakage defense shared across the fleet.
+  const path = readEnvVar('ZILLOW_COMMUNITIES_FILE');
   if (!path) {
     cachedCommunities = null;
     cachedPath = null;
