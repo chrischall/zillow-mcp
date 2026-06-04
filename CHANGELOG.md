@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/chrischall/zillow-mcp/compare/v0.10.0...v0.10.1) (2026-06-04)
+
+
+### Bug Fixes
+
+* adopt @fetchproxy/server 0.13.0 (bridge host failover + re-pairing) ([#130](https://github.com/chrischall/zillow-mcp/issues/130)) ([4ac24e2](https://github.com/chrischall/zillow-mcp/commit/4ac24e2bcced0bd8078518281a55b49aa25b4158))
+* adopt @fetchproxy/server 1.0.0 + @chrischall/mcp-utils 0.5.0 ([#132](https://github.com/chrischall/zillow-mcp/issues/132)) ([ac00850](https://github.com/chrischall/zillow-mcp/commit/ac00850ecc9b047d9a2fdab9e1b7bcb1e5c4be0b))
+
 ## [0.10.0](https://github.com/chrischall/zillow-mcp/compare/v0.9.1...v0.10.0) (2026-05-30)
 
 
