@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/chrischall/zillow-mcp/compare/v0.10.1...v0.10.2) (2026-06-07)
+
+
+### Documentation
+
+* neutral wording for fetchproxy routing in description ([#136](https://github.com/chrischall/zillow-mcp/issues/136)) ([6d2eeee](https://github.com/chrischall/zillow-mcp/commit/6d2eeee3214def63f88fc7769205470057feb427))
+
 ## [0.10.1](https://github.com/chrischall/zillow-mcp/compare/v0.10.0...v0.10.1) (2026-06-04)
 
 
