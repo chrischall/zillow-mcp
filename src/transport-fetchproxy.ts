@@ -55,7 +55,6 @@ export {
 } from '@fetchproxy/server';
 
 const ZILLOW_ORIGIN = 'https://www.zillow.com';
-const ZILLOW_TAB_URL = 'https://www.zillow.com/';
 
 const DEFAULT_PORT = 37_149;
 
