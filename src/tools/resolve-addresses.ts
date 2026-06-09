@@ -9,6 +9,7 @@ import {
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { parseAddress } from '@chrischall/realty-core';
+import { OVERALL_DEADLINE_MS, runWithDeadline } from './bulk-deadline.js';
 import {
   resolveAddressFull,
   type ResolverInput,
@@ -27,6 +28,21 @@ import {
  */
 
 export const RESOLVE_ADDRESSES_MAX = 100;
+
+/**
+ * Tuning knobs. Tests inject a tiny `overallDeadlineMs` so the suite
+ * doesn't wait on real wall-clock.
+ */
+export interface ResolveAddressesTuning {
+  /**
+   * Overall hard deadline (ms) for the whole call (issue #98). When it
+   * fires, any row that hasn't settled is returned with
+   * `error_kind: 'pending'` and the call resolves with partial results
+   * rather than hanging. Defaults to the shared
+   * {@link OVERALL_DEADLINE_MS}.
+   */
+  overallDeadlineMs?: number;
+}
 
 /** Per-row input shape — accepts either a bare string or a struct. */
 export type ResolveAddressesInputRow =
@@ -78,6 +94,14 @@ export interface ResolveAddressesRow {
     | 'none';
   /** Set when `resolved` is false. */
   error?: string;
+  /**
+   * Machine-readable marker for an overall-deadline cut (issue #98).
+   * Present only on a `pending` row — the overall deadline fired before
+   * this row settled (likely a slow/hung sub-request). Distinct from a
+   * genuine `confidence: 'none'` miss so the caller re-runs just the
+   * pending rows rather than recording a real property as absent.
+   */
+  error_kind?: 'pending';
   /** The slug we passed through the resolver — useful for debugging. */
   query?: string;
 }
@@ -234,8 +258,10 @@ const RowSchema = z.union([
 
 export function registerResolveAddressesTools(
   server: McpServer,
-  client: ZillowClient
+  client: ZillowClient,
+  tuning: ResolveAddressesTuning = {}
 ): void {
+  const overallDeadlineMs = tuning.overallDeadlineMs ?? OVERALL_DEADLINE_MS;
   server.registerTool(
     'zillow_resolve_addresses',
     {
@@ -248,6 +274,7 @@ export function registerResolveAddressesTools(
         'Locality-remap rung handles real-world mountain-MLS cases (Lake Lure <-> Rutherfordton, Beech/Sugar Mountain <-> Banner Elk) where Zillow indexes the parent locality; when it fires, `queried_city` (what you sent) and `resolved_city` (what Zillow returned) are both set so the caller can see the substitution. ' +
         'Concurrent fan-out — a 60-address batch returns in roughly one round trip instead of 60. Per-row error capture so one bad address never fails the batch. ' +
         '`confidence` is `"exact"` for direct hits, `"autocomplete"` / `"suffix_expansion"` / `"locality_remap"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
+        'The whole call is bounded by an overall hard deadline (issue #98), like `zillow_bulk_get`: a single slow/hung row never wedges the server — when the deadline is reached any unsettled row is returned with `error_kind: "pending"` (distinct from a real miss) and the response carries a `pending` count so you can re-run just those addresses. ' +
         'Read-only, no auth required.',
       annotations: {
         title: 'Bulk-resolve addresses → Zillow zpids',
@@ -270,12 +297,50 @@ export function registerResolveAddressesTools(
       // Unlimited concurrency timed out 7 of 20 sub-requests in a real
       // session; 6-in-flight + retry-once-on-timeout lands the same
       // batch clean.
-      const results = await mapWithConcurrency(
-        addresses,
-        BRIDGE_CONCURRENCY,
-        (a) => resolveOneAddress(client, a)
+      //
+      // Issue #98: the same overall hard deadline + pending-backfill that
+      // `zillow_bulk_get` uses, via the shared `runWithDeadline` primitive.
+      // Results are written into index-addressable slots; any slot still
+      // unsettled when the deadline fires is backfilled with a `pending`
+      // row so a single hung sub-request can't wedge the whole call. A
+      // `pending` row is NEVER a generic `confidence: 'none'` miss.
+      const indexed = addresses.map((address, index) => ({ address, index }));
+      const results = await runWithDeadline<ResolveAddressesRow>(
+        addresses.length,
+        (slots) =>
+          mapWithConcurrency(
+            indexed,
+            BRIDGE_CONCURRENCY,
+            async ({ address, index }) => {
+              slots[index] = await resolveOneAddress(client, address);
+            }
+          ),
+        (index) => {
+          const address = addresses[index];
+          const raw = typeof address === 'string' ? address : address.address;
+          return {
+            address: raw,
+            resolved: false,
+            confidence: 'none',
+            error_kind: 'pending',
+            error:
+              'resolve_addresses overall deadline reached before this row ' +
+              'settled — the request is still pending (likely a slow/hung ' +
+              'sub-request). Re-run just the pending addresses; a single slow ' +
+              'row no longer wedges the batch.',
+          };
+        },
+        overallDeadlineMs
       );
-      return textResult({ count: results.length, results });
+
+      const pending = results.filter((r) => r.error_kind === 'pending').length;
+      const envelope: {
+        count: number;
+        results: ResolveAddressesRow[];
+        pending?: number;
+      } = { count: results.length, results };
+      if (pending > 0) envelope.pending = pending;
+      return textResult(envelope);
     }
   );
 }
