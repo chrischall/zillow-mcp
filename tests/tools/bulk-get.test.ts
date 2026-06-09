@@ -443,10 +443,17 @@ describe('zillow_bulk_get tool', () => {
   });
 });
 
-// `chunk()` stays a local bulk-get helper after the 0.10.0 migration —
-// the resilience kit hoisted TokenBucket/backoffDelayMs (now tested
-// upstream in @fetchproxy/server) but not this array splitter.
+// `chunk()` is the shared @chrischall/mcp-utils/fetchproxy helper,
+// re-exported through bulk-get so the import surface doesn't churn.
+// These cases pin the upstream behavior bulk-get relies on (notably the
+// defensive non-positive-size collapse) as integration tests through
+// the re-export.
 describe('chunk()', () => {
+  it('is the shared @chrischall/mcp-utils/fetchproxy chunk (re-export, not a local copy)', async () => {
+    const upstream = await import('@chrischall/mcp-utils/fetchproxy');
+    expect(chunk).toBe(upstream.chunk);
+  });
+
   it('splits an array into pages of the given size', () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
   });

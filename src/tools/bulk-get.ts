@@ -4,9 +4,11 @@ import {
   BRIDGE_CONCURRENCY,
   TokenBucket,
   backoffDelayMs,
+  chunk,
   classifyRowError,
   mapWithConcurrency,
   retryOnceOnTimeout,
+  sleep,
   withDeadline,
 } from '@chrischall/mcp-utils/fetchproxy';
 import { BotWallError, type ZillowClient } from '../client.js';
@@ -17,28 +19,10 @@ import {
   type FormattedProperty,
 } from './properties.js';
 
-/**
- * Split `items` into pages of at most `size`. A non-positive `size`
- * collapses to a single page (defensive — never produces an infinite
- * loop). Used to auto-chunk a big id list into safe-sized pages
- * dispatched one after another (issue #90 part c). Kept local — the
- * resilience kit hoisted `TokenBucket`/`backoffDelayMs` but not this
- * array helper.
- */
-export function chunk<T>(items: T[], size: number): T[][] {
-  if (items.length === 0) return [];
-  if (size <= 0) return [items.slice()];
-  const pages: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    pages.push(items.slice(i, i + size));
-  }
-  return pages;
-}
-
-/** Promise-based sleep. Resolves after `ms` milliseconds. */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// `chunk` (auto-chunking a big id list into safe-sized pages, issue #90
+// part c) and `sleep` come from the shared resilience kit. Re-exported
+// so existing importers/tests keep their `bulk-get.js` import surface.
+export { chunk };
 
 /**
  * `zillow_bulk_get`: structured fetch of N properties in one call.
