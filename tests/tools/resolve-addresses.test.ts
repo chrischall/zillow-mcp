@@ -284,6 +284,131 @@ describe('zillow_resolve_addresses tool', () => {
     });
   });
 
+  describe('overall hard deadline → partial results, never wedges (issue #98)', () => {
+    const FAST_TUNING = { overallDeadlineMs: 200 };
+
+    it('a single hung row is backfilled as pending; others still resolve', async () => {
+      // The middle address never settles (its first rung fetch hangs); the
+      // overall deadline must fire and the call must return the other rows'
+      // real data plus a per-row pending marker for the hung row — NOT hang
+      // for the full client timeout.
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, FAST_TUNING)
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const slug = decodeURIComponent(
+          /\/homes\/([^_]+)_rb/.exec(path)?.[1] ?? ''
+        );
+        if (slug.includes('Hang')) {
+          // Never resolves — simulates the wedging row from the report.
+          return new Promise<string>(() => {});
+        }
+        if (slug.includes('Sleeping Bear')) {
+          return htmlWithListing({
+            zpid: 100,
+            streetAddress: '126 Sleeping Bear Ln',
+            city: 'Lake Lure',
+            state: 'NC',
+            zip: '28746',
+          });
+        }
+        if (slug.includes('Highland')) {
+          return htmlWithListing({
+            zpid: 300,
+            streetAddress: '181 Highland Hts',
+            city: 'Lake Lure',
+            state: 'NC',
+            zip: '28746',
+          });
+        }
+        return htmlWithListing({ zpid: 0, streetAddress: 'none' });
+      });
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: [
+          '126 Sleeping Bear Ln, Lake Lure, NC',
+          '1 Hang Ln, Nowhere, NC',
+          '181 Highland Hts, Lake Lure, NC',
+        ],
+      });
+      const parsed = parseToolResult<{
+        count: number;
+        pending?: number;
+        results: Array<{
+          resolved: boolean;
+          zpid?: string;
+          error?: string;
+          error_kind?: string;
+        }>;
+      }>(r);
+      // Every input still produces exactly one row, in input order.
+      expect(parsed.count).toBe(3);
+      // The good rows returned real data.
+      expect(parsed.results[0].resolved).toBe(true);
+      expect(parsed.results[0].zpid).toBe('100');
+      expect(parsed.results[2].resolved).toBe(true);
+      expect(parsed.results[2].zpid).toBe('300');
+      // The hung row is surfaced as pending — distinct, machine-readable,
+      // and NOT a generic miss / not-found.
+      expect(parsed.results[1].resolved).toBe(false);
+      expect(parsed.results[1].error_kind).toBe('pending');
+      expect(parsed.results[1].error).not.toMatch(/no listing found/i);
+      // The partial-result envelope advertises the pending count.
+      expect(parsed.pending).toBe(1);
+      await dh.close();
+    }, 5000);
+
+    it('does not poison the connection: resolves promptly despite a hung row', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, FAST_TUNING)
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        const slug = decodeURIComponent(
+          /\/homes\/([^_]+)_rb/.exec(path)?.[1] ?? ''
+        );
+        if (slug.includes('Hang')) return new Promise<string>(() => {});
+        return htmlWithListing({ zpid: 0, streetAddress: 'none' });
+      });
+      const start = Date.now();
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: ['1 Hang Ln, Nowhere, NC', '2 Foo St, Bar, NC'],
+      });
+      const elapsed = Date.now() - start;
+      expect(r.isError).toBeFalsy();
+      expect(elapsed).toBeLessThan(3000);
+      await dh.close();
+    }, 5000);
+
+    it('all rows resolving before the deadline → no pending marker', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, FAST_TUNING)
+      );
+      mockFetchHtml.mockImplementation(async () =>
+        htmlWithListing({
+          zpid: 100,
+          streetAddress: '126 Sleeping Bear Ln',
+          city: 'Lake Lure',
+          state: 'NC',
+          zip: '28746',
+        })
+      );
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: [
+          '126 Sleeping Bear Ln, Lake Lure, NC',
+          '126 Sleeping Bear Ln, Lake Lure, NC',
+        ],
+      });
+      const parsed = parseToolResult<{
+        pending?: number;
+        results: Array<{ error_kind?: string }>;
+      }>(r);
+      expect(parsed.pending ?? 0).toBe(0);
+      expect(parsed.results.every((row) => row.error_kind === undefined)).toBe(
+        true
+      );
+      await dh.close();
+    });
+  });
+
   describe('tool description honesty (issue #80)', () => {
     // Description must (a) surface price_hint as load-bearing, (b) drop
     // the stale "bulk is weaker than single" caveat now that #73 shipped,
