@@ -1,27 +1,18 @@
 // Adapter-level tests for FetchproxyTransport. We don't bring up a real
 // WebSocket here — the protocol-level tests (lazy-revive retry, request
 // timeout, content_script_unreachable mapping) live in @fetchproxy/server
-// 0.8.0+. What we verify is the path → URL prepending, the request()
-// delegation, the bridgeHealth() → status() projection, the typed-error
-// re-exports, and the constructor options the adapter hands the server.
+// 0.8.0+. What we verify is the verb delegation (fetch / requestJson /
+// runProbe), the status() projection, the typed-error re-exports, and the
+// constructor options the adapter hands the server.
+//
+// 0.10.0: the adapter is now a thin delegate over mcp-utils'
+// `createFetchproxyTransport`, which exposes a `createServer` test seam —
+// a factory that builds the underlying FetchproxyServer. We inject a
+// capturing mock through that seam to record the constructor opts and stub
+// the verbs, instead of `vi.mock`-ing the constructor (which couldn't
+// reach the `new FetchproxyServer` buried inside the factory's prebuilt
+// dist). See the `createServer` plumbing on FetchproxyTransport.
 import { describe, it, expect, vi } from 'vitest';
-
-// Capture the exact options object the adapter passes to the
-// FetchproxyServer constructor, so we can prove the explicit
-// keepAliveIntervalMs opt-in was dropped (0.10.0 defaults it server-side,
-// fetchproxy#72). The real class is preserved for behavior; only the
-// constructor is wrapped to record its first argument.
-const constructorOpts: Array<Record<string, unknown>> = [];
-vi.mock('@fetchproxy/server', async (importActual) => {
-  const actual = await importActual<typeof import('@fetchproxy/server')>();
-  class CapturingServer extends actual.FetchproxyServer {
-    constructor(opts: ConstructorParameters<typeof actual.FetchproxyServer>[0]) {
-      constructorOpts.push({ ...(opts as Record<string, unknown>) });
-      super(opts);
-    }
-  }
-  return { ...actual, FetchproxyServer: CapturingServer };
-});
 
 import {
   FetchproxyBridgeDownError,
@@ -31,9 +22,10 @@ import {
 import {
   FetchproxyBridgeDownError as PkgBridgeDown,
   FetchproxyTimeoutError as PkgTimeout,
-} from '@fetchproxy/server';
+  type FetchproxyServer,
+} from '@chrischall/mcp-utils/fetchproxy';
 
-type Inner = {
+type MockServer = {
   listen: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   request: ReturnType<typeof vi.fn>;
@@ -43,7 +35,7 @@ type Inner = {
   role: 'host' | 'peer' | null;
 };
 
-function stubInner(role: 'host' | 'peer' | null = 'host'): Inner {
+function makeMockServer(role: 'host' | 'peer' | null = 'host'): MockServer {
   return {
     listen: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
@@ -63,9 +55,25 @@ function stubInner(role: 'host' | 'peer' | null = 'host'): Inner {
   };
 }
 
-function installInner(t: FetchproxyTransport, inner: Inner): void {
-  // @ts-expect-error reach into the private field for unit testing
-  t.inner = inner;
+/**
+ * Build a FetchproxyTransport whose underlying FetchproxyServer is the
+ * supplied mock, captured through the `createServer` seam. Returns the
+ * transport plus the constructor opts the factory forwarded to the seam.
+ */
+function makeTransport(
+  mock: MockServer,
+  opts: { version?: string; port?: number } = {}
+): { transport: FetchproxyTransport; ctorOpts: Record<string, unknown> } {
+  let ctorOpts: Record<string, unknown> = {};
+  const transport = new FetchproxyTransport({
+    version: opts.version ?? '0.0.0',
+    port: opts.port,
+    createServer: (o) => {
+      ctorOpts = { ...(o as Record<string, unknown>) };
+      return mock as unknown as FetchproxyServer;
+    },
+  });
+  return { transport, ctorOpts };
 }
 
 describe('FetchproxyTransport', () => {
@@ -78,53 +86,50 @@ describe('FetchproxyTransport', () => {
   });
 
   it('delegates fetch() to inner.request() with subdomain=www', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    inner.request.mockResolvedValue({
+    const mock = makeMockServer();
+    mock.request.mockResolvedValue({
       status: 200,
       body: 'x',
       url: 'https://www.zillow.com/homedetails/1_zpid/',
     });
-    installInner(t, inner);
+    const { transport } = makeTransport(mock);
 
-    await t.fetch({ path: '/homedetails/1_zpid/', method: 'GET' });
-    expect(inner.request).toHaveBeenCalledTimes(1);
-    const [method, path, opts] = inner.request.mock.calls[0];
+    await transport.fetch({ path: '/homedetails/1_zpid/', method: 'GET' });
+    expect(mock.request).toHaveBeenCalledTimes(1);
+    const [method, path, callOpts] = mock.request.mock.calls[0];
     expect(method).toBe('GET');
     expect(path).toBe('/homedetails/1_zpid/');
-    expect(opts.subdomain).toBe('www');
+    expect(callOpts.subdomain).toBe('www');
   });
 
   it('passes through absolute URLs to inner.request()', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    inner.request.mockResolvedValue({
+    const mock = makeMockServer();
+    mock.request.mockResolvedValue({
       status: 200,
       body: '',
       url: 'https://photos.zillow.com/x',
     });
-    installInner(t, inner);
+    const { transport } = makeTransport(mock);
 
-    await t.fetch({
+    await transport.fetch({
       path: 'https://photos.zillow.com/x',
       method: 'GET',
     });
     // The server's request() handles absolute URLs as-is; we still pass
     // the path positionally so 0.8.0's path-resolution rules apply.
-    expect(inner.request.mock.calls[0][1]).toBe('https://photos.zillow.com/x');
+    expect(mock.request.mock.calls[0][1]).toBe('https://photos.zillow.com/x');
   });
 
   it('returns the {status, body, url} triple from inner.request()', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    inner.request.mockResolvedValue({
+    const mock = makeMockServer();
+    mock.request.mockResolvedValue({
       status: 200,
       body: 'hello',
       url: 'https://www.zillow.com/x',
     });
-    installInner(t, inner);
+    const { transport } = makeTransport(mock);
 
-    const result = await t.fetch({ path: '/x', method: 'GET' });
+    const result = await transport.fetch({ path: '/x', method: 'GET' });
     expect(result).toEqual({
       status: 200,
       body: 'hello',
@@ -133,86 +138,89 @@ describe('FetchproxyTransport', () => {
   });
 
   it('propagates typed errors thrown by inner.request()', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
+    const mock = makeMockServer();
     const err = new PkgBridgeDown({
       originalError: 'Could not establish connection.',
       retryAttempted: true,
     });
-    inner.request.mockRejectedValue(err);
-    installInner(t, inner);
+    mock.request.mockRejectedValue(err);
+    const { transport } = makeTransport(mock);
 
-    await expect(t.fetch({ path: '/x', method: 'GET' })).rejects.toBe(err);
+    await expect(transport.fetch({ path: '/x', method: 'GET' })).rejects.toBe(
+      err
+    );
   });
 
   it('start/close delegate to the inner FetchproxyServer', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    installInner(t, inner);
+    const mock = makeMockServer();
+    const { transport } = makeTransport(mock);
 
-    await t.start();
-    expect(inner.listen).toHaveBeenCalledTimes(1);
+    await transport.start();
+    expect(mock.listen).toHaveBeenCalledTimes(1);
 
-    await t.close();
-    expect(inner.close).toHaveBeenCalledTimes(1);
+    await transport.close();
+    expect(mock.close).toHaveBeenCalledTimes(1);
   });
 
   it('forwards headers and body through inner.request()', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    inner.request.mockResolvedValue({
+    const mock = makeMockServer();
+    mock.request.mockResolvedValue({
       status: 200,
       body: '{}',
       url: 'https://www.zillow.com/api',
     });
-    installInner(t, inner);
-    await t.fetch({
+    const { transport } = makeTransport(mock);
+    await transport.fetch({
       path: '/api',
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{"q":"x"}',
     });
-    const [, , opts] = inner.request.mock.calls[0];
-    expect(opts.headers).toEqual({ 'content-type': 'application/json' });
-    expect(opts.body).toBe('{"q":"x"}');
+    const [, , callOpts] = mock.request.mock.calls[0];
+    expect(callOpts.headers).toEqual({ 'content-type': 'application/json' });
+    expect(callOpts.body).toBe('{"q":"x"}');
   });
 
   it('requestJson() delegates to inner.requestJson() with subdomain=www (0.10.0)', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    const result = { ok: true, status: 200, url: 'https://www.zillow.com/x', body: '{}' };
-    inner.requestJson.mockResolvedValue({ data: { ok: true }, result });
-    installInner(t, inner);
+    const mock = makeMockServer();
+    mock.requestJson.mockResolvedValue({
+      data: { ok: true },
+      result: { ok: true, status: 200, url: 'https://www.zillow.com/x', body: '{}' },
+    });
+    const { transport } = makeTransport(mock);
 
-    const out = await t.requestJson<{ ok: boolean }>('/x', {
+    const out = await transport.requestJson<{ ok: boolean }>('/x', {
       method: 'POST',
       headers: { 'X-Test': '1' },
       body: { q: 'x' },
     });
-    expect(out).toEqual({ data: { ok: true }, result });
-    const [method, path, opts] = inner.requestJson.mock.calls[0];
+    // The factory narrows the server's discriminated result down to the
+    // {status, body, url} triple — the only fields the client reads.
+    expect(out).toEqual({
+      data: { ok: true },
+      result: { status: 200, url: 'https://www.zillow.com/x', body: '{}' },
+    });
+    const [method, path, callOpts] = mock.requestJson.mock.calls[0];
     expect(method).toBe('POST');
     expect(path).toBe('/x');
-    expect(opts.subdomain).toBe('www');
-    expect(opts.headers).toEqual({ 'X-Test': '1' });
-    expect(opts.body).toEqual({ q: 'x' });
+    expect(callOpts.subdomain).toBe('www');
+    expect(callOpts.headers).toEqual({ 'X-Test': '1' });
+    expect(callOpts.body).toEqual({ q: 'x' });
   });
 
   it('requestJson() defaults the method to POST when omitted (0.10.0)', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    inner.requestJson.mockResolvedValue({
+    const mock = makeMockServer();
+    mock.requestJson.mockResolvedValue({
       data: null,
       result: { ok: true, status: 204, url: 'https://www.zillow.com/x', body: '' },
     });
-    installInner(t, inner);
-    await t.requestJson('/x', { body: {} });
-    expect(inner.requestJson.mock.calls[0][0]).toBe('POST');
+    const { transport } = makeTransport(mock);
+    await transport.requestJson('/x', { body: {} });
+    expect(mock.requestJson.mock.calls[0][0]).toBe('POST');
   });
 
   it('runProbe() delegates to inner.runProbe() with the same fetchFn + path (0.10.0)', async () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
+    const mock = makeMockServer();
     const probeResult = {
       ok: true,
       elapsed_ms: 12,
@@ -227,24 +235,22 @@ describe('FetchproxyTransport', () => {
         consecutive_failures: 0,
       },
     };
-    inner.runProbe.mockResolvedValue(probeResult);
-    installInner(t, inner);
+    mock.runProbe.mockResolvedValue(probeResult);
+    const { transport } = makeTransport(mock);
 
     const fetchFn = vi.fn().mockResolvedValue('User-agent: *');
-    const out = await t.runProbe(fetchFn, '/robots.txt');
+    const out = await transport.runProbe(fetchFn, '/robots.txt');
     expect(out).toBe(probeResult);
-    expect(inner.runProbe).toHaveBeenCalledTimes(1);
-    expect(inner.runProbe.mock.calls[0][0]).toBe(fetchFn);
-    expect(inner.runProbe.mock.calls[0][1]).toBe('/robots.txt');
+    expect(mock.runProbe).toHaveBeenCalledTimes(1);
+    expect(mock.runProbe.mock.calls[0][0]).toBe(fetchFn);
+    expect(mock.runProbe.mock.calls[0][1]).toBe('/robots.txt');
   });
 
-  it('status() delegates directly to inner.bridgeHealth() (0.8.0+ collapsed the shim)', () => {
-    const t = new FetchproxyTransport({ version: '0.0.0', port: 37200 });
-    const inner = stubInner(null);
-    inner.bridgeHealth.mockReturnValue({
+  it('status() projects inner.bridgeHealth() and pins serverVersion (0.10.0)', () => {
+    const mock = makeMockServer(null);
+    mock.bridgeHealth.mockReturnValue({
       role: null,
       port: 37200,
-      serverVersion: '0.0.0',
       fetchTimeoutMs: 30_000,
       bridgeReviveDelayMs: 2_000,
       lastSuccessAt: null,
@@ -253,10 +259,10 @@ describe('FetchproxyTransport', () => {
       consecutiveFailures: 0,
       lastExtensionMessageAt: null,
     });
-    installInner(t, inner);
-    const s = t.status();
+    const { transport } = makeTransport(mock, { version: '0.0.0', port: 37200 });
+    const s = transport.status();
     expect(s.role).toBeNull();
-    expect(s.port).toBe(37200);
+    // 0.10.0: the factory additively pins serverVersion to the version opt.
     expect(s.serverVersion).toBe('0.0.0');
     expect(s.fetchTimeoutMs).toBe(30_000);
     expect(s.bridgeReviveDelayMs).toBe(2_000);
@@ -270,21 +276,26 @@ describe('FetchproxyTransport', () => {
     // Pre-0.10.0 zillow-mcp opted into keepAliveIntervalMs: 25_000
     // explicitly. 0.10.0 promoted that exact value to the server default
     // (every consumer was opting in, fetchproxy#72), so the adapter now
-    // passes NOTHING for it and inherits the default. We inspect the
-    // options the adapter actually hands the constructor (captured by the
-    // module mock above) — `inner.opts` can't prove this because the
-    // server backfills the key, so the consumer-passed object is the only
-    // place the opt-in's absence is observable.
-    constructorOpts.length = 0;
-    new FetchproxyTransport({ version: '0.0.0' });
-    expect(constructorOpts).toHaveLength(1);
-    expect('keepAliveIntervalMs' in constructorOpts[0]).toBe(false);
+    // passes NOTHING for it and inherits the default. We inspect the opts
+    // the factory forwarded to the `createServer` seam — the consumer-passed
+    // object is where the opt-in's absence is observable.
+    const mock = makeMockServer();
+    const { ctorOpts } = makeTransport(mock);
+    expect('keepAliveIntervalMs' in ctorOpts).toBe(false);
+  });
+
+  it('declares zillow.com with the www default subdomain via the seam opts', () => {
+    // The factory forwards the FetchproxyServerOpts verbatim to createServer;
+    // assert the per-site declaration the adapter pins.
+    const mock = makeMockServer();
+    const { ctorOpts } = makeTransport(mock);
+    expect(ctorOpts.serverName).toBe('zillow-mcp');
+    expect(ctorOpts.domains).toEqual(['zillow.com']);
   });
 
   it('status() reflects freshness counters tracked by the server', () => {
-    const t = new FetchproxyTransport({ version: '0.0.0' });
-    const inner = stubInner();
-    inner.bridgeHealth.mockReturnValue({
+    const mock = makeMockServer();
+    mock.bridgeHealth.mockReturnValue({
       role: 'host',
       port: 37149,
       lastSuccessAt: 1_700_000_000_000,
@@ -293,8 +304,8 @@ describe('FetchproxyTransport', () => {
       consecutiveFailures: 2,
       lastExtensionMessageAt: 1_700_000_001_000,
     });
-    installInner(t, inner);
-    const s = t.status();
+    const { transport } = makeTransport(mock);
+    const s = transport.status();
     expect(s.lastSuccessAt).toBe(1_700_000_000_000);
     expect(s.lastFailureAt).toBe(1_700_000_000_500);
     expect(s.lastFailureReason).toMatch(/timeout/);

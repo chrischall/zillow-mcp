@@ -1,20 +1,20 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { runBoundedBatch } from '@chrischall/mcp-utils';
 import {
   BRIDGE_CONCURRENCY,
   classifyRowError,
-  mapWithConcurrency,
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
 import type { ZillowClient } from '../client.js';
 import { textResult } from '../mcp.js';
 import { parseAddress } from '@chrischall/realty-core';
-import { OVERALL_DEADLINE_MS, runWithDeadline } from './bulk-deadline.js';
 import {
   resolveAddressFull,
   type ResolverInput,
   type ResolverVia,
 } from './resolver.js';
+import { OVERALL_DEADLINE_MS } from './bulk-get.js';
 
 /**
  * `zillow_resolve_addresses`: batch address → zpid resolver.
@@ -299,24 +299,20 @@ export function registerResolveAddressesTools(
       // batch clean.
       //
       // Issue #98: the same overall hard deadline + pending-backfill that
-      // `zillow_bulk_get` uses, via the shared `runWithDeadline` primitive.
-      // Results are written into index-addressable slots; any slot still
-      // unsettled when the deadline fires is backfilled with a `pending`
-      // row so a single hung sub-request can't wedge the whole call. A
-      // `pending` row is NEVER a generic `confidence: 'none'` miss.
-      const indexed = addresses.map((address, index) => ({ address, index }));
-      const results = await runWithDeadline<ResolveAddressesRow>(
-        addresses.length,
-        (slots) =>
-          mapWithConcurrency(
-            indexed,
-            BRIDGE_CONCURRENCY,
-            async ({ address, index }) => {
-              slots[index] = await resolveOneAddress(client, address);
-            }
-          ),
-        (index) => {
-          const address = addresses[index];
+      // `zillow_bulk_get` uses, via the shared `runBoundedBatch` primitive
+      // (hoisted from this MCP's local `runWithDeadline`). It owns the
+      // index-addressable slots, the BRIDGE_CONCURRENCY-bounded fan-out, and
+      // the deadline race; any slot still unsettled when the deadline fires
+      // is backfilled by `onTimeout` with a `pending` row so a single hung
+      // sub-request can't wedge the whole call. A `pending` row is NEVER a
+      // generic `confidence: 'none'` miss.
+      const results = await runBoundedBatch<
+        ResolveAddressesInputRow,
+        ResolveAddressesRow
+      >(addresses, (address) => resolveOneAddress(client, address), {
+        deadlineMs: overallDeadlineMs,
+        concurrency: BRIDGE_CONCURRENCY,
+        onTimeout: (address) => {
           const raw = typeof address === 'string' ? address : address.address;
           return {
             address: raw,
@@ -330,8 +326,7 @@ export function registerResolveAddressesTools(
               'row no longer wedges the batch.',
           };
         },
-        overallDeadlineMs
-      );
+      });
 
       const pending = results.filter((r) => r.error_kind === 'pending').length;
       const envelope: {

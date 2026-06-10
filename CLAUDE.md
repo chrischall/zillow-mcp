@@ -48,7 +48,9 @@ src/
   index.ts              # entry — builds FetchproxyTransport, ZillowClient,
                         #   registers tool groups, connects stdio transport
   transport.ts          # ZillowTransport interface
-  transport-fetchproxy.ts # adapter over @fetchproxy/server's FetchproxyServer
+  transport-fetchproxy.ts # thin delegate over mcp-utils' createFetchproxyTransport
+                        #   (FetchproxyServer construction + start/close/status +
+                        #    fetch/requestJson/runProbe verbs, defaultSubdomain 'www')
   client.ts             # ZillowClient.fetchHtml / fetchJson + error mapping
                         #   (non-2xx, sign-in interstitial, 204 → null)
   next-data.ts          # extractNextData + getPageProps helpers
