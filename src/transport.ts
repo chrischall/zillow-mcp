@@ -37,12 +37,15 @@ export interface FetchResult {
 export type BridgeStatus = import('@chrischall/mcp-utils/fetchproxy').BridgeHealth;
 
 /**
- * 0.10.0: the server's discriminated success-arm `FetchResult`
- * (`{ ok, status, url, body, retryAttempted? }`). `requestJson` returns
- * the raw result alongside the parsed `data` so the client can run its
- * own per-site guards (`throwIfNotOk` / `throwIfSignInPage`) over it.
+ * 0.10.0: the raw `{ status, body, url }` success-arm triple the shared
+ * `createFetchproxyTransport` verb hands back alongside the parsed `data`,
+ * so the client can run its own per-site guards (`throwIfBotWall` /
+ * `throwIfNotOk` / `throwIfSignInPage`) over it. The factory narrows the
+ * server's discriminated result down to this triple — the only fields the
+ * client reads.
  */
-export type ServerFetchResult = import('@chrischall/mcp-utils/fetchproxy').FetchResult;
+export type ServerFetchResult =
+  import('@chrischall/mcp-utils/fetchproxy').FetchproxyFetchResult;
 
 /** 0.10.0: typed result of `runProbe` — see `BridgeProbeResult`. */
 export type BridgeProbeResult = import('@chrischall/mcp-utils/fetchproxy').BridgeProbeResult;
