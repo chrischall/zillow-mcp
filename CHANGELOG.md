@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.3](https://github.com/chrischall/zillow-mcp/compare/v0.10.2...v0.10.3) (2026-06-10)
+
+
+### Bug Fixes
+
+* bound zillow_resolve_addresses with an overall deadline + pending backfill ([#140](https://github.com/chrischall/zillow-mcp/issues/140)) ([319f08d](https://github.com/chrischall/zillow-mcp/commit/319f08d30962c30279b7b3ad36651b21dcbec124))
+
+
+### Refactor
+
+* adopt shared chunk/sleep from @chrischall/mcp-utils 0.7.0 ([#138](https://github.com/chrischall/zillow-mcp/issues/138)) ([f4d6704](https://github.com/chrischall/zillow-mcp/commit/f4d6704f4d660f587f5a7b96d18d380e02eca1bc))
+
 ## [0.10.2](https://github.com/chrischall/zillow-mcp/compare/v0.10.1...v0.10.2) (2026-06-07)
 
 
