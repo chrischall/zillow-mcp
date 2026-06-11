@@ -1,5 +1,9 @@
 # zillow-mcp
 
+[![CI](https://github.com/chrischall/zillow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/chrischall/zillow-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/zillow-mcp)](https://www.npmjs.com/package/zillow-mcp)
+[![license](https://img.shields.io/npm/l/zillow-mcp)](LICENSE)
+
 Zillow real-estate access as an MCP server for Claude — search listings, fetch property details, Zestimate history, your saved searches & homes, and market reports via natural language.
 
 > ⚠️ Zillow does not publish a public consumer API. The official [Bridge API](https://www.bridgeinteractive.com/developers/bridge-api/) is gated to MLS partners. This server uses the same private endpoints the zillow.com web app uses, routed through your own signed-in browser tab via the [fetchproxy](https://github.com/chrischall/fetchproxy) extension. Every request acts on behalf of your existing session — your cookies, your TLS, your JS context — exactly as if you'd clicked it in the browser yourself. Treat this as informal use of Zillow's website. Use at your own discretion.
