@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.4](https://github.com/chrischall/zillow-mcp/compare/v0.10.3...v0.10.4) (2026-06-13)
+
+
+### Bug Fixes
+
+* bot PRs bypass the CI gate unconditionally (upstream curtaincall[#86](https://github.com/chrischall/zillow-mcp/issues/86) review) ([#146](https://github.com/chrischall/zillow-mcp/issues/146)) ([7b98fa8](https://github.com/chrischall/zillow-mcp/commit/7b98fa8244297f3a3e49494ae7356bab98c8a153))
+
+
+### Documentation
+
+* add MIT LICENSE file and README badges ([#143](https://github.com/chrischall/zillow-mcp/issues/143)) ([13c41a7](https://github.com/chrischall/zillow-mcp/commit/13c41a7e2af906a61a34a3cde8492b31c3dfdb23))
+
 ## [0.10.3](https://github.com/chrischall/zillow-mcp/compare/v0.10.2...v0.10.3) (2026-06-10)
 
 
