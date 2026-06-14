@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/chrischall/zillow-mcp/compare/v0.10.4...v0.10.5) (2026-06-14)
+
+
+### Documentation
+
+* require Conventional Commit PR titles for release-please ([#152](https://github.com/chrischall/zillow-mcp/issues/152)) ([2863e97](https://github.com/chrischall/zillow-mcp/commit/2863e97e25f502290f4602edecb46464ac6abc63))
+
 ## [0.10.4](https://github.com/chrischall/zillow-mcp/compare/v0.10.3...v0.10.4) (2026-06-13)
 
 
