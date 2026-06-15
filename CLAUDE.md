@@ -4,7 +4,7 @@ Guidance for Claude working in this repo.
 
 ## TL;DR
 
-v0.8.0: Zillow MCP server. Default and only transport: localhost WebSocket via [`@fetchproxy/server`](https://github.com/chrischall/fetchproxy) — the companion browser extension is installed separately rather than embedded. Every HTTP call to zillow.com is dispatched through the user's signed-in Chrome tab — each request rides their existing session (cookies, TLS, JS context) exactly as if they'd clicked it themselves.
+v0.10.x: Zillow MCP server. Default and only transport: localhost WebSocket via [`@fetchproxy/server`](https://github.com/chrischall/fetchproxy) — the companion browser extension is installed separately rather than embedded. Every HTTP call to zillow.com is dispatched through the user's signed-in Chrome tab — each request rides their existing session (cookies, TLS, JS context) exactly as if they'd clicked it themselves.
 
 This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not "Pattern B" (one bootstrap call then direct fetch). Zillow validates each request at the session level, so the in-session routing has to be per-call.
 
@@ -61,6 +61,8 @@ src/
   mcp.ts                # textResult() result-wrapper
   features.ts           # extractFeatures + community vocabulary loader
                         #   (override via ZILLOW_*_FILE env vars)
+  sessions.ts           # re-exports SessionRegistry from
+                        #   @chrischall/mcp-utils/session (fleet-shared)
   tools/
     search.ts           # zillow_search_properties (buildSearchQueryState + formatListing)
     properties.ts       # zillow_get_property + the shared fetchPropertyRecord
@@ -71,6 +73,10 @@ src/
     bulk-get.ts         # zillow_bulk_get (fetchPropertyRecord ×N)
     compare.ts          # zillow_compare_properties (fetchPropertyRecord ×N)
     history.ts          # zillow_get_price_history, zillow_get_tax_history
+    history-format.ts   # shared price/tax history types + format/normalize
+                        #   helpers (breaks the properties<->history cycle)
+    series-note.ts      # transparency note for empty history/series results
+                        #   (sourcePresent: field-absent vs present-but-empty)
     zestimate.ts        # zillow_get_zestimate_history (extractZestimateHistory,
                         #   via fetchPropertyRecord)
     photos.ts           # zillow_get_property_photos (via fetchPropertyRecord)
@@ -79,6 +85,8 @@ src/
     mortgage.ts         # zillow_calculate_mortgage (local PITI)
     affordability.ts    # zillow_calculate_affordability, zillow_estimate_rent_vs_buy
     sessions.ts         # zillow_{register,set_active}_session, get_session_context
+                        #   (thin wrapper over @chrischall/mcp-utils' shared
+                        #    registerSessionTools, bound to the zillow prefix)
     healthcheck.ts      # zillow_healthcheck (bridge round-trip diagnostics)
 
 tests/                  # 1:1 mirror of src/, plus tests/helpers.ts harness.
@@ -112,7 +120,7 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 
 - All tools prefixed `zillow_*`.
 - Tool return shape: `textResult(data)` from `src/mcp.ts` → `{ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }`. Don't hand-roll the wrapper.
-- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for `zillow_calculate_mortgage` (pure local computation). v0.1 has no write tools — when added, set `readOnlyHint: false` and consider `destructiveHint`.
+- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for the local-only computation/registry tools. The session-registry tools (`register_session`, `set_active_session`) are the only writes, and come from the shared `@chrischall/mcp-utils/session` registration — they mutate in-memory state, not zillow.com.
 - Path-only inputs to `ZillowClient`: pass `/some/path?with=query`, never a full URL. `FetchproxyTransport` prepends `https://www.zillow.com`. When a tool takes a `url` arg from the user, reduce it via `urlToPath` from `src/url.ts`.
 - Write a failing test before implementation (TDD).
 - ESM + NodeNext: imports use `.js` extensions even for `.ts` source.
@@ -137,7 +145,7 @@ jq -r '.description | length' server.json
 
 ## Versioning
 
-Version appears in EIGHT places — all must match:
+Version appears in SEVEN files — all must match:
 
 1. `package.json` → `"version"`
 2. `package-lock.json` → kept in sync by `npm install --package-lock-only`
@@ -185,10 +193,23 @@ The **PR title MUST be a Conventional Commit**, written user-facing (`fix(scope)
 
 **Don't run `gh pr merge` yourself.** The automation does it:
 
-1. `pr-auto-review.yml` runs a Claude review on every PR **except** the release-please release PR (which it deliberately skips). On a `pass` verdict it adds the `ready-to-merge` label.
+1. `pr-auto-review.yml` runs a Claude review on every PR **except** the release-please release PR (which it deliberately skips). On a `pass` **or** `warn` (nits-only) verdict it adds the `ready-to-merge` label; a `warn` or `fail` also opens/updates an `auto-review-followup` issue (see below). Only `fail` blocks the merge.
 2. `auto-merge.yml`, on the `ready-to-merge` label (or on a dependabot PR), arms `gh pr merge --auto --squash`. The moment CI is green the PR squash-merges itself.
 
 For ordinary feature/fix PRs, opening with `gh pr create --label <label>` (or `--label ignore-for-release` for chores not worth a release-notes line) is the whole job. If Claude's verdict was `warn`/`fail` but you've decided to ship anyway, add the label yourself: `gh pr edit <num> --add-label ready-to-merge`.
+
+### Auto-review follow-up issues
+
+When a PR's auto-review verdict is `warn` or `fail`, the `chrischall/workflows` pipeline opens or updates a single `auto-review-followup` issue ("Auto-review follow-ups for PR #N") whose checklist captures every finding, and links it from the PR's `<!-- auto-review-verdict -->` comment (`📋 Tracking follow-ups: #N`). `warn` (nits only) still auto-merges — the issue carries the nits forward, so most nits are fixed in a *later* PR; `fail` blocks until the important findings are addressed on the PR itself.
+
+When asked to address the auto-review comments / review findings on a PR:
+
+1. Read the verdict comment, open the linked `auto-review-followup` issue, and treat its checklist as the work list (alongside any inline review comments).
+2. Resolve each item, checking off only what you've **verified** is genuinely fixed.
+3. If every item is resolved on the current PR, add `Closes #<issue>` to that PR's body so the merge closes it; if some are deferred, check off only the resolved ones and leave the issue open.
+4. For nits whose `warn` PR already auto-merged, address them in a follow-up PR that references `Closes #<issue>`.
+
+(Mirrors the fleet-wide convention in `~/.claude/CLAUDE.md`.)
 
 ### PR timing — only open when the feature is done
 
