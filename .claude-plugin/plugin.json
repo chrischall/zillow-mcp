@@ -1,7 +1,7 @@
 {
   "name": "zillow-mcp",
   "displayName": "Zillow",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "description": "Zillow real-estate access for Claude — search listings, get property details, Zestimate history, your saved searches & homes, market reports",
   "author": {
     "name": "Chris Hall",
