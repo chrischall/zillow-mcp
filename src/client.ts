@@ -5,70 +5,25 @@
 //
 // Error mapping (non-2xx, sign-in interstitial, empty 204 body) lives
 // here so tool authors never have to think about it.
-import { truncateErrorMessage } from '@chrischall/mcp-utils';
 import {
-  classifyBotWall,
-  type FetchErrorKind,
-} from '@chrischall/mcp-utils/fetchproxy';
+  truncateErrorMessage,
+  BotWallError,
+  DEFAULT_BOT_WALL_RETRY_AFTER_S,
+  SessionNotAuthenticatedError,
+} from '@chrischall/mcp-utils';
+import { classifyBotWall } from '@chrischall/mcp-utils/fetchproxy';
 import type {
   BridgeStatus,
   FetchResult,
   ZillowTransport,
 } from './transport.js';
 
-export class SessionNotAuthenticatedError extends Error {
-  constructor() {
-    super(
-      'Not signed in to Zillow. Open zillow.com in your browser and sign in, then try again. ' +
-        'Saved searches, saved homes, and recent activity require a signed-in session.'
-    );
-    this.name = 'SessionNotAuthenticatedError';
-  }
-}
-
-/**
- * Default retry-after hint (seconds) surfaced on a `BotWallError` when
- * the bot-wall interstitial doesn't give us an explicit one. Tuned for
- * the bulk-get back-off path (issue #90) — long enough that the wall
- * usually clears on the next pass, short enough not to stall a batch.
- */
-export const DEFAULT_BOT_WALL_RETRY_AFTER_S = 30;
-
-/**
- * Issue #90 / #91: PerimeterX (px) bot-wall. A `bulk_get` that fans out
- * too many requests in a short window trips this — Zillow returns an
- * HTTP 403 (sometimes a 200) whose body is the PerimeterX CAPTCHA
- * interstitial, NOT the listing.
- *
- * 0.10.0: detection is now the shared `classifyBotWall` from
- * `@fetchproxy/server` (promoted from this MCP's #91 px-detection); this
- * error is the retryable signal it raises, carrying the server's
- * canonical `bot_challenge` {@link FetchErrorKind} so bulk-get classifies
- * rows with one vocabulary instead of a local string.
- *
- * It stays a distinct class — separate from `SessionNotAuthenticatedError`
- * (DataDome / sign-in) and from a generic non-2xx — because the caller's
- * response differs: a bot-wall is *transient and retryable* (back off and
- * retry the blocked ids), whereas a generic 403 / not-found means the
- * listing is genuinely unavailable. Misclassifying the bot-wall as
- * not-found silently corrupts downstream trackers (issue #90).
- */
-export class BotWallError extends Error {
-  /** The server's canonical bot-wall error kind. */
-  readonly kind: FetchErrorKind = 'bot_challenge';
-  /** Suggested seconds to wait before retrying the blocked request(s). */
-  readonly retryAfterSeconds: number;
-  constructor(path: string, retryAfterSeconds = DEFAULT_BOT_WALL_RETRY_AFTER_S) {
-    super(
-      `Zillow served a PerimeterX CAPTCHA bot-wall for ${path} — the request was ` +
-        `rate-limited, not a missing listing. Back off and retry (suggested wait: ` +
-        `${retryAfterSeconds}s). If it persists, open zillow.com in your browser and ` +
-        `clear the CAPTCHA, then retry with a smaller batch.`
-    );
-    this.name = 'BotWallError';
-    this.retryAfterSeconds = retryAfterSeconds;
-  }
-}
+// The bot-wall + not-signed-in signals are now the shared `@chrischall/mcp-utils`
+// error classes (issue #90 / #91). `BotWallError` still carries
+// `retryAfterSeconds` (consumed by bulk-get's backoff) plus a `vendor`, and
+// `SessionNotAuthenticatedError` takes `(service, signInHost)`. Re-exported so
+// `tools/bulk-get.ts` + the tests keep importing them from `../client.js`.
+export { BotWallError, SessionNotAuthenticatedError };
 
 export interface ZillowClientOptions {
   /** Transport used to relay fetches to the user's browser. */
@@ -175,7 +130,9 @@ export class ZillowClient {
     // fall back to the tuned default retry-after.
     const verdict = classifyBotWall(result.body, result.status);
     if (verdict.blocked && verdict.vendor === 'perimeterx') {
-      throw new BotWallError(path);
+      throw new BotWallError(path, DEFAULT_BOT_WALL_RETRY_AFTER_S, {
+        vendor: verdict.vendor,
+      });
     }
   }
 
@@ -209,6 +166,6 @@ export class ZillowClient {
       /\/user\/login/.test(result.url) ||
       /[?&]login=true/.test(result.url) ||
       (result.body.includes('captcha-delivery') && result.body.length < 80_000);
-    if (looksLikeSignIn) throw new SessionNotAuthenticatedError();
+    if (looksLikeSignIn) throw new SessionNotAuthenticatedError('Zillow', 'zillow.com');
   }
 }
