@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.6](https://github.com/chrischall/zillow-mcp/compare/v0.10.5...v0.10.6) (2026-07-07)
+
+
+### Bug Fixes
+
+* bump @chrischall/mcp-utils to 0.12.0 ([#167](https://github.com/chrischall/zillow-mcp/issues/167)) ([a5d098a](https://github.com/chrischall/zillow-mcp/commit/a5d098a5af7cff1f865b181673d8329374bf718d))
+
+
+### Refactor
+
+* adopt registerBridgeHealthcheckTool + shared BotWall/SessionNotAuth errors ([#165](https://github.com/chrischall/zillow-mcp/issues/165)) ([37b0abc](https://github.com/chrischall/zillow-mcp/commit/37b0abc31c8a4c2c0c3026c89a28051ae6da9075))
+
 ## [0.10.5](https://github.com/chrischall/zillow-mcp/compare/v0.10.4...v0.10.5) (2026-06-15)
 
 
