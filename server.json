@@ -6,12 +6,12 @@
     "url": "https://github.com/chrischall/zillow-mcp",
     "source": "github"
   },
-  "version": "0.10.5",
+  "version": "0.10.6",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "zillow-mcp",
-      "version": "0.10.5",
+      "version": "0.10.6",
       "transport": {
         "type": "stdio"
       },
