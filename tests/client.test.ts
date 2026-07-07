@@ -316,7 +316,7 @@ describe('ZillowClient', () => {
       ).resolves.toContain('__NEXT_DATA__');
     });
 
-    it('BotWallError carries the bot_challenge kind + a retry-after hint', async () => {
+    it('BotWallError carries a retry-after hint + the detected vendor', async () => {
       const client = new ZillowClient({
         transport: stubTransport(async () => ({
           status: 403,
@@ -328,8 +328,12 @@ describe('ZillowClient', () => {
         .fetchHtml('/homedetails/x/12345_zpid/')
         .catch((e) => e);
       expect(err).toBeInstanceOf(BotWallError);
-      expect((err as BotWallError).kind).toBe('bot_challenge');
+      // The shared BotWallError carries `retryAfterSeconds` (consumed by
+      // bulk-get's backoff) and the classifier's `vendor`. It no longer
+      // carries a `kind` field — bulk-get tags the row `bot_challenge`
+      // directly rather than reading it off the error.
       expect((err as BotWallError).retryAfterSeconds).toBeGreaterThan(0);
+      expect((err as BotWallError).vendor).toBe('perimeterx');
     });
 
     it('a genuine 403 WITHOUT bot-wall markers stays a generic error (not a bot-wall)', async () => {

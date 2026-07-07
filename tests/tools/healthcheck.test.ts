@@ -131,13 +131,14 @@ describe('zillow_healthcheck tool', () => {
     const parsed = parseToolResult<{
       ok: boolean;
       bridge: { role: string };
-      error: { kind: string; role_at_failure: string };
+      error: { kind: string };
       hint: string;
     }>(r);
     expect(parsed.ok).toBe(false);
     expect(parsed.error.kind).toBe('timeout');
-    // 0.8.0+: role_at_failure comes from bridgeStatus() captured in catch.
-    expect(parsed.error.role_at_failure).toBe('peer');
+    // The bridge role at failure is still in `bridge.role` (the shared tool
+    // no longer duplicates it as `error.role_at_failure`).
+    expect(parsed.bridge.role).toBe('peer');
     expect(parsed.hint).toMatch(/extension popup/i);
   });
 
@@ -186,11 +187,11 @@ describe('zillow_healthcheck tool', () => {
     const r = await harness.callTool('zillow_healthcheck', {});
     const parsed = parseToolResult<{
       ok: boolean;
-      error: { role_at_failure: string | null };
+      bridge: { role: string | null };
       hint: string;
     }>(r);
     expect(parsed.ok).toBe(false);
-    expect(parsed.error.role_at_failure).toBeNull();
+    expect(parsed.bridge.role).toBeNull();
     expect(parsed.hint).toMatch(/never bound a role/);
   });
 
@@ -287,10 +288,10 @@ describe('zillow_healthcheck tool', () => {
     expect(parsed.error.kind).toBe('other');
   });
 
-  // 0.8.0+: FetchproxyBridgeDownError carries an actionable `.hint` string
-  // ("click the extension icon …"). Surface it in the response so the LLM
-  // can show the user concrete recovery guidance instead of paraphrasing
-  // the bare error message.
+  // FetchproxyBridgeDownError carries an actionable `.hint` string ("click
+  // the extension icon …"). The shared tool surfaces it as `error.bridge_hint`
+  // AND prepends it to the top-level hint so the LLM can show the user concrete
+  // recovery guidance instead of paraphrasing the bare error message.
   it("surfaces the bridge-down error's .hint in the response's top-level hint", async () => {
     const BRIDGE_HINT =
       'Click the fetchproxy extension icon to wake its service worker, then retry.';
@@ -310,46 +311,16 @@ describe('zillow_healthcheck tool', () => {
     );
     const r = await harness.callTool('zillow_healthcheck', {});
     const parsed = parseToolResult<{
-      error: { kind: string; detail?: { hint?: string; retry_attempted?: boolean } };
+      error: { kind: string; bridge_hint?: string };
       hint: string;
     }>(r);
     expect(parsed.error.kind).toBe('bridge_down');
     // Top-level hint includes the error's hint verbatim.
     expect(parsed.hint).toContain(BRIDGE_HINT);
-    // The error's hint + retry_attempted are also exposed under error.detail
-    // for structured consumers.
-    expect(parsed.error.detail?.hint).toBe(BRIDGE_HINT);
-    expect(parsed.error.detail?.retry_attempted).toBe(true);
-  });
-
-  // 0.8.0+: FetchproxyTimeoutError carries the actual `.elapsedMs` (the
-  // moment the timer won the race). Surface it under error.detail so the
-  // LLM can tell "barely missed" from "hung for the full window".
-  it("surfaces the timeout error's .elapsedMs in error.detail", async () => {
-    const client = stubClient({
-      status: {
-        role: 'host',
-        port: 37149,
-        serverVersion: '0.5.0',
-        fetchTimeoutMs: 30_000,
-      },
-      fetchHtml: vi.fn().mockRejectedValue(
-        new FetchproxyTimeoutError({
-          url: 'https://www.zillow.com/robots.txt',
-          timeoutMs: 30_000,
-          elapsedMs: 30_004,
-        })
-      ),
-    });
-    harness = await createTestHarness((server) =>
-      registerHealthcheckTools(server, client)
-    );
-    const r = await harness.callTool('zillow_healthcheck', {});
-    const parsed = parseToolResult<{
-      error: { kind: string; detail?: { elapsed_ms?: number; timeout_ms?: number } };
-    }>(r);
-    expect(parsed.error.kind).toBe('timeout');
-    expect(parsed.error.detail?.elapsed_ms).toBe(30_004);
-    expect(parsed.error.detail?.timeout_ms).toBe(30_000);
+    // The error's hint is also exposed under error.bridge_hint for structured
+    // consumers. (The shared tool does not carry the timeout `elapsed_ms` /
+    // `timeout_ms` / bridge-down `retry_attempted` structured detail the
+    // hand-rolled tool once surfaced — see the PR body's capability note.)
+    expect(parsed.error.bridge_hint).toBe(BRIDGE_HINT);
   });
 });
