@@ -29,7 +29,6 @@
     ".claude-plugin",
     ".mcp.json",
     "server.json",
-    "SKILL.md",
     "skills"
   ],
   "scripts": {
@@ -41,7 +40,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@chrischall/mcp-utils": "^0.12.0",
+    "@chrischall/mcp-utils": "^0.13.0",
     "@chrischall/realty-core": "^0.4.1",
     "@fetchproxy/server": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -52,7 +51,7 @@
     "@vitest/coverage-v8": "^4.1.7",
     "esbuild": "^0.28.1",
     "tsx": "^4.19.0",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.7"
   }
 }
