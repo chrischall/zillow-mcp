@@ -117,7 +117,7 @@ Zillow renders the trend client-side for those.
 ## 4. Zestimate history (same property object as §2)
 
 ```sh
-jq '.homeValueChartData[] | select(.name=="This home") // .homeValueChartData[0] | .points' /tmp/property.json
+jq '(first(.homeValueChartData[] | select(.name=="This home")) // .homeValueChartData[0]) | .points' /tmp/property.json
 ```
 
 Each point is `{x: <unix ms>, y: <value>}` or `{date, value}` depending
@@ -128,7 +128,7 @@ series for `rent` when present.
 ## 5. Photos (same property object as §2)
 
 ```sh
-jq '.photos // .responsivePhotos // .originalPhotos' /tmp/property.json
+jq '[.photos, .responsivePhotos, .originalPhotos] | map(select(type=="array" and length>0)) | first // []' /tmp/property.json
 ```
 
 Each entry: `{caption, subjectType, url, mixedSources: {jpeg: [{url,width}], webp: [{url,width}]}}`.
@@ -176,7 +176,6 @@ Zillow's own address typeahead, used internally by the MCP's
 search. Inline GraphQL (no persisted-query hash), POST:
 
 ```sh
-Q='Zillow'
 cat > /tmp/ac.json <<'JSON'
 {
   "operationName": "GetAutocompleteResults",
