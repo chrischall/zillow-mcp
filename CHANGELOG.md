@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/chrischall/zillow-mcp/compare/v0.10.6...v0.11.0) (2026-07-13)
+
+
+### Features
+
+* **skill:** add zillow fpx access skill ([#171](https://github.com/chrischall/zillow-mcp/issues/171)) ([627282a](https://github.com/chrischall/zillow-mcp/commit/627282a5dc4729d611f1b9cb6fcd102f80b33f73)), closes [#172](https://github.com/chrischall/zillow-mcp/issues/172)
+
+
+### Refactor
+
+* **skill:** move root SKILL.md into skills/, point plugin.json at ./skills/ ([#173](https://github.com/chrischall/zillow-mcp/issues/173)) ([f8bbcd0](https://github.com/chrischall/zillow-mcp/commit/f8bbcd07e5f2a67bff1572de17a6e7cee324f156))
+
 ## [0.10.6](https://github.com/chrischall/zillow-mcp/compare/v0.10.5...v0.10.6) (2026-07-07)
 
 
