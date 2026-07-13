@@ -29,7 +29,7 @@
     ".claude-plugin",
     ".mcp.json",
     "server.json",
-    "SKILL.md"
+    "skills"
   ],
   "scripts": {
     "build": "tsc --noEmit && npm run bundle",
