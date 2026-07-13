@@ -39,7 +39,7 @@ import { registerResolveAddressesTools } from './tools/resolve-addresses.js';
 import { SessionRegistry } from './sessions.js';
 import { registerSessionTools } from './tools/sessions.js';
 
-const VERSION = '0.10.6'; // x-release-please-version
+const VERSION = '0.11.0'; // x-release-please-version
 
 const port = process.env.ZILLOW_WS_PORT
   ? Number(process.env.ZILLOW_WS_PORT)
