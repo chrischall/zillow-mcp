@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/chrischall/zillow-mcp/compare/v0.11.0...v0.11.1) (2026-07-19)
+
+
+### Documentation
+
+* replace duplicated fleet policy with a pointer ([#177](https://github.com/chrischall/zillow-mcp/issues/177)) ([1e53fc5](https://github.com/chrischall/zillow-mcp/commit/1e53fc55b7b553cdb0fcddf51a8aabdab43118a5))
+
 ## [0.11.0](https://github.com/chrischall/zillow-mcp/compare/v0.10.6...v0.11.0) (2026-07-13)
 
 
