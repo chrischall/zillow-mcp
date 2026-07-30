@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/chrischall/zillow-mcp/compare/v0.11.1...v0.11.2) (2026-07-30)
+
+
+### Bug Fixes
+
+* **deps:** bump @fetchproxy/* to 1.7.0 and @chrischall/mcp-utils to 0.14.0 ([#186](https://github.com/chrischall/zillow-mcp/issues/186)) ([4107ed8](https://github.com/chrischall/zillow-mcp/commit/4107ed868919cbc51438ea8f447c733d1ef1a4e3))
+
 ## [0.11.1](https://github.com/chrischall/zillow-mcp/compare/v0.11.0...v0.11.1) (2026-07-19)
 
 
