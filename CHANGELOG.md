@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.3](https://github.com/chrischall/zillow-mcp/compare/v0.11.2...v0.11.3) (2026-08-06)
+
+
+### Bug Fixes
+
+* **deps:** move to @fetchproxy/server 2.0.0 for the v3 handshake ([#194](https://github.com/chrischall/zillow-mcp/issues/194)) ([4139b61](https://github.com/chrischall/zillow-mcp/commit/4139b61692fed3f31e28204d4618a64dd7858e36))
+
 ## [0.11.2](https://github.com/chrischall/zillow-mcp/compare/v0.11.1...v0.11.2) (2026-07-30)
 
 
