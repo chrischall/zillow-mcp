@@ -23,6 +23,11 @@ env:
       Lure","Rutherfordton"]]), registered both ways when resolving addresses
       whose postal locality differs from the place name. Overrides the built-in
       defaults.
+  - name: ZILLOW_COMMUNITIES_FILE
+    required: false
+    help: >-
+      Path to a JSON file overriding the built-in community-name vocabulary
+      used when recognising community names in listing prose.
 state:
   dataDir: true
   reason: >-
