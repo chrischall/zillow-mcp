@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/chrischall/zillow-mcp/compare/v0.11.3...v0.11.4) (2026-08-26)
+
+
+### Documentation
+
+* **skill:** declare the name this skill actually publishes under ([#205](https://github.com/chrischall/zillow-mcp/issues/205)) ([d11f6a2](https://github.com/chrischall/zillow-mcp/commit/d11f6a2b5c295b53d0be9dbe42d700ebc4eede0a))
+
 ## [0.11.3](https://github.com/chrischall/zillow-mcp/compare/v0.11.2...v0.11.3) (2026-08-06)
 
 
