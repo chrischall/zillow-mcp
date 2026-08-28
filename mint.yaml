@@ -36,8 +36,13 @@ state:
     start mints a fresh identity and re-prompts pairing in the browser; the
     API refuses bridge without it.
 egress:
-  allow:
-    # Only hosts the SERVER process actually fetches. Hosts that appear
-    # solely in a URL this server BUILDS and returns are excluded.
-    - www.zillow.com
-    - zillow.com
+  # Only hosts the SERVER process actually fetches. Hosts that appear
+  # solely in a URL this server BUILDS and returns are excluded.
+  #
+  # This server has ONE mode, the browser bridge: every zillow.com request
+  # (src/client.ts → src/transport-fetchproxy.ts) is dialled by the user's
+  # signed-in tab, and the process itself only opens the loopback
+  # concentrator port the runner's agent connects to. There is no direct /
+  # bootstrap / anonymous path, so the process dials nothing outbound — the
+  # www.zillow.com literals in src/tools/*.ts are URLs it builds and returns.
+  allow: []
