@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.5](https://github.com/chrischall/zillow-mcp/compare/v0.11.4...v0.11.5) (2026-08-28)
+
+
+### Bug Fixes
+
+* **egress:** declare only the hosts the server process dials in mint.yaml ([#208](https://github.com/chrischall/zillow-mcp/issues/208)) ([1be47ed](https://github.com/chrischall/zillow-mcp/commit/1be47ed18394cd9d2db21d7c3a824a25ee6b4761))
+
 ## [0.11.4](https://github.com/chrischall/zillow-mcp/compare/v0.11.3...v0.11.4) (2026-08-26)
 
 
