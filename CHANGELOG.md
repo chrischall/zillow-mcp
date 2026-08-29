@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/chrischall/zillow-mcp/compare/v0.11.5...v0.12.0) (2026-08-29)
+
+
+### Features
+
+* **deps:** take @fetchproxy/server 2.2.0 so the concentrator can bind its sandbox address ([#212](https://github.com/chrischall/zillow-mcp/issues/212)) ([fe038d5](https://github.com/chrischall/zillow-mcp/commit/fe038d55d0131d4252619a82e9a502c529e830d9))
+
 ## [0.11.5](https://github.com/chrischall/zillow-mcp/compare/v0.11.4...v0.11.5) (2026-08-28)
 
 
