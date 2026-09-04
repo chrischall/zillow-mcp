@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { runBoundedBatch } from '@chrischall/mcp-utils';
+import { viewArg, viewResponse } from '../view.js';
 import {
   BRIDGE_CONCURRENCY,
   classifyRowError,
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { parseAddress } from '@chrischall/realty-core';
 import {
   resolveAddressFull,
@@ -283,6 +284,7 @@ export function registerResolveAddressesTools(
         openWorldHint: true,
       },
       inputSchema: {
+        view: viewArg(),
         addresses: z
           .array(RowSchema)
           .min(1)
@@ -292,7 +294,7 @@ export function registerResolveAddressesTools(
           ),
       },
     },
-    async ({ addresses }) => {
+    async ({ addresses, view }) => {
       // Issue #78: pace the fan-out to BRIDGE_CONCURRENCY (Redfin parity).
       // Unlimited concurrency timed out 7 of 20 sub-requests in a real
       // session; 6-in-flight + retry-once-on-timeout lands the same
@@ -335,7 +337,7 @@ export function registerResolveAddressesTools(
         pending?: number;
       } = { count: results.length, results };
       if (pending > 0) envelope.pending = pending;
-      return textResult(envelope);
+      return viewResponse(view, envelope);
     }
   );
 }

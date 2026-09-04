@@ -11,7 +11,7 @@ import {
   TAX_SENTINEL_THRESHOLD,
 } from '@chrischall/realty-core';
 import { type ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
 import {
@@ -756,7 +756,7 @@ export function registerPropertyTools(
     },
     async ({ zpid, url, include_description, include_price_history, include_tax_history }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
-      return textResult(
+      return minifiedResult(
         format(raw, {
           includeDescription: include_description,
           includePriceHistory: include_price_history,

@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { tokenize } from '@chrischall/realty-core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
+import { viewArg, viewResponse } from '../view.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findPropertyInPageProps, type RawProperty } from './properties.js';
 
@@ -562,6 +563,7 @@ export function registerSearchTools(
         openWorldHint: true,
       },
       inputSchema: {
+        view: viewArg(),
         location: z
           .string()
           .describe(
@@ -623,7 +625,7 @@ export function registerSearchTools(
           .map(formatListing)
           .filter((x): x is FormattedListing => x !== null)
           .slice(0, limit);
-        return textResult(formatted);
+        return viewResponse((input as { view?: string }).view, formatted);
       }
       // Step 2: filtered search with the region pinned in. When the
       // caller asks for more than fits on one Zillow page (default ~40
@@ -654,7 +656,7 @@ export function registerSearchTools(
         if (!wantsMore) break;
         if (aggregated.length >= limit) break;
       }
-      return textResult(aggregated.slice(0, limit));
+      return minifiedResult(aggregated.slice(0, limit));
     }
   );
 }

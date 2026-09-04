@@ -4,7 +4,7 @@ import {
   calculateMortgage,
   type MortgageInput as CoreMortgageInput,
 } from '@chrischall/realty-core';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 
 /**
  * Local-only mortgage payment calculator. Parity with sap156/zillow-mcp-
@@ -92,6 +92,6 @@ export function registerMortgageTools(server: McpServer): void {
         pmi_rate: z.number().nonnegative().optional().describe('Annual %, applied when LTV > 80%'),
       },
     },
-    async (input) => textResult(computeMortgage(input as MortgageInput))
+    async (input) => minifiedResult(computeMortgage(input as MortgageInput))
   );
 }

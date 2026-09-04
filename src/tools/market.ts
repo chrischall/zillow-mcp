@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
 
@@ -171,7 +171,7 @@ export function registerMarketTools(
           `Could not locate market data (zhviRegion + odpMarketAnalytics) in __NEXT_DATA__ at ${path}.`
         );
       }
-      return textResult(format(region, analytics));
+      return minifiedResult(format(region, analytics));
     }
   );
 }
