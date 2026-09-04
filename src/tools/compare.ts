@@ -7,7 +7,7 @@ import {
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import {
   fetchPropertyRecord,
   format,
@@ -157,7 +157,7 @@ export function registerCompareTools(
         results,
       };
       if (include_summary === true) body.summary = buildSummary(results);
-      return textResult(body);
+      return minifiedResult(body);
     }
   );
 }

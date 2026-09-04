@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { fetchPropertyRecord } from './properties.js';
 import { seriesAvailabilityNote } from './series-note.js';
 import {
@@ -62,7 +62,7 @@ export function registerHistoryTools(
         sourcePresent: raw.priceHistory !== undefined,
         kind: 'price history',
       });
-      return textResult({
+      return minifiedResult({
         zpid: String(raw.zpid ?? zpid ?? ''),
         events,
         events_normalized,
@@ -102,7 +102,7 @@ export function registerHistoryTools(
         sourcePresent: raw.taxHistory !== undefined,
         kind: 'tax history',
       });
-      return textResult({
+      return minifiedResult({
         zpid: String(raw.zpid ?? zpid ?? ''),
         events,
         ...(note ? { note } : {}),

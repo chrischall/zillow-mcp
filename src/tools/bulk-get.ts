@@ -11,7 +11,7 @@ import {
   sleep,
 } from '@chrischall/mcp-utils/fetchproxy';
 import { BotWallError, type ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import {
   fetchPropertyRecord,
   format,
@@ -366,7 +366,7 @@ export function registerBulkGetTools(
         // re-run just the pending ids.
         envelope.pending = pending;
       }
-      return textResult(envelope);
+      return minifiedResult(envelope);
     }
   );
 }

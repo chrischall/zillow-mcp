@@ -5,7 +5,7 @@ import {
   type AffordabilityInput as CoreAffordabilityInput,
   type AffordabilityResult,
 } from '@chrischall/realty-core';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 
 /**
  * Two local-only financial calculators. No network, no Zillow data —
@@ -258,7 +258,7 @@ export function registerAffordabilityTools(server: McpServer): void {
           .describe('Back-end DTI cap as decimal, default 0.36'),
       },
     },
-    async (input) => textResult(computeAffordability(input as AffordabilityInput))
+    async (input) => minifiedResult(computeAffordability(input as AffordabilityInput))
   );
 
   server.registerTool(
@@ -299,6 +299,6 @@ export function registerAffordabilityTools(server: McpServer): void {
           .describe('Default 7'),
       },
     },
-    async (input) => textResult(computeRentVsBuy(input as RentVsBuyInput))
+    async (input) => minifiedResult(computeRentVsBuy(input as RentVsBuyInput))
   );
 }

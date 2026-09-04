@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findArrayByShape } from '../page-props.js';
 import type { SessionRegistry } from '../sessions.js';
@@ -202,7 +202,7 @@ export function registerSavedTools(
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);
       const searches = findSavedSearches(pageProps);
-      return textResult(searches.map(formatSearch));
+      return minifiedResult(searches.map(formatSearch));
     }
   );
 
@@ -233,7 +233,7 @@ export function registerSavedTools(
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);
       const homes = findSavedHomes(pageProps);
-      return textResult(homes.map(formatHome));
+      return minifiedResult(homes.map(formatHome));
     }
   );
 }

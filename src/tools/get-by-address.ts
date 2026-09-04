@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
+import { viewArg, viewResponse } from '../view.js';
 import { formatListing } from './search.js';
 import { buildAddressSlug, resolveAddressFull } from './resolver.js';
 
@@ -98,6 +99,7 @@ export function registerGetByAddressTools(
         openWorldHint: true,
       },
       inputSchema: {
+        view: viewArg(),
         address: z
           .string()
           .min(1)
@@ -135,14 +137,14 @@ export function registerGetByAddressTools(
           outcome.hit.via,
           input.city
         );
-        return textResult(result);
+        return viewResponse((input as { view?: string }).view, result);
       }
       const result: GetByAddressResult = {
         resolved: false,
         error: 'no listing found',
         query: outcome.miss.slug,
       };
-      return textResult(result);
+      return viewResponse((input as { view?: string }).view, result);
     }
   );
 }

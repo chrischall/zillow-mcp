@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { fetchPropertyRecord } from './properties.js';
 import { seriesAvailabilityNote } from './series-note.js';
 
@@ -132,7 +132,7 @@ export function registerZestimateTools(
           withCharts.priceHistory !== undefined,
         kind: 'Zestimate history',
       });
-      return textResult({
+      return minifiedResult({
         zpid: String(raw.zpid ?? zpid ?? ''),
         points: series,
         ...(note ? { note } : {}),

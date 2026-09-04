@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { textResult } from '../mcp.js';
+import { minifiedResult } from '../mcp.js';
 import { fetchPropertyRecord } from './properties.js';
 
 /**
@@ -161,7 +161,7 @@ export function registerPhotosTools(
         .map((photo) => formatPhoto(photo, include_sources ?? false))
         .filter((x): x is FormattedPhoto => x !== null);
       const zpidStr = String(raw.zpid ?? zpid ?? '');
-      return textResult({
+      return minifiedResult({
         zpid: zpidStr,
         count: photos.length,
         photos,
