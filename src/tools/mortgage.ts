@@ -4,7 +4,7 @@ import {
   calculateMortgage,
   type MortgageInput as CoreMortgageInput,
 } from '@chrischall/realty-core';
-import { minifiedResult } from '../mcp.js';
+import { minifiedResult } from '@chrischall/mcp-utils';
 
 /**
  * Local-only mortgage payment calculator. Parity with sap156/zillow-mcp-
