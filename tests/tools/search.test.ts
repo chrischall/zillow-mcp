@@ -817,15 +817,22 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
       const result = await harness.callTool('zillow_search_properties', {
         location: 'Lake Lure, NC 28746',
       });
-      const parsed = parseToolResult<Array<{ zpid: string; image_url?: string }>>(
-        result
-      );
+      const parsed = parseToolResult<
+        Array<{ zpid: string; image_url?: string; url?: string }>
+      >(result);
       expect(parsed.map((p) => p.image_url)).toEqual([
         'https://photos.zillowstatic.com/fp/11.jpg',
         'https://photos.zillowstatic.com/fp/12.jpg',
       ]);
       // And the homedetails link — a page, not a picture — is still there.
-      expect(parsed).toHaveLength(2);
+      // Named, not counted: a length check passes just as happily on two
+      // records whose `url` the stripper took, which is the only outcome this
+      // line exists to rule out. `formatListing` derives it from the zpid when
+      // the hit carries no `detailUrl`, as these fixtures do.
+      expect(parsed.map((p) => p.url)).toEqual([
+        'https://www.zillow.com/homedetails/11_zpid/',
+        'https://www.zillow.com/homedetails/12_zpid/',
+      ]);
     });
 
     it('keeps the constructed image_url on the address branch under compact', async () => {
