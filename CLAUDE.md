@@ -58,7 +58,6 @@ src/
                         #   used by tools/saved.ts (the page-shape drifts)
   url.ts                # urlToPath — reduce a Zillow URL or bare path
                         #   to its path+search portion
-  mcp.ts                # textResult() result-wrapper
   features.ts           # extractFeatures + community vocabulary loader
                         #   (override via ZILLOW_*_FILE env vars)
   sessions.ts           # re-exports SessionRegistry from
