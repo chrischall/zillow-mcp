@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { tokenize } from '@chrischall/realty-core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { minifiedResult } from '../mcp.js';
 import { viewArg, viewResponse } from '../view.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findPropertyInPageProps, type RawProperty } from './properties.js';
@@ -607,7 +606,15 @@ export function registerSearchTools(
           ),
       },
     },
-    async (input) => {
+    // `view` is destructured off the input rather than read through an
+    // `(input as { view?: string })` cast, matching `zillow_resolve_addresses`.
+    // The cast was not merely untidy: it asserted a shape instead of reading
+    // the inferred one, so dropping `view` from the schema would have left it
+    // compiling and silently always-undefined. The rest keeps its own name so
+    // `{ ...input, page }` below carries only Zillow query fields — inert
+    // either way (`buildSearchQueryState` reads named fields, never a spread),
+    // but the type now says so.
+    async ({ view, ...input }) => {
       const limit = input.limit ?? 40;
       const autoPaginate = input.auto_paginate !== false;
       // Step 1: resolve. Either we got a region we can pin into a
@@ -625,7 +632,7 @@ export function registerSearchTools(
           .map(formatListing)
           .filter((x): x is FormattedListing => x !== null)
           .slice(0, limit);
-        return viewResponse((input as { view?: string }).view, formatted);
+        return viewResponse(view, formatted);
       }
       // Step 2: filtered search with the region pinned in. When the
       // caller asks for more than fits on one Zillow page (default ~40
@@ -656,7 +663,24 @@ export function registerSearchTools(
         if (!wantsMore) break;
         if (aggregated.length >= limit) break;
       }
-      return minifiedResult(aggregated.slice(0, limit));
+      // Answer in the requested rung, exactly as the single-round-trip
+      // branch above does. This is the PRIMARY path — every city/ZIP/
+      // neighbourhood query lands here — and it returned an unprojected
+      // `minifiedResult` while the schema advertised `view`, so the
+      // parameter was declared and did nothing for almost every caller.
+      // A declared parameter that is silently ignored is worse than no
+      // parameter: it reads as honoured.
+      //
+      // Note what this does NOT change today: both branches emit
+      // `FormattedListing`, a fixed key set whose only media field is the
+      // constructed `image_url`, and `view.ts` keeps that by name (#119). So
+      // compact and full currently serialize to the same bytes here and no
+      // output test can tell the fix from the bug — which is exactly why the
+      // guard for it is a wiring assertion (`tests/tools/view-wiring.test.ts`)
+      // rather than an output one. The point is the contract: the moment a
+      // media field joins the shape, compact acts on it instead of the
+      // parameter having quietly meant nothing all along.
+      return viewResponse(view, aggregated.slice(0, limit));
     }
   );
 }

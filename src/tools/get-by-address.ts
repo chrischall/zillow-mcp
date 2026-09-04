@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { minifiedResult } from '../mcp.js';
 import { viewArg, viewResponse } from '../view.js';
 import { formatListing } from './search.js';
 import { buildAddressSlug, resolveAddressFull } from './resolver.js';
@@ -128,7 +127,12 @@ export function registerGetByAddressTools(
           ),
       },
     },
-    async (input) => {
+    // `view` is destructured off the input rather than read through an
+    // `(input as { view?: string })` cast, matching `zillow_resolve_addresses`.
+    // The cast asserted a shape instead of reading the inferred one, so
+    // dropping `view` from the schema would have left this compiling and
+    // silently always-undefined. The rest is the resolver's input proper.
+    async ({ view, ...input }) => {
       const outcome = await resolveAddressFull(client, input);
       if ('hit' in outcome) {
         const result = formatResolvedResult(
@@ -137,14 +141,14 @@ export function registerGetByAddressTools(
           outcome.hit.via,
           input.city
         );
-        return viewResponse((input as { view?: string }).view, result);
+        return viewResponse(view, result);
       }
       const result: GetByAddressResult = {
         resolved: false,
         error: 'no listing found',
         query: outcome.miss.slug,
       };
-      return viewResponse((input as { view?: string }).view, result);
+      return viewResponse(view, result);
     }
   );
 }

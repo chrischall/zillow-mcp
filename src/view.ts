@@ -45,6 +45,13 @@ export const viewArg = (): ReturnType<typeof viewParam> => viewParam(ZW_VIEWS, {
  * is a field choice made WITH knowledge of the API, and the blind subtractive
  * rule must not overrule it; the dedicated `zillow_get_property_photos` is
  * where a caller goes for the full set.
+ *
+ * It is the ONLY constructed media field either search branch emits:
+ * `formatListing` sets it from `imgSrc` on a real search hit and from
+ * `firstPhotoUrl` on an adapted homedetails hit, and every other key on a
+ * `FormattedListing` is an address, a number or the homedetails `url` — which
+ * is a page, not a picture, and which the subtractive rule already leaves
+ * alone. So one name covers both paths, and there is nothing else to keep.
  */
 const KEEP = ['image_url'] as const;
 
