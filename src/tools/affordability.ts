@@ -5,7 +5,7 @@ import {
   type AffordabilityInput as CoreAffordabilityInput,
   type AffordabilityResult,
 } from '@chrischall/realty-core';
-import { minifiedResult } from '../mcp.js';
+import { minifiedResult } from '@chrischall/mcp-utils';
 
 /**
  * Two local-only financial calculators. No network, no Zillow data —

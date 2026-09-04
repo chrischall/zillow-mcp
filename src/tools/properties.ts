@@ -11,7 +11,7 @@ import {
   TAX_SENTINEL_THRESHOLD,
 } from '@chrischall/realty-core';
 import { type ZillowClient } from '../client.js';
-import { minifiedResult } from '../mcp.js';
+import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { urlToPath } from '../url.js';
 import {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { runBoundedBatch } from '@chrischall/mcp-utils';
+import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import { viewArg, viewResponse } from '../view.js';
 import {
   BRIDGE_CONCURRENCY,
@@ -8,7 +8,6 @@ import {
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
 import type { ZillowClient } from '../client.js';
-import { minifiedResult } from '../mcp.js';
 import { parseAddress } from '@chrischall/realty-core';
 import {
   resolveAddressFull,

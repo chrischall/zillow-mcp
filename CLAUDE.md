@@ -119,7 +119,7 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 ## Conventions
 
 - All tools prefixed `zillow_*`.
-- Tool return shape: `textResult(data)` from `src/mcp.ts` → `{ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }`. Don't hand-roll the wrapper.
+- Tool return shape: `minifiedResult(data)` imported from `@chrischall/mcp-utils` → `{ content: [{ type: 'text', text: JSON.stringify(data) }] }`. Don't hand-roll the wrapper, and don't reintroduce a local re-export seam for it — importing straight from the barrel is what keeps a fleet-wide pass from landing the symbol twice in one file.
 - Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for the local-only computation/registry tools. The session-registry tools (`register_session`, `set_active_session`) are the only writes, and come from the shared `@chrischall/mcp-utils/session` registration — they mutate in-memory state, not zillow.com.
 - Path-only inputs to `ZillowClient`: pass `/some/path?with=query`, never a full URL. `FetchproxyTransport` prepends `https://www.zillow.com`. When a tool takes a `url` arg from the user, reduce it via `urlToPath` from `src/url.ts`.
 - Write a failing test before implementation (TDD).

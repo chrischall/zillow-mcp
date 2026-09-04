@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZillowClient } from '../client.js';
-import { minifiedResult } from '../mcp.js';
+import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findArrayByShape } from '../page-props.js';
 import type { SessionRegistry } from '../sessions.js';

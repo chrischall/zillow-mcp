@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { runBoundedBatch } from '@chrischall/mcp-utils';
+import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import {
   BRIDGE_CONCURRENCY,
   TokenBucket,
@@ -11,7 +11,6 @@ import {
   sleep,
 } from '@chrischall/mcp-utils/fetchproxy';
 import { BotWallError, type ZillowClient } from '../client.js';
-import { minifiedResult } from '../mcp.js';
 import {
   fetchPropertyRecord,
   format,
