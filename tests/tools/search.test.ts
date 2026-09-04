@@ -755,4 +755,171 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     const parsed = parseToolResult<unknown[]>(result);
     expect(parsed).toHaveLength(3);
   });
+
+  /**
+   * `view` wiring (#225).
+   *
+   * The tool declares `view` but the FILTERED/PAGINATED branch — the one
+   * every city/ZIP/neighbourhood query lands on, i.e. the primary path —
+   * returned an unprojected `minifiedResult` and never consulted it. A
+   * declared parameter that does nothing is worse than no parameter: it
+   * reads as honoured. These pin that BOTH branches now answer in the
+   * requested rung, and that routing them through the stripper did not cost
+   * the constructed `image_url` (#119).
+   */
+  describe('view wiring (#225)', () => {
+    /** A Lake Lure listing carrying the `imgSrc` a real search hit has. */
+    function lakeLureWithPhoto(zpid: number): RawListing {
+      return {
+        ...lakeLureListing(zpid),
+        imgSrc: `https://photos.zillowstatic.com/fp/${zpid}.jpg`,
+      };
+    }
+
+    const REGION = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+
+    /** Resolve step, then one filtered page — the two-request primary path. */
+    function mockFilteredSearch(listResults: RawListing[]): void {
+      mockFetchHtml.mockResolvedValueOnce(
+        htmlWithState({ ...REGION, listResults: [lakeLureListing(1)] })
+      );
+      mockFetchHtml.mockResolvedValueOnce(
+        htmlWithState({ ...REGION, listResults })
+      );
+    }
+
+    it('advertises only the rungs this server honours', async () => {
+      // `raw` is meaningless here — compact is already a passthrough minus
+      // media — so the schema must reject it rather than silently alias it
+      // to `full`.
+      const { tools } = await harness.client.listTools();
+      const schema = tools.find((t) => t.name === 'zillow_search_properties')
+        ?.inputSchema as {
+        properties?: { view?: { enum?: string[] } };
+        required?: string[];
+      };
+      expect(schema.properties?.view?.enum).toEqual(['compact', 'full']);
+      // Optional, because compact is the DEFAULT.
+      expect(schema.required ?? []).not.toContain('view');
+    });
+
+    it('keeps the constructed image_url on the filtered branch under compact', async () => {
+      // THE regression this fix could have introduced. Routing the primary
+      // path through the media stripper puts every `image_url` in front of a
+      // rule that would take it on sight — its value ends in `.jpg` — and
+      // only the `keep` entry in `view.ts` saves it. `search.ts` derives that
+      // field deliberately so a hit "carries an image like a real one"
+      // (#119); the dedicated photos tool is where the full set lives.
+      mockFilteredSearch([lakeLureWithPhoto(11), lakeLureWithPhoto(12)]);
+      const result = await harness.callTool('zillow_search_properties', {
+        location: 'Lake Lure, NC 28746',
+      });
+      const parsed = parseToolResult<Array<{ zpid: string; image_url?: string }>>(
+        result
+      );
+      expect(parsed.map((p) => p.image_url)).toEqual([
+        'https://photos.zillowstatic.com/fp/11.jpg',
+        'https://photos.zillowstatic.com/fp/12.jpg',
+      ]);
+      // And the homedetails link — a page, not a picture — is still there.
+      expect(parsed).toHaveLength(2);
+    });
+
+    it('keeps the constructed image_url on the address branch under compact', async () => {
+      // Same guarantee on the single-round-trip path, where `image_url` comes
+      // from `responsivePhotos` rather than `imgSrc`. Two derivations, one
+      // `keep` entry — so a test on only one of them would not have noticed
+      // the other going missing.
+      mockFetchHtml.mockResolvedValueOnce(
+        htmlWithHomedetails({
+          zpid: 2061813066,
+          price: 615000,
+          address: {
+            streetAddress: '1973 Buffalo Creek Rd',
+            city: 'Lake Lure',
+            state: 'NC',
+            zipcode: '28746',
+          },
+          responsivePhotos: [{ url: 'https://photos.zillowstatic.com/fp/hero.jpg' }],
+        })
+      );
+      const result = await harness.callTool('zillow_search_properties', {
+        location: '1973 Buffalo Creek Rd, Lake Lure, NC 28746',
+      });
+      const parsed = parseToolResult<Array<{ image_url?: string }>>(result);
+      expect(parsed[0].image_url).toBe(
+        'https://photos.zillowstatic.com/fp/hero.jpg'
+      );
+    });
+
+    it('answers the filtered branch identically on compact and full', async () => {
+      // A characterization test, and the reason the two above are the real
+      // guard: a `FormattedListing` is a fixed key set whose ONLY media field
+      // is the kept `image_url`, so compact currently takes nothing off a
+      // search hit. That is a fact about the payload, not about a missing
+      // call — and if a future field makes the two rungs diverge, this test
+      // failing is the prompt to decide which side of `keep` it belongs on.
+      mockFilteredSearch([lakeLureWithPhoto(21)]);
+      const compact = parseToolResult<unknown>(
+        await harness.callTool('zillow_search_properties', {
+          location: 'Lake Lure, NC 28746',
+          view: 'compact',
+        })
+      );
+      mockFilteredSearch([lakeLureWithPhoto(21)]);
+      const full = parseToolResult<unknown>(
+        await harness.callTool('zillow_search_properties', {
+          location: 'Lake Lure, NC 28746',
+          view: 'full',
+        })
+      );
+      expect(compact).toEqual(full);
+      // Compact is what an omitted `view` gets — the whole inversion.
+      mockFilteredSearch([lakeLureWithPhoto(21)]);
+      const defaulted = parseToolResult<unknown>(
+        await harness.callTool('zillow_search_properties', {
+          location: 'Lake Lure, NC 28746',
+        })
+      );
+      expect(defaulted).toEqual(compact);
+    });
+
+    it('does not send `view` to Zillow as a search filter', async () => {
+      // `view` is a presentation flag. Destructuring it off the input is what
+      // keeps it out of the `{ ...input, page }` handed to
+      // `buildSearchQueryState`, so the searchQueryState in the URL stays
+      // exactly the set of Zillow query fields it was before.
+      mockFilteredSearch([lakeLureWithPhoto(31)]);
+      await harness.callTool('zillow_search_properties', {
+        location: 'Lake Lure, NC 28746',
+        view: 'full',
+      });
+      const filterPath = mockFetchHtml.mock.calls
+        .map((c) => c[0] as string)
+        .find((p) => p.includes('searchQueryState='));
+      expect(filterPath).toBeDefined();
+      const sqs = JSON.parse(
+        decodeURIComponent(filterPath!.split('searchQueryState=')[1]!)
+      ) as Record<string, unknown>;
+      expect(sqs).not.toHaveProperty('view');
+      expect(sqs.filterState).not.toHaveProperty('view');
+    });
+
+    it('returns the filtered branch as a single minified line', async () => {
+      // Every response is minified, on both rungs. `JSON.stringify(x, null, 2)`
+      // spends roughly a fifth of a large listing page on indentation nothing
+      // downstream reads.
+      mockFilteredSearch(
+        Array.from({ length: 5 }, (_, i) => lakeLureWithPhoto(40 + i))
+      );
+      const result = await harness.callTool('zillow_search_properties', {
+        location: 'Lake Lure, NC 28746',
+      });
+      const body = (result.content[0] as { text: string }).text;
+      expect(body.split('\n')).toHaveLength(1);
+    });
+  });
 });
