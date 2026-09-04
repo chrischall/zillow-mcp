@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.13.0](https://github.com/chrischall/zillow-mcp/compare/v0.12.0...v0.13.0) (2026-09-04)
+
+
+### Features
+
+* **tools:** compact by default — strip media URLs, and minify every response ([#224](https://github.com/chrischall/zillow-mcp/issues/224)) ([9ee8313](https://github.com/chrischall/zillow-mcp/commit/9ee8313c483440706d2047ebbb9ebd19a35969f5))
+
+
+### Bug Fixes
+
+* **deps:** pick up @chrischall/mcp-utils 0.23.2 ([#230](https://github.com/chrischall/zillow-mcp/issues/230)) ([e89b214](https://github.com/chrischall/zillow-mcp/commit/e89b2142070d7ccf4b50edd969a54e0fe3f98fae))
+* **tools:** honour `view` on search's primary branch, and test the wiring ([#227](https://github.com/chrischall/zillow-mcp/issues/227)) ([ae54024](https://github.com/chrischall/zillow-mcp/commit/ae54024bcaa518743daff89a7b7e87fe132ffd14))
+
+
+### Refactor
+
+* **imports:** drop the src/mcp.ts re-export seam ([#231](https://github.com/chrischall/zillow-mcp/issues/231)) ([2e44e99](https://github.com/chrischall/zillow-mcp/commit/2e44e997b5493ee875dcf79542412cf787a62619))
+
 ## [0.12.0](https://github.com/chrischall/zillow-mcp/compare/v0.11.5...v0.12.0) (2026-08-29)
 
 
