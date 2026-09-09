@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.1](https://github.com/chrischall/zillow-mcp/compare/v0.13.0...v0.13.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **deps:** Bump hono from 4.13.0 to 4.13.7 ([#244](https://github.com/chrischall/zillow-mcp/issues/244)) ([b2d1439](https://github.com/chrischall/zillow-mcp/commit/b2d14390312faf0f84832d3991f3b8f66c6b3417))
+* **deps:** require @fetchproxy/server ^2.7.0, the first that reads FETCHPROXY_IDENTITY_DIR ([#242](https://github.com/chrischall/zillow-mcp/issues/242)) ([ddcb261](https://github.com/chrischall/zillow-mcp/commit/ddcb261426cc6230a6cb501dd78c897998ef06b9))
+
 ## [0.13.0](https://github.com/chrischall/zillow-mcp/compare/v0.12.0...v0.13.0) (2026-09-04)
 
 
