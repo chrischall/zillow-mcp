@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.2](https://github.com/chrischall/zillow-mcp/compare/v0.13.1...v0.13.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **deps:** @fetchproxy/server 2.10.0 and @chrischall/mcp-utils 0.26.1 ([#247](https://github.com/chrischall/zillow-mcp/issues/247)) ([d82dd20](https://github.com/chrischall/zillow-mcp/commit/d82dd20f566d090d2a9711c0167b15db2bd5445f))
+* **deps:** declare the peer floors mcp-utils 0.26.1 requires ([#248](https://github.com/chrischall/zillow-mcp/issues/248)) ([89d3399](https://github.com/chrischall/zillow-mcp/commit/89d3399265f6fbe0eca42b85dc099ffb6283c089))
+* **deps:** take @fetchproxy/server 2.9.1 so a pairing prompt survives ([#245](https://github.com/chrischall/zillow-mcp/issues/245)) ([89d902c](https://github.com/chrischall/zillow-mcp/commit/89d902c0c7ad4e7ebfd104eafa2ae3143d79494c))
+
 ## [0.13.1](https://github.com/chrischall/zillow-mcp/compare/v0.13.0...v0.13.1) (2026-09-09)
 
 
