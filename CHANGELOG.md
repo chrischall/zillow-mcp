@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.3](https://github.com/chrischall/zillow-mcp/compare/v0.13.2...v0.13.3) (2026-09-12)
+
+
+### Bug Fixes
+
+* **deps:** @fetchproxy/server 2.11.3, so the hosted extension pin persists ([#249](https://github.com/chrischall/zillow-mcp/issues/249)) ([1515c7d](https://github.com/chrischall/zillow-mcp/commit/1515c7dc55261f83892a80f5bf74c53c7ed2de82))
+
 ## [0.13.2](https://github.com/chrischall/zillow-mcp/compare/v0.13.1...v0.13.2) (2026-09-10)
 
 
