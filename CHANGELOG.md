@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.4](https://github.com/chrischall/zillow-mcp/compare/v0.13.3...v0.13.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* **deps:** @fetchproxy/server 3.0.1 — capped peer frames, logged load drops, atomic identity writes ([#253](https://github.com/chrischall/zillow-mcp/issues/253)) ([02745b8](https://github.com/chrischall/zillow-mcp/commit/02745b8b0e0464c9860dd86f11f73d01daa295b7))
+
 ## [0.13.3](https://github.com/chrischall/zillow-mcp/compare/v0.13.2...v0.13.3) (2026-09-14)
 
 
