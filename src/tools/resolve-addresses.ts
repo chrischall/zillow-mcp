@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import { viewArg, viewResponse } from '../view.js';
 import {
@@ -282,7 +282,7 @@ export function registerResolveAddressesTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         view: viewArg(),
         addresses: z
           .array(RowSchema)
@@ -291,7 +291,7 @@ export function registerResolveAddressesTools(
           .describe(
             `Free-text addresses (e.g. "126 Sleeping Bear Ln, Lake Lure, NC") or structured rows. 1..${RESOLVE_ADDRESSES_MAX}.`
           ),
-      },
+      }),
     },
     async ({ addresses, view }) => {
       // Issue #78: pace the fan-out to BRIDGE_CONCURRENCY (Redfin parity).

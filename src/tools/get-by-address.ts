@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { viewArg, viewResponse } from '../view.js';
 import { formatListing } from './search.js';
@@ -97,7 +97,7 @@ export function registerGetByAddressTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         view: viewArg(),
         address: z
           .string()
@@ -125,7 +125,7 @@ export function registerGetByAddressTools(
           .describe(
             'Upper bound for the search-fallback rung. Pair with `price_min` — same load-bearing role for rural/remapped-locality addresses.'
           ),
-      },
+      }),
     },
     // `view` is destructured off the input rather than read through an
     // `(input as { view?: string })` cast, matching `zillow_resolve_addresses`.

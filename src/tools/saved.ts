@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
@@ -186,14 +186,14 @@ export function registerSavedTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         session_id: z
           .string()
           .optional()
           .describe(
             'Optional registered session id (from `zillow_register_session`). Defaults to the active session.'
           ),
-      },
+      }),
     },
     async ({ session_id }) => {
       resolveSession(session_id);
@@ -218,14 +218,14 @@ export function registerSavedTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         session_id: z
           .string()
           .optional()
           .describe(
             'Optional registered session id (from `zillow_register_session`). Defaults to the active session.'
           ),
-      },
+      }),
     },
     async ({ session_id }) => {
       resolveSession(session_id);

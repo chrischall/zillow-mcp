@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { fetchPropertyRecord } from './properties.js';
@@ -42,7 +42,7 @@ export function registerHistoryTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpid: z
           .union([z.number().int().positive(), z.string()])
           .optional()
@@ -51,7 +51,7 @@ export function registerHistoryTools(
           .string()
           .optional()
           .describe('Zillow homedetails URL or path'),
-      },
+      }),
     },
     async ({ zpid, url }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
@@ -83,7 +83,7 @@ export function registerHistoryTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpid: z
           .union([z.number().int().positive(), z.string()])
           .optional()
@@ -92,7 +92,7 @@ export function registerHistoryTools(
           .string()
           .optional()
           .describe('Zillow homedetails URL or path'),
-      },
+      }),
     },
     async ({ zpid, url }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });

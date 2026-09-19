@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import {
   buildHyperlinkFormula,
   collectAddressAlternates as collectAddressAlternatesCore,
@@ -725,7 +725,7 @@ export function registerPropertyTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpid: z
           .union([z.number().int().positive(), z.string()])
           .optional()
@@ -752,7 +752,7 @@ export function registerPropertyTools(
           .describe(
             'Include the tax-history series (mirrors `zillow_get_tax_history`) on the response under `tax_history`. Defaults to `false`.'
           ),
-      },
+      }),
     },
     async ({ zpid, url, include_description, include_price_history, include_tax_history }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });

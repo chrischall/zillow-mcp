@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { registerSessionTools as registerSharedSessionTools } from '@chrischall/mcp-utils/session';
 import type { SessionRegistry } from '../sessions.js';
 
