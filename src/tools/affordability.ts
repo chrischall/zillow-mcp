@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import {
   calculateAffordability,
   type AffordabilityInput as CoreAffordabilityInput,
@@ -231,7 +231,7 @@ export function registerAffordabilityTools(server: McpServer): void {
         idempotentHint: true,
         openWorldHint: false,
       },
-      inputSchema: {
+      inputSchema: z.object({
         monthly_income: z.number().positive(),
         monthly_debts: z
           .number()
@@ -256,7 +256,7 @@ export function registerAffordabilityTools(server: McpServer): void {
           .max(1)
           .optional()
           .describe('Back-end DTI cap as decimal, default 0.36'),
-      },
+      }),
     },
     async (input) => minifiedResult(computeAffordability(input as AffordabilityInput))
   );
@@ -273,7 +273,7 @@ export function registerAffordabilityTools(server: McpServer): void {
         idempotentHint: true,
         openWorldHint: false,
       },
-      inputSchema: {
+      inputSchema: z.object({
         home_price: z.number().positive(),
         down_payment: z.number().nonnegative(),
         interest_rate: z.number().nonnegative(),
@@ -297,7 +297,7 @@ export function registerAffordabilityTools(server: McpServer): void {
           .positive()
           .optional()
           .describe('Default 7'),
-      },
+      }),
     },
     async (input) => minifiedResult(computeRentVsBuy(input as RentVsBuyInput))
   );

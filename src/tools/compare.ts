@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import {
   BRIDGE_CONCURRENCY,
   classifyRowError,
@@ -80,7 +80,7 @@ export function registerCompareTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpids: z
           .array(z.union([z.number().int().positive(), z.string()]))
           .min(2)
@@ -109,7 +109,7 @@ export function registerCompareTools(
           .describe(
             'Include the raw `description` on each row. Defaults to `false`.'
           ),
-      },
+      }),
     },
     async ({ zpids, urls, include_summary, include_description }) => {
       const targets =

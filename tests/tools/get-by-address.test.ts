@@ -6,9 +6,8 @@ import {
 } from '../../src/tools/get-by-address.js';
 import { swapStreetSuffix } from '../../src/tools/resolver.js';
 import { createTestHarness, parseToolResult } from '../helpers.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+import { Client } from '@modelcontextprotocol/client';
 
 const mockFetchHtml = vi.fn();
 const mockClient = { fetchHtml: mockFetchHtml } as unknown as ZillowClient;

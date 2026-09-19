@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { tokenize } from '@chrischall/realty-core';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { viewArg, viewResponse } from '../view.js';
 import { extractNextData, getPageProps } from '../next-data.js';
@@ -561,7 +561,7 @@ export function registerSearchTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         view: viewArg(),
         location: z
           .string()
@@ -604,7 +604,7 @@ export function registerSearchTools(
           .describe(
             'When true (default), aggregate across Zillow\'s paginated search responses until `limit` is reached. Pass `false` to disable pagination — only one Zillow page is fetched (~40 listings).'
           ),
-      },
+      }),
     },
     // `view` is destructured off the input rather than read through an
     // `(input as { view?: string })` cast, matching `zillow_resolve_addresses`.

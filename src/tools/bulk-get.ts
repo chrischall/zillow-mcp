@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import {
   BRIDGE_CONCURRENCY,
@@ -260,7 +260,7 @@ export function registerBulkGetTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpids: z
           .array(z.union([z.number().int().positive(), z.string()]))
           .min(1)
@@ -277,7 +277,7 @@ export function registerBulkGetTools(
           .describe(
             `Zillow homedetails URLs/paths to fetch. 1..${BULK_GET_MAX}.`
           ),
-      },
+      }),
     },
     async ({ zpids, urls }) => {
       const targets: Target[] | null =

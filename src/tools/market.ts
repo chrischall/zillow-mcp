@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
@@ -146,7 +146,7 @@ export function registerMarketTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         region_path: z
           .string()
           .optional()
@@ -157,7 +157,7 @@ export function registerMarketTools(
           .string()
           .optional()
           .describe('Full Zillow URL to a home-values page'),
-      },
+      }),
     },
     async (args) => {
       const path = pathFromInput(args);

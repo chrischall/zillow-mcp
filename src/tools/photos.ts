@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { fetchPropertyRecord } from './properties.js';
@@ -136,7 +136,7 @@ export function registerPhotosTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpid: z
           .union([z.number().int().positive(), z.string()])
           .optional()
@@ -151,7 +151,7 @@ export function registerPhotosTools(
           .describe(
             'Include the full multi-width jpeg + webp source lists per photo (default false; on for properties with <~15 photos).'
           ),
-      },
+      }),
     },
     async ({ zpid, url, include_sources }) => {
       const { raw } = await fetchPropertyRecord(client, { zpid, url });

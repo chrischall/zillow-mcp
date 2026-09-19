@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { fetchPropertyRecord } from './properties.js';
@@ -103,7 +103,7 @@ export function registerZestimateTools(
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: {
+      inputSchema: z.object({
         zpid: z
           .union([z.number().int().positive(), z.string()])
           .optional()
@@ -114,7 +114,7 @@ export function registerZestimateTools(
           .describe(
             'Zillow homedetails URL (or path). Provide either zpid or url.'
           ),
-      },
+      }),
     },
     async ({ zpid, url }) => {
       if (zpid === undefined && !url) {
