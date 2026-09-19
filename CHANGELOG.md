@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/chrischall/zillow-mcp/compare/v0.13.4...v1.0.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** migrate server to SDK v2 ([#256](https://github.com/chrischall/zillow-mcp/issues/256))
+
+### Features
+
+* **mcp:** migrate server to SDK v2 ([#256](https://github.com/chrischall/zillow-mcp/issues/256)) ([8d978fb](https://github.com/chrischall/zillow-mcp/commit/8d978fb328ee3a60ff5248375e199e730c707cda))
+
 ## [0.13.4](https://github.com/chrischall/zillow-mcp/compare/v0.13.3...v0.13.4) (2026-09-15)
 
 
