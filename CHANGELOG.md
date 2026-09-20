@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/chrischall/zillow-mcp/compare/v1.0.0...v1.1.0) (2026-09-19)
+
+
+### Features
+
+* **deps:** take mcp-utils 1.0.0, so this server boots the 2026 era ([#261](https://github.com/chrischall/zillow-mcp/issues/261)) ([e53379e](https://github.com/chrischall/zillow-mcp/commit/e53379e8e37e9d2aca8b9a3e0b8c12bb7a03996f))
+
 ## [1.0.0](https://github.com/chrischall/zillow-mcp/compare/v0.13.4...v1.0.0) (2026-09-19)
 
 
