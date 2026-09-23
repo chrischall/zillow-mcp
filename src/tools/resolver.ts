@@ -357,6 +357,9 @@ export async function fetchAutocompleteAddressCandidates(
       method: 'POST',
       headers: autocompleteHeaders(),
       body: buildAutocompleteBody(query),
+      // Read-only GraphQL `query` (typeahead) — safe to re-send after a
+      // transport timeout (fetchproxy 3.2.0 no longer does so by default).
+      retryOnTimeout: true,
     }
   );
   const results = resp?.data?.searchAssistanceResult?.results;

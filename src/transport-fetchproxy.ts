@@ -152,6 +152,9 @@ export class FetchproxyTransport implements ZillowTransport {
     return this.inner.requestJson<T>(method, path, {
       headers: init.headers,
       body: init.body,
+      ...(init.retryOnTimeout !== undefined
+        ? { retryOnTimeout: init.retryOnTimeout }
+        : {}),
     });
   }
 

@@ -89,6 +89,8 @@ export class ZillowClient {
       method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
       headers?: Record<string, string>;
       body?: unknown;
+      /** Opt a provably read-only non-GET into the timeout retry. */
+      retryOnTimeout?: boolean;
     } = {}
   ): Promise<T> {
     const method = init.method ?? 'POST';
@@ -101,6 +103,9 @@ export class ZillowClient {
       method,
       headers: init.headers,
       body: init.body,
+      ...(init.retryOnTimeout !== undefined
+        ? { retryOnTimeout: init.retryOnTimeout }
+        : {}),
     });
     this.throwIfBotWall(result, path);
     this.throwIfNotOk(result, method, path);

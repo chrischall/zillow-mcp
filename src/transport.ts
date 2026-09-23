@@ -55,6 +55,12 @@ export interface RequestJsonInit {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   headers?: Record<string, string>;
   body?: unknown;
+  /**
+   * @fetchproxy 3.2.0 no longer re-sends a non-GET after a transport
+   * timeout (it could duplicate a write). Set this ONLY for a provably
+   * read-only POST (e.g. a GraphQL `query`) to keep the cold-start retry.
+   */
+  retryOnTimeout?: boolean;
 }
 
 export interface ZillowTransport {
