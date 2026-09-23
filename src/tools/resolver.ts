@@ -34,6 +34,7 @@ import {
   buildSearchQueryState,
   extractSearchPageState,
   formatListing,
+  LocationNotResolved,
   locationTokens,
   resolveLocationOrListings,
   type RawListing,
@@ -162,8 +163,14 @@ export async function searchFallback(
   let resolved;
   try {
     resolved = await resolveLocationOrListings(client, scopeParts);
-  } catch {
-    return null;
+  } catch (e) {
+    // Only a genuine "Zillow couldn't pin this scope" is a miss. Anything
+    // else — a BotWallError (fleet-audit#288: incl. the governed client's
+    // tripped breaker), a bridge timeout, an abandoned-row abort — must
+    // propagate: this is the last rung, so swallowing it here turned a
+    // bot-wall into an indistinguishable "no listing found".
+    if (e instanceof LocationNotResolved || e instanceof ParseError) return null;
+    throw e;
   }
   let listings: RawListing[];
   if (resolved.kind === 'listings') {

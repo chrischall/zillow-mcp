@@ -472,6 +472,96 @@ describe('zillow_resolve_addresses tool', () => {
       await dh.close();
     });
 
+    // Review follow-up on #288: rung 5's scope resolve used a bare
+    // `catch { return null }`, so a wall hit there — the LAST rung, and the
+    // rural-address path — collapsed onto "no listing found".
+    const SCOPE_PATH = '/homes/Lake%20Lure%20NC_rb/';
+
+    it('reports a wall that trips only on the rung-5 scope fetch as bot_challenge, not a miss', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, {
+          overallDeadlineMs: 2000,
+          ratePerMinute: 100_000,
+          burst: 1000,
+        })
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        if (path === SCOPE_PATH) throw new BotWallError(path, 9);
+        return EMPTY;
+      });
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: ['126 Sleeping Bear Ln, Lake Lure, NC'],
+      });
+      const parsed = parseToolResult<{
+        blocked?: number;
+        retry_after_s?: number;
+        results: Array<{ resolved: boolean; error_kind?: string; error?: string }>;
+      }>(r);
+      expect(mockFetchHtml.mock.calls.map((c) => c[0])).toContain(SCOPE_PATH);
+      expect(parsed.results[0].resolved).toBe(false);
+      expect(parsed.results[0].error_kind).toBe('bot_challenge');
+      expect(parsed.results[0].error).not.toMatch(/no listing found/i);
+      expect(parsed.blocked).toBe(1);
+      expect(parsed.retry_after_s).toBe(9);
+      await dh.close();
+    });
+
+    it('blocks a concurrent row whose next dial after the trip is the rung-5 scope resolve', async () => {
+      const tuning = { overallDeadlineMs: 2000, ratePerMinute: 100_000, burst: 1000 };
+      const rowB = '126 Sleeping Bear Ln, Lake Lure, NC';
+      const rowA = '1 Tripwire Rd, Boone, NC';
+
+      // Dry run: record row B's ladder so we know its last dial before rung 5.
+      const dry = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, tuning)
+      );
+      mockFetchHtml.mockResolvedValue(EMPTY);
+      await dry.callTool('zillow_resolve_addresses', { addresses: [rowB] });
+      await dry.close();
+      const bPaths = mockFetchHtml.mock.calls.map((c) => c[0] as string);
+      const scopeIdx = bPaths.indexOf(SCOPE_PATH);
+      expect(scopeIdx).toBeGreaterThan(0);
+      const lastBeforeScope = bPaths[scopeIdx - 1];
+      mockFetchHtml.mockReset();
+
+      // Row A's first dial hangs until row B reaches its last pre-rung-5
+      // fetch, then trips the wall; row B's in-flight fetch returns a clean
+      // miss, so its NEXT dial — the rung-5 scope resolve — meets the
+      // tripped breaker.
+      let releaseA!: () => void;
+      const aGate = new Promise<void>((res) => (releaseA = res));
+      let aTripped!: () => void;
+      const aDone = new Promise<void>((res) => (aTripped = res));
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        if (/boone/i.test(path)) {
+          await aGate;
+          aTripped();
+          throw new BotWallError(path, 11);
+        }
+        if (path === lastBeforeScope) {
+          releaseA();
+          await aDone;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        return EMPTY;
+      });
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, tuning)
+      );
+      const r = await dh.callTool('zillow_resolve_addresses', { addresses: [rowA, rowB] });
+      const parsed = parseToolResult<{
+        blocked?: number;
+        results: Array<{ address: string; resolved: boolean; error_kind?: string; error?: string }>;
+      }>(r);
+      const b = parsed.results.find((x) => x.address === rowB)!;
+      expect(b.error_kind).toBe('bot_challenge');
+      expect(b.error).not.toMatch(/no listing found/i);
+      expect(parsed.blocked).toBe(2);
+      // Row B never actually dialled the scope path — the breaker stopped it.
+      expect(mockFetchHtml.mock.calls.map((c) => c[0])).not.toContain(SCOPE_PATH);
+      await dh.close();
+    });
+
     it('surfaces a bridge timeout with error_kind timeout', async () => {
       const dh = await createTestHarness((server) =>
         registerResolveAddressesTools(server, mockClient, {
