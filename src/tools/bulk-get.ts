@@ -72,9 +72,9 @@ export const BULK_GET_CHUNK_SIZE = 20;
  * (issue #90 part b). Conservative: ~one request every ~0.4s sustained,
  * with a short burst allowance for the first page.
  */
-const ZILLOW_RPM = 150;
+export const ZILLOW_RPM = 150;
 /** Burst allowance — one safe page worth of immediate tokens. */
-const ZILLOW_BURST = BULK_GET_CHUNK_SIZE;
+export const ZILLOW_BURST = BULK_GET_CHUNK_SIZE;
 
 /** Backoff schedule on a captcha block. */
 const CAPTCHA_BACKOFF_BASE_MS = 1_000;

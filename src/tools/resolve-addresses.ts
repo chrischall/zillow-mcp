@@ -4,17 +4,18 @@ import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import { viewArg, viewResponse } from '../view.js';
 import {
   BRIDGE_CONCURRENCY,
+  TokenBucket,
   classifyRowError,
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
-import type { ZillowClient } from '../client.js';
+import { BotWallError, type ZillowClient } from '../client.js';
 import { parseAddress } from '@chrischall/realty-core';
 import {
   resolveAddressFull,
   type ResolverInput,
   type ResolverVia,
 } from './resolver.js';
-import { OVERALL_DEADLINE_MS } from './bulk-get.js';
+import { OVERALL_DEADLINE_MS, ZILLOW_BURST, ZILLOW_RPM } from './bulk-get.js';
 
 /**
  * `zillow_resolve_addresses`: batch address → zpid resolver.
@@ -42,6 +43,70 @@ export interface ResolveAddressesTuning {
    * {@link OVERALL_DEADLINE_MS}.
    */
   overallDeadlineMs?: number;
+  /**
+   * Per-call requests-per-minute governor (fleet-audit#288) — every
+   * ladder fetch spends a token. Defaults to bulk_get's
+   * {@link ZILLOW_RPM} / {@link ZILLOW_BURST} so both bulk tools stay
+   * under the same PerimeterX threshold.
+   */
+  ratePerMinute?: number;
+  burst?: number;
+}
+
+/**
+ * Shared per-call state for {@link governClient}: the RPM bucket every
+ * fetch spends a token from, and the first bot-wall seen (a circuit
+ * breaker — once PerimeterX walls one fetch, every later fetch in the
+ * call fails fast instead of hammering the wall).
+ */
+export interface ResolveGovernor {
+  bucket: TokenBucket;
+  wall: BotWallError | null;
+}
+
+class ResolveAbandonedError extends Error {
+  constructor() {
+    super('resolve_addresses overall deadline reached; row abandoned');
+    this.name = 'ResolveAbandonedError';
+  }
+}
+
+/**
+ * Wrap `client` so every fetch the 5-rung ladder makes (fleet-audit#288):
+ *   - fails fast once the call has hit the bot-wall (re-throwing that
+ *     wall, so the row reports `bot_challenge`, never a plain miss);
+ *   - spends a token from the per-call RPM bucket before dialling;
+ *   - refuses to dial once `signal` is aborted (fleet-audit#289) — the
+ *     overall deadline has answered and the row is being discarded, so
+ *     the ladder must stop between rungs instead of running on in the
+ *     background through the user's browser.
+ */
+export function governClient(
+  client: ZillowClient,
+  gov: ResolveGovernor,
+  signal?: AbortSignal
+): ZillowClient {
+  const gate = async (): Promise<void> => {
+    if (signal?.aborted) throw new ResolveAbandonedError();
+    if (gov.wall) throw gov.wall;
+    await gov.bucket.acquire();
+    if (signal?.aborted) throw new ResolveAbandonedError();
+    if (gov.wall) throw gov.wall;
+  };
+  const guard = async <T>(run: () => Promise<T>): Promise<T> => {
+    await gate();
+    try {
+      return await run();
+    } catch (e) {
+      if (e instanceof BotWallError && !gov.wall) gov.wall = e;
+      throw e;
+    }
+  };
+  const governed = Object.create(client) as ZillowClient;
+  governed.fetchHtml = (path) => guard(() => client.fetchHtml(path));
+  governed.fetchJson = ((path: string, init?: Parameters<ZillowClient['fetchJson']>[1]) =>
+    guard(() => client.fetchJson(path, init))) as ZillowClient['fetchJson'];
+  return governed;
 }
 
 /** Per-row input shape — accepts either a bare string or a struct. */
@@ -95,13 +160,22 @@ export interface ResolveAddressesRow {
   /** Set when `resolved` is false. */
   error?: string;
   /**
-   * Machine-readable marker for an overall-deadline cut (issue #98).
-   * Present only on a `pending` row — the overall deadline fired before
-   * this row settled (likely a slow/hung sub-request). Distinct from a
-   * genuine `confidence: 'none'` miss so the caller re-runs just the
-   * pending rows rather than recording a real property as absent.
+   * Machine-readable failure class, present only on an error row — never
+   * on a genuine `confidence: 'none'` miss, so the caller re-runs these
+   * rows rather than recording a real property as absent.
+   * - `pending` — the overall deadline (issue #98) fired first.
+   * - `bot_challenge` — Zillow's PerimeterX wall blocked the lookup
+   *   (fleet-audit#288); retry after the envelope's `retry_after_s`.
+   * - `timeout` / `bridge_down` / `protocol` / `other` — from
+   *   `classifyRowError` (issue #78).
    */
-  error_kind?: 'pending';
+  error_kind?:
+    | 'pending'
+    | 'bot_challenge'
+    | 'timeout'
+    | 'bridge_down'
+    | 'protocol'
+    | 'other';
   /** The slug we passed through the resolver — useful for debugging. */
   query?: string;
 }
@@ -228,11 +302,23 @@ export async function resolveOneAddress(
     // a generic miss message and nearly recorded real properties as
     // absent. classifyRowError gives us the right discriminator + the
     // canonical wrapper string.
+    if (err instanceof BotWallError) {
+      return {
+        address: norm.raw,
+        resolved: false,
+        confidence: 'none',
+        error: err.message,
+        error_kind: 'bot_challenge',
+        query: norm.address,
+      };
+    }
+    const classified = classifyRowError(err);
     return {
       address: norm.raw,
       resolved: false,
       confidence: 'none',
-      error: classifyRowError(err).message,
+      error: classified.message,
+      error_kind: classified.kind,
       query: norm.address,
     };
   }
@@ -275,6 +361,7 @@ export function registerResolveAddressesTools(
         'Concurrent fan-out — a 60-address batch returns in roughly one round trip instead of 60. Per-row error capture so one bad address never fails the batch. ' +
         '`confidence` is `"exact"` for direct hits, `"autocomplete"` / `"suffix_expansion"` / `"locality_remap"` / `"search_fallback"` for retries, `"none"` when all rungs missed. ' +
         'The whole call is bounded by an overall hard deadline (issue #98), like `zillow_bulk_get`: a single slow/hung row never wedges the server — when the deadline is reached any unsettled row is returned with `error_kind: "pending"` (distinct from a real miss) and the response carries a `pending` count so you can re-run just those addresses. ' +
+        'Every lookup is paced by the same per-host requests-per-minute throttle as `zillow_bulk_get` so a big batch does not trip Zillow\'s PerimeterX bot-wall. If the wall is hit, the remaining rows stop querying Zillow and come back with `error_kind: "bot_challenge"` (never a plain miss), and the response carries a `{ blocked, retry_after_s }` envelope so you can re-run them later. Other failed rows carry `error_kind` `timeout` / `bridge_down` / `protocol` / `other`. ' +
         'Read-only, no auth required.',
       annotations: {
         title: 'Bulk-resolve addresses → Zillow zpids',
@@ -307,10 +394,26 @@ export function registerResolveAddressesTools(
       // is backfilled by `onTimeout` with a `pending` row so a single hung
       // sub-request can't wedge the whole call. A `pending` row is NEVER a
       // generic `confidence: 'none'` miss.
+      //
+      // fleet-audit#288/#289: each row runs the ladder over a governed
+      // client — one per-call RPM bucket shared by every fetch, a bot-wall
+      // circuit breaker, and the batch's abort signal so an abandoned row
+      // stops dialling once the deadline has answered.
+      const gov: ResolveGovernor = {
+        bucket: new TokenBucket({
+          ratePerMinute: tuning.ratePerMinute ?? ZILLOW_RPM,
+          burst: tuning.burst ?? ZILLOW_BURST,
+        }),
+        wall: null,
+      };
       const results = await runBoundedBatch<
         ResolveAddressesInputRow,
         ResolveAddressesRow
-      >(addresses, (address) => resolveOneAddress(client, address), {
+      >(
+        addresses,
+        (address, signal) =>
+          resolveOneAddress(governClient(client, gov, signal), address),
+        {
         deadlineMs: overallDeadlineMs,
         concurrency: BRIDGE_CONCURRENCY,
         onTimeout: (address) => {
@@ -327,15 +430,26 @@ export function registerResolveAddressesTools(
               'row no longer wedges the batch.',
           };
         },
-      });
+        }
+      );
 
       const pending = results.filter((r) => r.error_kind === 'pending').length;
+      const blocked = results.filter((r) => r.error_kind === 'bot_challenge').length;
       const envelope: {
         count: number;
         results: ResolveAddressesRow[];
         pending?: number;
+        blocked?: number;
+        retry_after_s?: number;
       } = { count: results.length, results };
       if (pending > 0) envelope.pending = pending;
+      if (blocked > 0) {
+        // Same partial-result envelope as zillow_bulk_get (issue #90).
+        envelope.blocked = blocked;
+        if (gov.wall && gov.wall.retryAfterSeconds > 0) {
+          envelope.retry_after_s = gov.wall.retryAfterSeconds;
+        }
+      }
       return viewResponse(view, envelope);
     }
   );

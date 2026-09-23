@@ -134,7 +134,10 @@ function realisticBackend(): (path: string) => Promise<string> {
 describe('real corpus (issue #81) — per-address fail-then-succeed', () => {
   it('setup', async () => {
     single = await createTestHarness((s) => registerGetByAddressTools(s, mockClient));
-    bulk = await createTestHarness((s) => registerResolveAddressesTools(s, mockClient));
+    // Throttle effectively off: this suite counts rungs, not pacing (fleet-audit#288 is covered in resolve-addresses.test.ts).
+    bulk = await createTestHarness((s) =>
+      registerResolveAddressesTools(s, mockClient, { ratePerMinute: 100_000, burst: 1000 })
+    );
   });
 
   beforeEach(() => mockFetchHtml.mockImplementation(realisticBackend()));
