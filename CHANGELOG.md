@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/chrischall/zillow-mcp/compare/v1.1.0...v1.1.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **deps:** require zod ^4.6.5 to match @chrischall/mcp-utils 2.4.0 ([#265](https://github.com/chrischall/zillow-mcp/issues/265)) ([eaee4f6](https://github.com/chrischall/zillow-mcp/commit/eaee4f697cbd96fbeb85d94b3e16dd51e54c9c0b))
+* **deps:** upgrade @chrischall/mcp-utils to 2.4.0 and @fetchproxy/* to 3.2.0 ([#263](https://github.com/chrischall/zillow-mcp/issues/263)) ([a4b905d](https://github.com/chrischall/zillow-mcp/commit/a4b905db4a9aab6c151c2aae251961b77e78549b))
+
 ## [1.1.0](https://github.com/chrischall/zillow-mcp/compare/v1.0.0...v1.1.0) (2026-09-19)
 
 
