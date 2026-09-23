@@ -702,6 +702,72 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     expect(filterCall).toBe(2);
   });
 
+  // fleet-audit#291: if Zillow clamps an out-of-range page to the last
+  // valid one (or ignores pagination), the loop must not walk all 25 pages
+  // and pad the result with repeats.
+  it('stops paginating when a page repeats earlier results, without duplicating them', async () => {
+    const region = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+    let filterCall = 0;
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (!path.includes('searchQueryState=')) {
+        return htmlWithState({ ...region, listResults: [lakeLureListing(1)] });
+      }
+      filterCall++;
+      // Page 1 and 2 are distinct; from page 3 on Zillow keeps serving
+      // page 2 again (clamped).
+      const base = filterCall === 1 ? 1000 : 2000;
+      const listings = Array.from({ length: 40 }, (_, i) => lakeLureListing(base + i));
+      return htmlWithState({ ...region, listResults: listings });
+    });
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 500,
+    });
+    const parsed = parseToolResult<Array<{ zpid: string }>>(r);
+    expect(parsed).toHaveLength(80);
+    expect(new Set(parsed.map((l) => l.zpid)).size).toBe(80);
+    // page 1, page 2, page 3 (all repeats → stop).
+    expect(filterCall).toBe(3);
+  });
+
+  it('de-duplicates zpids that appear on more than one page', async () => {
+    const region = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+    const pages: RawListing[][] = [
+      [lakeLureListing(1), lakeLureListing(2), lakeLureListing(3)],
+      [lakeLureListing(3), lakeLureListing(4)],
+      [],
+    ];
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (!path.includes('searchQueryState=')) {
+        return htmlWithState({ ...region, listResults: [lakeLureListing(1)] });
+      }
+      const sqs = JSON.parse(decodeURIComponent(path.split('searchQueryState=')[1]!)) as {
+        pagination?: { currentPage?: number };
+      };
+      return htmlWithState({ ...region, listResults: pages[(sqs.pagination?.currentPage ?? 1) - 1] ?? [] });
+    });
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 200,
+    });
+    const parsed = parseToolResult<Array<{ zpid: string }>>(r);
+    expect(parsed.map((l) => l.zpid)).toEqual(['1', '2', '3', '4']);
+  });
+
+  it('rejects a limit above what pagination can ever return', async () => {
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 100_000,
+    });
+    expect(r.isError).toBeTruthy();
+  });
+
   it('opts out of pagination when auto_paginate: false (issue #54)', async () => {
     const region = {
       regionSelection: [{ regionId: 70190, regionType: 7 }],
