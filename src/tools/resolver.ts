@@ -34,6 +34,7 @@ import {
   buildSearchQueryState,
   extractSearchPageState,
   formatListing,
+  LocationNotResolved,
   locationTokens,
   resolveLocationOrListings,
   type RawListing,
@@ -147,7 +148,7 @@ export async function resolveDirect(
 /**
  * Search-fallback rung (#52). Builds a city/state-scoped search with
  * the caller's optional price band and picks the first listing whose
- * address tokens overlap with the caller's street address.
+ * street address genuinely matches the caller's (house number anchored).
  */
 export async function searchFallback(
   client: ZillowClient,
@@ -162,8 +163,14 @@ export async function searchFallback(
   let resolved;
   try {
     resolved = await resolveLocationOrListings(client, scopeParts);
-  } catch {
-    return null;
+  } catch (e) {
+    // Only a genuine "Zillow couldn't pin this scope" is a miss. Anything
+    // else — a BotWallError (fleet-audit#288: incl. the governed client's
+    // tripped breaker), a bridge timeout, an abandoned-row abort — must
+    // propagate: this is the last rung, so swallowing it here turned a
+    // bot-wall into an indistinguishable "no listing found".
+    if (e instanceof LocationNotResolved || e instanceof ParseError) return null;
+    throw e;
   }
   let listings: RawListing[];
   if (resolved.kind === 'listings') {
@@ -188,20 +195,15 @@ export async function searchFallback(
     listings = sps?.cat1?.searchResults?.listResults ?? [];
   }
   if (listings.length === 0) return null;
-  const inputTokens = locationTokens(input.address).filter((t) => t.length >= 3);
-  // Round-3 nit: pathological input (e.g. `"1 St, Lake Lure, NC"`) tokenizes
-  // to zero discriminating tokens. Without this guard we'd silently return
-  // `listings[0]` for ANY scope-matching result — mis-resolving free-text
-  // queries. The strict `every`-token guard below is the single source of
-  // truth; bail out instead of falling through.
-  if (inputTokens.length === 0) return null;
+  // Same street-number-anchored guard as the direct rung (fleet-audit#287):
+  // realty-core's `addressMatch` requires the house number to match EXACTLY
+  // and a strict-majority whole-token overlap of the rest. The previous
+  // substring test dropped 1-2 digit house numbers (sub-3-char filter) and
+  // let "126" match "1260", resolving a different house on the same street.
+  // Zero-token / pathological input (`"1 St"`) never matches, so we still
+  // refuse rather than returning `listings[0]`.
   for (const l of listings) {
-    const info = l.hdpData?.homeInfo ?? {};
-    const haystack = [info.streetAddress, l.address, l.addressStreet]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    if (inputTokens.every((t) => haystack.includes(t))) return l;
+    if (addressMatch(input.address, listingStreetAddress(l)).matched) return l;
   }
   return null;
 }
@@ -752,7 +754,7 @@ export async function resolveAddressFull(
 
   // Rung 5: search fallback (issue #52 / #74) — a FIRST-CLASS rung, not a
   // last-ditch a rung-1 timeout could skip (issue #100). It does a
-  // city/state-scoped search + whole-token street match.
+  // city/state-scoped search + house-number-anchored street match.
   const fallbackHit = await searchFallback(client, input);
   if (fallbackHit) {
     const formatted = formatListing(fallbackHit);

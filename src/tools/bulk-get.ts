@@ -72,9 +72,9 @@ export const BULK_GET_CHUNK_SIZE = 20;
  * (issue #90 part b). Conservative: ~one request every ~0.4s sustained,
  * with a short burst allowance for the first page.
  */
-const ZILLOW_RPM = 150;
+export const ZILLOW_RPM = 150;
 /** Burst allowance — one safe page worth of immediate tokens. */
-const ZILLOW_BURST = BULK_GET_CHUNK_SIZE;
+export const ZILLOW_BURST = BULK_GET_CHUNK_SIZE;
 
 /** Backoff schedule on a captcha block. */
 const CAPTCHA_BACKOFF_BASE_MS = 1_000;
@@ -152,15 +152,28 @@ async function fetchOneRow(
   bucket: TokenBucket,
   target: Target,
   cfg: Required<Omit<BulkGetTuning, 'rng'>> & { rng: () => number },
-  blockedRetryAfter: { seconds: number }
+  blockedRetryAfter: { seconds: number },
+  signal?: AbortSignal
 ): Promise<BulkGetRow> {
   const fallbackZpid = 'zpid' in target ? String(target.zpid) : '';
   let lastBotWall: BotWallError | null = null;
+  // fleet-audit#289: `runBoundedBatch` aborts `signal` when the overall
+  // deadline answers, but its runners keep pulling queued items. Bail out
+  // before every dial (and after every wait) so an abandoned row never
+  // fires another homedetails fetch through the user's browser. The row
+  // is discarded by then — the deadline already backfilled it `pending`.
+  const abandoned = (): BulkGetRow => ({
+    zpid: fallbackZpid,
+    error: 'bulk_get overall deadline reached; row abandoned',
+    error_kind: 'pending',
+  });
 
   for (let attempt = 0; attempt <= cfg.maxCaptchaRetries; attempt++) {
+    if (signal?.aborted) return abandoned();
     // Spend a token before every attempt — the throttle paces total
     // request volume across the whole fan-out.
     await bucket.acquire();
+    if (signal?.aborted) return abandoned();
     try {
       const { raw } = await retryOnceOnTimeout(() =>
         fetchPropertyRecord(client, target)
@@ -190,6 +203,7 @@ async function fetchOneRow(
             retryAfterMs,
           });
           await sleep(delay);
+          if (signal?.aborted) return abandoned();
           continue;
         }
         // Retries exhausted — surface the block, distinctly.
@@ -318,7 +332,8 @@ export function registerBulkGetTools(
       // timeout. A `pending` row is NEVER a generic miss / not-found.
       const rows: BulkGetRow[] = await runBoundedBatch<Target, BulkGetRow>(
         targets,
-        (target) => fetchOneRow(client, bucket, target, cfg, blockedRetryAfter),
+        (target, signal) =>
+          fetchOneRow(client, bucket, target, cfg, blockedRetryAfter, signal),
         {
           deadlineMs: cfg.overallDeadlineMs,
           concurrency: BRIDGE_CONCURRENCY,

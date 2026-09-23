@@ -28,12 +28,14 @@ afterAll(async () => {
 function htmlWithCharts(
   charts: unknown,
   rentCharts?: unknown,
-  zpid: number = 12345
+  zpid: number = 12345,
+  extra: Record<string, unknown> = {}
 ): string {
   const cache = {
     [`Property:${zpid}`]: {
       property: {
         zpid,
+        ...extra,
         homeValueChartData: charts,
         ...(rentCharts !== undefined ? { rentValueChartData: rentCharts } : {}),
       },
@@ -128,25 +130,24 @@ describe('extractZestimateHistory', () => {
     expect(points).toEqual([{ date: '2024-01-01', value: 100 }]);
   });
 
-  it('falls back to priceHistory when chart data is absent', () => {
+  // fleet-audit#290: listing/sale prices are NOT Zestimates — never
+  // substitute priceHistory into the Zestimate series.
+  it('does not substitute priceHistory listing/sale prices when chart data is absent', () => {
     const points = extractZestimateHistory({
       priceHistory: [
-        { date: '2023-01-01', price: 500_000, event: 'Listed for sale' },
-        { date: '2024-01-01', price: 525_000, event: 'Listing price changed' },
+        { date: '2023-01-01', price: 899_000, event: 'Listed for sale' },
+        { date: '2024-01-01', price: 750_000, event: 'Sold' },
       ],
     });
-    expect(points).toEqual([
-      { date: '2023-01-01', value: 500_000 },
-      { date: '2024-01-01', value: 525_000 },
-    ]);
+    expect(points).toEqual([]);
   });
 
-  it('falls back to priceHistory when homeValueChartData is present but empty', () => {
+  it('does not substitute priceHistory when homeValueChartData is present but empty', () => {
     const points = extractZestimateHistory({
       homeValueChartData: [],
       priceHistory: [{ date: '2023-06-01', price: 600_000 }],
     });
-    expect(points).toEqual([{ date: '2023-06-01', value: 600_000 }]);
+    expect(points).toEqual([]);
   });
 
   it('returns [] when neither source is available', () => {
@@ -251,6 +252,24 @@ describe('zillow_get_zestimate_history tool', () => {
     expect(parsed.points).toEqual([]);
     expect(parsed.note).toMatch(/server-rendered/i);
     expect(parsed.note).toMatch(/Zestimate history/);
+  });
+
+  it('returns the SSR-omission note (not price events) when only priceHistory is present', async () => {
+    mockFetchHtml.mockResolvedValueOnce(
+      htmlWithCharts(undefined, undefined, 12345, {
+        priceHistory: [
+          { date: '2023-01-01', price: 899_000, event: 'Listed for sale' },
+          { date: '2024-01-01', price: 750_000, event: 'Sold' },
+        ],
+      })
+    );
+    const result = await harness.callTool('zillow_get_zestimate_history', {
+      zpid: 12345,
+    });
+    const parsed = parseToolResult<{ points: unknown[]; note?: string }>(result);
+    expect(parsed.points).toEqual([]);
+    expect(parsed.note).toMatch(/server-rendered/i);
+    expect(parsed.note).toMatch(/zillow_get_price_history/);
   });
 
   it('notes a genuine empty when chart data is present but empty', async () => {

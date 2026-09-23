@@ -545,6 +545,15 @@ export async function resolveLocationOrListings(
   return { kind: 'region', region: { regionSelection, mapBounds } };
 }
 
+// Zillow renders ~40 listings per SSR search page (issue #54).
+const ZILLOW_PAGE_SIZE = 40;
+// Safety net so a misbehaving Zillow that never returns an empty page
+// can't run away with our request budget.
+const MAX_PAGES = 25;
+// The most auto-pagination can ever return (fleet-audit#291) — a larger
+// `limit` would only force a walk of every page.
+const SEARCH_LIMIT_MAX = MAX_PAGES * ZILLOW_PAGE_SIZE;
+
 export function registerSearchTools(
   server: McpServer,
   client: ZillowClient
@@ -594,9 +603,10 @@ export function registerSearchTools(
           .number()
           .int()
           .positive()
+          .max(SEARCH_LIMIT_MAX)
           .optional()
           .describe(
-            'Max listings to return (default 40). When > 40 and `auto_paginate` is true (the default), the tool walks Zillow\'s pagination server-side and aggregates pages until either `limit` is reached or an empty page is returned. Zillow caps each search response at ~40 listings (issue #54).'
+            'Max listings to return (default 40, max 1000). When > 40 and `auto_paginate` is true (the default), the tool walks Zillow\'s pagination server-side and aggregates pages until `limit` is reached, an empty page is returned, or a page adds no new listings. Zillow caps each search response at ~40 listings (issue #54).'
           ),
         auto_paginate: z
           .boolean()
@@ -642,12 +652,14 @@ export function registerSearchTools(
       // `limit` is at or below the default — pagination only kicks in
       // for callers that explicitly asked for more. (Issue #54.)
       const aggregated: FormattedListing[] = [];
-      // Safety net so a misbehaving Zillow that never returns an empty
-      // page can't run away with our request budget.
-      const MAX_PAGES = 25;
+      // zpids already aggregated (fleet-audit#291): Zillow may clamp an
+      // out-of-range `currentPage` to the last valid page, or ignore
+      // pagination, instead of returning an empty page. Skip repeats and
+      // stop as soon as a page contributes nothing new, rather than
+      // walking all MAX_PAGES and padding the result with duplicates.
+      const seen = new Set<string>();
       // First page: always fetched. Subsequent pages: only if the
       // caller wants more than one page worth AND opted into auto-pagination.
-      const ZILLOW_PAGE_SIZE = 40;
       const wantsMore = autoPaginate && limit > ZILLOW_PAGE_SIZE;
       for (let page = 1; page <= MAX_PAGES; page++) {
         const sqs = buildSearchQueryState({ ...input, page }, resolved.region);
@@ -655,11 +667,16 @@ export function registerSearchTools(
         const sps = extractSearchPageState(html);
         const raw = sps?.cat1?.searchResults?.listResults ?? [];
         if (raw.length === 0) break; // natural terminator
+        let added = 0;
         for (const r of raw) {
           const f = formatListing(r);
-          if (f) aggregated.push(f);
+          if (!f || seen.has(f.zpid)) continue;
+          seen.add(f.zpid);
+          aggregated.push(f);
+          added++;
           if (aggregated.length >= limit) break;
         }
+        if (added === 0) break; // repeated page — Zillow clamped/ignored pagination
         if (!wantsMore) break;
         if (aggregated.length >= limit) break;
       }

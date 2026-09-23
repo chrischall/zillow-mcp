@@ -7,12 +7,13 @@ import { seriesAvailabilityNote } from './series-note.js';
 
 /**
  * Zillow embeds Zestimate history inside the property record under
- * either:
- *   - `homeValueChartData` (array of `{ points: [...] }` series), OR
- *   - `priceHistory` (the price-change feed; superset of estimates).
+ * `homeValueChartData` (array of `{ points: [...] }` series).
  *
- * For the v0 surface we expose the cleaner homeValueChartData if
- * present, falling back to a derived series from priceHistory.
+ * `priceHistory` is deliberately NOT used as a fallback (fleet-audit#290):
+ * its entries are list prices, price cuts, sales and rental listings, not
+ * Zestimates, and presenting them as a valuation trend misleads. When the
+ * chart is absent the tool returns an empty series with an explanatory
+ * note pointing at zillow_get_price_history instead.
  *
  * The record is fetched through the shared `fetchPropertyRecord` (the SSR
  * `/homedetails/` scrape) — the same source every other property tool
@@ -40,7 +41,7 @@ interface RawHomeValueChart {
 
 interface RawPropertyWithCharts {
   homeValueChartData?: RawHomeValueChart[];
-  priceHistory?: Array<{ date?: string; price?: number; event?: string }>;
+  priceHistory?: unknown[];
   rentValueChartData?: RawHomeValueChart[];
 }
 
@@ -76,13 +77,6 @@ export function extractZestimateHistory(raw: RawPropertyWithCharts): ZestimatePo
       ...p,
       ...(rent_by_date.has(p.date) ? { rent: rent_by_date.get(p.date) } : {}),
     }));
-  }
-
-  // Fallback: derive from priceHistory's listing-price events.
-  if (raw.priceHistory) {
-    return raw.priceHistory
-      .filter((h) => typeof h.date === 'string' && typeof h.price === 'number')
-      .map((h) => ({ date: h.date as string, value: h.price as number }));
   }
   return [];
 }
@@ -125,13 +119,15 @@ export function registerZestimateTools(
       const { raw } = await fetchPropertyRecord(client, { zpid, url });
       const withCharts = raw as RawPropertyWithCharts;
       const series = extractZestimateHistory(withCharts);
-      const note = seriesAvailabilityNote({
+      const baseNote = seriesAvailabilityNote({
         empty: series.length === 0,
-        sourcePresent:
-          withCharts.homeValueChartData !== undefined ||
-          withCharts.priceHistory !== undefined,
+        sourcePresent: withCharts.homeValueChartData !== undefined,
         kind: 'Zestimate history',
       });
+      const note =
+        baseNote && withCharts.homeValueChartData === undefined && withCharts.priceHistory?.length
+          ? `${baseNote} This listing does carry listing/sale price events — see zillow_get_price_history (those are prices, not Zestimates).`
+          : baseNote;
       return minifiedResult({
         zpid: String(raw.zpid ?? zpid ?? ''),
         points: series,

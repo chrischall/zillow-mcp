@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { ZillowClient } from '../../src/client.js';
+import { BotWallError } from '../../src/client.js';
 import { registerResolveAddressesTools } from '../../src/tools/resolve-addresses.js';
 import {
   FetchproxyBridgeDownError,
@@ -407,6 +408,199 @@ describe('zillow_resolve_addresses tool', () => {
       await dh.close();
     });
   });
+
+  // fleet-audit#288: every ladder fetch is paced by a per-call RPM token
+  // bucket, and a bot-wall is reported distinctly (never a plain miss).
+  describe('bot-wall governor (fleet-audit#288)', () => {
+    const EMPTY =
+      '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+
+    it('reports a bot-wall block as error_kind bot_challenge with a blocked/retry_after_s envelope', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, { overallDeadlineMs: 2000 })
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        throw new BotWallError(path, 17);
+      });
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: ['126 Sleeping Bear Ln, Lake Lure, NC'],
+      });
+      const parsed = parseToolResult<{
+        blocked?: number;
+        retry_after_s?: number;
+        results: Array<{ resolved: boolean; error_kind?: string; error?: string }>;
+      }>(r);
+      expect(parsed.results[0].resolved).toBe(false);
+      expect(parsed.results[0].error_kind).toBe('bot_challenge');
+      expect(parsed.results[0].error).not.toMatch(/no listing found/i);
+      expect(parsed.blocked).toBe(1);
+      expect(parsed.retry_after_s).toBe(17);
+      await dh.close();
+    });
+
+    it('stops dialling Zillow for the rest of the call once the wall trips', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, { overallDeadlineMs: 2000 })
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        throw new BotWallError(path, 5);
+      });
+      const addresses = Array.from({ length: 12 }, (_, i) => `${100 + i} Oak Dr, Lake Lure, NC`);
+      const r = await dh.callTool('zillow_resolve_addresses', { addresses });
+      const parsed = parseToolResult<{ blocked?: number }>(r);
+      expect(parsed.blocked).toBe(12);
+      // At most one fetch per concurrent runner before the breaker trips.
+      expect(mockFetchHtml.mock.calls.length).toBeLessThanOrEqual(6);
+      await dh.close();
+    });
+
+    it('spends a rate-governor token on every ladder fetch', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, {
+          overallDeadlineMs: 300,
+          ratePerMinute: 60,
+          burst: 2,
+        })
+      );
+      mockFetchHtml.mockResolvedValue(EMPTY);
+      await dh.callTool('zillow_resolve_addresses', {
+        addresses: ['126 Sleeping Bear Ln, Lake Lure, NC', '4521 Mountainview Drive, Lake Lure, NC'],
+      });
+      // burst 2 + 1 token/s over a 300ms deadline → at most 2-3 fetches,
+      // not the dozens a 2-row ladder would otherwise fire.
+      expect(mockFetchHtml.mock.calls.length).toBeLessThanOrEqual(3);
+      await dh.close();
+    });
+
+    // Review follow-up on #288: rung 5's scope resolve used a bare
+    // `catch { return null }`, so a wall hit there — the LAST rung, and the
+    // rural-address path — collapsed onto "no listing found".
+    const SCOPE_PATH = '/homes/Lake%20Lure%20NC_rb/';
+
+    it('reports a wall that trips only on the rung-5 scope fetch as bot_challenge, not a miss', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, {
+          overallDeadlineMs: 2000,
+          ratePerMinute: 100_000,
+          burst: 1000,
+        })
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        if (path === SCOPE_PATH) throw new BotWallError(path, 9);
+        return EMPTY;
+      });
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: ['126 Sleeping Bear Ln, Lake Lure, NC'],
+      });
+      const parsed = parseToolResult<{
+        blocked?: number;
+        retry_after_s?: number;
+        results: Array<{ resolved: boolean; error_kind?: string; error?: string }>;
+      }>(r);
+      expect(mockFetchHtml.mock.calls.map((c) => c[0])).toContain(SCOPE_PATH);
+      expect(parsed.results[0].resolved).toBe(false);
+      expect(parsed.results[0].error_kind).toBe('bot_challenge');
+      expect(parsed.results[0].error).not.toMatch(/no listing found/i);
+      expect(parsed.blocked).toBe(1);
+      expect(parsed.retry_after_s).toBe(9);
+      await dh.close();
+    });
+
+    it('blocks a concurrent row whose next dial after the trip is the rung-5 scope resolve', async () => {
+      const tuning = { overallDeadlineMs: 2000, ratePerMinute: 100_000, burst: 1000 };
+      const rowB = '126 Sleeping Bear Ln, Lake Lure, NC';
+      const rowA = '1 Tripwire Rd, Boone, NC';
+
+      // Dry run: record row B's ladder so we know its last dial before rung 5.
+      const dry = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, tuning)
+      );
+      mockFetchHtml.mockResolvedValue(EMPTY);
+      await dry.callTool('zillow_resolve_addresses', { addresses: [rowB] });
+      await dry.close();
+      const bPaths = mockFetchHtml.mock.calls.map((c) => c[0] as string);
+      const scopeIdx = bPaths.indexOf(SCOPE_PATH);
+      expect(scopeIdx).toBeGreaterThan(0);
+      const lastBeforeScope = bPaths[scopeIdx - 1];
+      mockFetchHtml.mockReset();
+
+      // Row A's first dial hangs until row B reaches its last pre-rung-5
+      // fetch, then trips the wall; row B's in-flight fetch returns a clean
+      // miss, so its NEXT dial — the rung-5 scope resolve — meets the
+      // tripped breaker.
+      let releaseA!: () => void;
+      const aGate = new Promise<void>((res) => (releaseA = res));
+      let aTripped!: () => void;
+      const aDone = new Promise<void>((res) => (aTripped = res));
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        if (/boone/i.test(path)) {
+          await aGate;
+          aTripped();
+          throw new BotWallError(path, 11);
+        }
+        if (path === lastBeforeScope) {
+          releaseA();
+          await aDone;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        return EMPTY;
+      });
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, tuning)
+      );
+      const r = await dh.callTool('zillow_resolve_addresses', { addresses: [rowA, rowB] });
+      const parsed = parseToolResult<{
+        blocked?: number;
+        results: Array<{ address: string; resolved: boolean; error_kind?: string; error?: string }>;
+      }>(r);
+      const b = parsed.results.find((x) => x.address === rowB)!;
+      expect(b.error_kind).toBe('bot_challenge');
+      expect(b.error).not.toMatch(/no listing found/i);
+      expect(parsed.blocked).toBe(2);
+      // Row B never actually dialled the scope path — the breaker stopped it.
+      expect(mockFetchHtml.mock.calls.map((c) => c[0])).not.toContain(SCOPE_PATH);
+      await dh.close();
+    });
+
+    it('surfaces a bridge timeout with error_kind timeout', async () => {
+      const dh = await createTestHarness((server) =>
+        registerResolveAddressesTools(server, mockClient, {
+          overallDeadlineMs: 2000,
+          ratePerMinute: 100_000,
+          burst: 1000,
+        })
+      );
+      mockFetchHtml.mockImplementation(async () => {
+        throw new FetchproxyTimeoutError({ url: '/x', timeoutMs: 30_000 });
+      });
+      const r = await dh.callTool('zillow_resolve_addresses', {
+        addresses: ['126 Sleeping Bear Ln, Lake Lure, NC'],
+      });
+      const parsed = parseToolResult<{ results: Array<{ error_kind?: string }> }>(r);
+      expect(parsed.results[0].error_kind).toBe('timeout');
+      await dh.close();
+    });
+  });
+
+  // fleet-audit#289: after the deadline answers, queued/in-flight ladders
+  // must not keep firing fetches in the background.
+  it('stops issuing ladder fetches after the deadline has returned', async () => {
+    const dh = await createTestHarness((server) =>
+      registerResolveAddressesTools(server, mockClient, { overallDeadlineMs: 100 })
+    );
+    mockFetchHtml.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>';
+    });
+    const addresses = Array.from({ length: 20 }, (_, i) => `${100 + i} Oak Dr, Lake Lure, NC`);
+    const r = await dh.callTool('zillow_resolve_addresses', { addresses });
+    const parsed = parseToolResult<{ pending?: number }>(r);
+    expect(parsed.pending ?? 0).toBeGreaterThan(0);
+    const atReturn = mockFetchHtml.mock.calls.length;
+    await new Promise((res) => setTimeout(res, 400));
+    expect(mockFetchHtml.mock.calls.length).toBe(atReturn);
+    await dh.close();
+  }, 5000);
 
   describe('tool description honesty (issue #80)', () => {
     // Description must (a) surface price_hint as load-bearing, (b) drop
