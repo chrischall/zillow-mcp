@@ -163,6 +163,20 @@ describe('ZillowClient', () => {
     expect(result.echoed.n).toBe(42);
   });
 
+  it('fetchJson forwards retryOnTimeout to the transport only when set (fleet-audit#312)', async () => {
+    const transport = stubTransport(async () => ({
+      status: 200,
+      body: '{}',
+      url: 'https://www.zillow.com/x',
+    }));
+    const client = new ZillowClient({ transport });
+    await client.fetchJson('/read', { body: {}, retryOnTimeout: true });
+    await client.fetchJson('/write', { body: {} });
+    const calls = (transport.requestJson as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][1].retryOnTimeout).toBe(true);
+    expect(calls[1][1].retryOnTimeout).toBeUndefined();
+  });
+
   it('fetchJson defaults to POST when method is omitted', async () => {
     const seen: { method?: string } = {};
     const client = new ZillowClient({

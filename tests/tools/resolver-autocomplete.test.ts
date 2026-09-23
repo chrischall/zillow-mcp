@@ -113,6 +113,13 @@ describe('GetAutocompleteResults request construction (issue #101)', () => {
     expect(headerKeys).not.toContain('cookie');
     expect(init.headers['x-caller-id']).toBe('static-search-page-graphql');
   });
+
+  it('opts the read-only GraphQL query POST into retryOnTimeout (fleet-audit#312)', async () => {
+    mockFetchJson.mockResolvedValue(sanitizedAutocomplete([]));
+    await fetchAutocompleteAddressCandidates(mockClient, '3538 tre');
+    const [, init] = mockFetchJson.mock.calls[0];
+    expect(init.retryOnTimeout).toBe(true);
+  });
 });
 
 describe('GetAutocompleteResults candidate parsing (issue #101)', () => {

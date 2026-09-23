@@ -219,6 +219,19 @@ describe('FetchproxyTransport', () => {
     expect(mock.requestJson.mock.calls[0][0]).toBe('POST');
   });
 
+  it('requestJson() forwards retryOnTimeout only when the caller opts in (fleet-audit#312)', async () => {
+    const mock = makeMockServer();
+    mock.requestJson.mockResolvedValue({
+      data: null,
+      result: { ok: true, status: 204, url: 'https://www.zillow.com/x', body: '' },
+    });
+    const { transport } = makeTransport(mock);
+    await transport.requestJson('/read', { method: 'POST', body: {}, retryOnTimeout: true });
+    await transport.requestJson('/write', { method: 'POST', body: {} });
+    expect(mock.requestJson.mock.calls[0][2].retryOnTimeout).toBe(true);
+    expect(mock.requestJson.mock.calls[1][2].retryOnTimeout).toBeUndefined();
+  });
+
   it('runProbe() delegates to inner.runProbe() with the same fetchFn + path (0.10.0)', async () => {
     const mock = makeMockServer();
     const probeResult = {
