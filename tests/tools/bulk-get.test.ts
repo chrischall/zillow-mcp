@@ -386,6 +386,44 @@ describe('zillow_bulk_get tool', () => {
       expect(elapsed).toBeLessThan(3000);
     }, 5000);
 
+    // fleet-audit#289: once the deadline has answered, the queued rows
+    // must NOT keep dialling homedetails through the user's browser in the
+    // background (their results are discarded anyway).
+    it('stops starting new fetches after the deadline has returned', async () => {
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        await new Promise((r) => setTimeout(r, 40));
+        const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+        const zpid = m ? parseInt(m[1], 10) : 0;
+        return htmlWith({ zpid, price: zpid });
+      });
+      const zpids = Array.from({ length: 60 }, (_, i) => i + 1);
+      const r = await harness.callTool('zillow_bulk_get', { zpids });
+      const parsed = parseToolResult<{ pending?: number }>(r);
+      expect(parsed.pending ?? 0).toBeGreaterThan(0);
+      const atReturn = mockFetchHtml.mock.calls.length;
+      await new Promise((res) => setTimeout(res, 400));
+      expect(mockFetchHtml.mock.calls.length).toBe(atReturn);
+    }, 5000);
+
+    it('stops captcha retries once the deadline has returned', async () => {
+      const dh = await createTestHarness((server) =>
+        registerBulkGetTools(server, mockClient, {
+          ...FAST_TUNING,
+          backoffBaseMs: 150,
+          backoffCapMs: 150,
+          overallDeadlineMs: 100,
+        })
+      );
+      mockFetchHtml.mockImplementation(async (path: string) => {
+        throw new BotWallError(path, 0);
+      });
+      await dh.callTool('zillow_bulk_get', { zpids: [1] });
+      const atReturn = mockFetchHtml.mock.calls.length;
+      await new Promise((res) => setTimeout(res, 600));
+      expect(mockFetchHtml.mock.calls.length).toBe(atReturn);
+      await dh.close();
+    }, 5000);
+
     it('all rows resolving before the deadline → no pending marker', async () => {
       mockFetchHtml.mockImplementation(async (path: string) => {
         const m = /\/homedetails\/(\d+)_zpid/.exec(path);
