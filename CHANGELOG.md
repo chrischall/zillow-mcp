@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/chrischall/zillow-mcp/compare/v1.1.1...v1.1.2) (2026-09-23)
+
+
+### Bug Fixes
+
+* resolver false matches, Zestimate history, search pagination, and resolve/bulk bot-wall + deadline handling ([#266](https://github.com/chrischall/zillow-mcp/issues/266)) ([58cbd1e](https://github.com/chrischall/zillow-mcp/commit/58cbd1ea9106c36f0cd2efb3769a39d0e190213b))
+
 ## [1.1.1](https://github.com/chrischall/zillow-mcp/compare/v1.1.0...v1.1.1) (2026-09-23)
 
 
