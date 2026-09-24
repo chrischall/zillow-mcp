@@ -67,6 +67,9 @@ export function computeAffordability(
 
 // ---- Rent vs buy -----------------------------------------------------
 
+/** Upper bound on horizon_years / loan_term_years (fleet-audit #809). */
+export const MAX_YEARS = 50;
+
 export interface RentVsBuyInput {
   home_price: number;
   down_payment: number;
@@ -125,8 +128,15 @@ export function computeRentVsBuy(input: RentVsBuyInput): RentVsBuyResult {
     throw new Error('monthly_rent must be positive');
   const horizon = input.horizon_years ?? 7;
   if (horizon <= 0) throw new Error('horizon_years must be positive');
+  if (horizon > MAX_YEARS)
+    throw new Error(`horizon_years must be at most ${MAX_YEARS}`);
+  if (input.down_payment > input.home_price)
+    throw new Error('down_payment must not exceed home_price');
 
   const term_years = input.loan_term_years ?? 30;
+  if (term_years <= 0) throw new Error('loan_term_years must be positive');
+  if (term_years > MAX_YEARS)
+    throw new Error(`loan_term_years must be at most ${MAX_YEARS}`);
   const r = input.interest_rate / 100 / 12;
   const n = term_years * 12;
   const loan = Math.max(0, input.home_price - input.down_payment);
@@ -153,23 +163,25 @@ export function computeRentVsBuy(input: RentVsBuyInput): RentVsBuyResult {
   let final_net_after_sale = 0;
 
   for (let y = 1; y <= horizon; y++) {
-    // 12 months of payments
-    const year_pi = monthly_pi * 12;
-    const year_tax = home_value * tax_rate;
-    const year_maint = home_value * maint_rate;
-    cum_buy += year_pi + year_tax + insurance + hoa + year_maint;
-
-    // Pay down principal: compute interest portion + principal portion
-    let interest_paid = 0;
-    let principal_paid = 0;
+    // 12 months of payments. P&I is charged as actually paid by the
+    // amortisation below, so it stops once the loan is paid off (a horizon
+    // longer than the term no longer bills P&I on a loan that is gone).
+    let year_pi = 0;
     for (let m = 0; m < 12; m++) {
+      if (principal_remaining <= 0) break;
       const int_m = principal_remaining * r;
       const pi_m = Math.min(monthly_pi, principal_remaining + int_m);
       const prin_m = pi_m - int_m;
       principal_remaining = Math.max(0, principal_remaining - prin_m);
-      interest_paid += int_m;
-      principal_paid += prin_m;
+      year_pi += pi_m;
     }
+    // Float residue of the last payment can leave a sub-cent balance;
+    // treat it as paid off so it doesn't bill one more month next year.
+    if (principal_remaining < 0.005) principal_remaining = 0;
+
+    const year_tax = home_value * tax_rate;
+    const year_maint = home_value * maint_rate;
+    cum_buy += year_pi + year_tax + insurance + hoa + year_maint;
 
     // Rent + grow rent
     const year_rent = input.monthly_rent * 12 * Math.pow(1 + rent_growth, y - 1);
@@ -277,7 +289,7 @@ export function registerAffordabilityTools(server: McpServer): void {
         home_price: z.number().positive(),
         down_payment: z.number().nonnegative(),
         interest_rate: z.number().nonnegative(),
-        loan_term_years: z.number().int().positive().optional(),
+        loan_term_years: z.number().int().positive().max(MAX_YEARS).optional().describe(`Default 30, max ${MAX_YEARS}`),
         property_tax_rate: z.number().nonnegative().optional(),
         insurance_annual: z.number().nonnegative().optional(),
         hoa_monthly: z.number().nonnegative().optional(),
@@ -295,8 +307,9 @@ export function registerAffordabilityTools(server: McpServer): void {
           .number()
           .int()
           .positive()
+          .max(MAX_YEARS)
           .optional()
-          .describe('Default 7'),
+          .describe(`Default 7, max ${MAX_YEARS}`),
       }),
     },
     async (input) => minifiedResult(computeRentVsBuy(input as RentVsBuyInput))
