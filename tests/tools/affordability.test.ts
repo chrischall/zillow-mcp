@@ -145,6 +145,57 @@ describe('computeRentVsBuy', () => {
       })
     ).toThrow(/monthly_rent/);
   });
+
+  it('stops charging P&I once the loan is paid off (horizon > loan term)', () => {
+    // fleet-audit #968: years past the term kept adding monthly_pi * 12.
+    const base = {
+      home_price: 400_000,
+      down_payment: 80_000,
+      interest_rate: 6.5,
+      monthly_rent: 2500,
+      loan_term_years: 15,
+    };
+    const r = computeRentVsBuy({ ...base, horizon_years: 20 });
+    const loan = 320_000;
+    const mr = 0.065 / 12;
+    const n = 15 * 12;
+    const annualPi = ((loan * mr * Math.pow(1 + mr, n)) / (Math.pow(1 + mr, n) - 1)) * 12;
+    expect(r.yearly[14].remaining_mortgage).toBe(0);
+    const delta = (i: number) =>
+      r.yearly[i].cumulative_buy_cost - r.yearly[i - 1].cumulative_buy_cost;
+    // Year 16 outflow is only tax + insurance + HOA + maintenance: it must
+    // drop by (roughly) the annual P&I versus year 15, not keep growing.
+    expect(delta(14) - delta(15)).toBeGreaterThan(annualPi * 0.9);
+    // Year 16+ deltas carry no P&I at all: tax (1.1%) + maint (1%) of value.
+    for (let i = 15; i < 20; i++) {
+      const prevValue = r.yearly[i - 1].home_value;
+      expect(delta(i)).toBeCloseTo(prevValue * 0.021, 0);
+    }
+  });
+
+  it('total P&I paid over the full term equals the amortised payments', () => {
+    const r = computeRentVsBuy({
+      home_price: 300_000,
+      down_payment: 60_000,
+      interest_rate: 0,
+      monthly_rent: 2000,
+      loan_term_years: 10,
+      horizon_years: 12,
+      property_tax_rate: 0,
+      maintenance_rate: 0,
+      closing_cost_rate: 0,
+    });
+    // 0% interest: cash outflow is exactly the down payment + the loan.
+    expect(r.yearly[9].cumulative_buy_cost).toBeCloseTo(300_000, 2);
+    expect(r.yearly[11].cumulative_buy_cost).toBeCloseTo(300_000, 2);
+  });
+
+  it('rejects unbounded horizons / terms and a down payment above price', () => {
+    const base = { home_price: 300_000, down_payment: 60_000, interest_rate: 6, monthly_rent: 2000 };
+    expect(() => computeRentVsBuy({ ...base, horizon_years: 51 })).toThrow(/horizon_years/);
+    expect(() => computeRentVsBuy({ ...base, loan_term_years: 51 })).toThrow(/loan_term_years/);
+    expect(() => computeRentVsBuy({ ...base, down_payment: 300_001 })).toThrow(/down_payment/);
+  });
 });
 
 describe('affordability tools — MCP integration', () => {
@@ -187,5 +238,16 @@ describe('affordability tools — MCP integration', () => {
     }>(r);
     expect(parsed.horizon_years).toBe(7);
     expect(parsed.yearly).toHaveLength(7);
+  });
+
+  it('zillow_estimate_rent_vs_buy rejects horizon_years above the cap', async () => {
+    const r = await h.callTool('zillow_estimate_rent_vs_buy', {
+      home_price: 600_000,
+      down_payment: 120_000,
+      interest_rate: 6.5,
+      monthly_rent: 3000,
+      horizon_years: 51,
+    });
+    expect(r.isError).toBe(true);
   });
 });
