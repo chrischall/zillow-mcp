@@ -40,6 +40,10 @@ import { minifiedResult } from '@chrischall/mcp-utils';
  * NET-if-sold figure. Projecting the canonical result back to this tool's
  * output would be a lossy adapter that changes the
  * `zillow_estimate_rent_vs_buy` contract, so we keep zillow's model.
+ * Because it is a separate copy, fixes to realty-core's model do NOT
+ * reach it automatically — e.g. P&I must stop at loan payoff (it is
+ * accumulated from the amortisation loop, fleet-audit #968); keep the
+ * two in step by hand.
  */
 
 // ---- Affordability ---------------------------------------------------
@@ -278,7 +282,7 @@ export function registerAffordabilityTools(server: McpServer): void {
     {
       title: 'Estimate rent-vs-buy break-even over a horizon',
       description:
-        "Project the cumulative cost of buying a home versus renting a comparable place over N years. Accounts for down payment, closing costs, monthly PITI, maintenance (~1%/yr default), property appreciation (~3%/yr default), rent growth (~3%/yr default), and the opportunity cost of the down payment (renter invests it at the investment_return_rate, default 6%/yr). Returns the year-by-year cumulative costs, the break-even year, and the net difference at the horizon. No network — pure local math.",
+        "Project the cumulative cost of buying a home versus renting a comparable place over N years. Accounts for down payment, closing costs, monthly PITI, maintenance (~1%/yr default), property appreciation (~3%/yr default), rent growth (~3%/yr default), and the opportunity cost of the down payment (renter invests it at the investment_return_rate, default 6%/yr). Mortgage P&I stops once the loan is paid off, so horizons longer than the loan term are handled. horizon_years and loan_term_years are capped at 50. Returns the year-by-year cumulative costs, the break-even year, and the net difference at the horizon. No network — pure local math.",
       annotations: {
         title: 'Estimate rent-vs-buy break-even over a horizon',
         readOnlyHint: true,
