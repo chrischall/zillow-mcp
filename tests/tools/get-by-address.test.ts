@@ -159,6 +159,31 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.zip).toBe('28746');
   });
 
+  it('rejects the opposite-directional house instead of resolving to it (realty-core 0.4.8)', async () => {
+    // Every rung comes back with 126 S Main St. realty-core <=0.4.2 ignored
+    // directionals, so "126 N Main St" scored a perfect match and the tool
+    // returned the wrong house; 0.4.8 treats N vs S as a different street.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithFirstListing({
+        zpid: 555000126,
+        detailUrl: '/homedetails/126-S-Main-St-Marion-NC-28752/555000126_zpid/',
+        streetAddress: '126 S Main St',
+        city: 'Marion',
+        state: 'NC',
+        zipcode: '28752',
+      })
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '126 N Main St',
+      city: 'Marion',
+      state: 'NC',
+      zip: '28752',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(result);
+    expect(parsed.zpid).not.toBe('555000126');
+    expect(parsed.resolved).toBe(false);
+  });
+
   it('resolves a unit-bearing address to the street listing (realty-core 0.4.8)', async () => {
     // Zillow returns the street line only. realty-core <0.4.8 anchored on
     // EVERY number, so the unit id "5" in "Apt 5" had to appear in the
