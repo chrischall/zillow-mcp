@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.3](https://github.com/chrischall/zillow-mcp/compare/v1.1.2...v1.1.3) (2026-09-25)
+
+
+### Bug Fixes
+
+* **deps:** take realty-core 0.4.8 address matching (wrong house, unit numbers) ([#272](https://github.com/chrischall/zillow-mcp/issues/272)) ([fa78e51](https://github.com/chrischall/zillow-mcp/commit/fa78e518e76889bb48e35ec4c55df78f9d865d83))
+* **rent-vs-buy:** stop charging mortgage payments after the loan is paid off ([#270](https://github.com/chrischall/zillow-mcp/issues/270)) ([1ef336c](https://github.com/chrischall/zillow-mcp/commit/1ef336c5ae5077b3258cecd28aad2d91c47059e4))
+
 ## [1.1.2](https://github.com/chrischall/zillow-mcp/compare/v1.1.1...v1.1.2) (2026-09-23)
 
 
