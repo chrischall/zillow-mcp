@@ -159,6 +159,32 @@ describe('zillow_get_by_address tool', () => {
     expect(parsed.zip).toBe('28746');
   });
 
+  it('resolves a unit-bearing address to the street listing (realty-core 0.4.8)', async () => {
+    // Zillow returns the street line only. realty-core <0.4.8 anchored on
+    // EVERY number, so the unit id "5" in "Apt 5" had to appear in the
+    // listing and the right house was hard-rejected.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithFirstListing({
+        zpid: 102228838,
+        detailUrl:
+          '/homedetails/126-Sleeping-Bear-Ln-Lake-Lure-NC-28746/102228838_zpid/',
+        streetAddress: '126 Sleeping Bear Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      })
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '126 Sleeping Bear Ln Apt 5',
+      city: 'Lake Lure',
+      state: 'NC',
+      zip: '28746',
+    });
+    const unitParsed = parseToolResult<{ resolved: boolean; zpid?: string; via?: string }>(result);
+    expect(unitParsed.resolved).toBe(true);
+    expect(unitParsed.zpid).toBe('102228838');
+  });
+
   it('returns resolved=false when no listing comes back', async () => {
     mockFetchHtml.mockResolvedValue(
       '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>'
