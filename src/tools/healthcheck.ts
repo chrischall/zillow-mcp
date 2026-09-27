@@ -11,7 +11,7 @@ import {
  * and no real search, whether:
  *
  *   - zillow-mcp's WebSocket bridge is up (`bridge.role` non-null)
- *   - the fetchproxy browser extension is connected (request reaches a tab
+ *   - the ContextMint Bridge browser extension is connected (request reaches a tab
  *     and a response comes back)
  *   - the active zillow.com tab is responsive (the fetch resolved in time)
  *
@@ -23,7 +23,9 @@ import {
  *
  *   - `classifyThrown` preserves this MCP's `other` kind for a non-bridge
  *     error (the shared tool maps fetchproxy's raw `other` → `unknown`);
- *     fetchproxy-typed errors keep the shared classification.
+ *     fetchproxy-typed errors keep the shared classification — including
+ *     `capability_unavailable` (this browser can't serve the verb) and
+ *     `capability_denied` (an undeclared capability: an MCP bug).
  *   - `hints` carries the Zillow-flavored copy for the `ok` / `protocol` arms.
  *     The rest of the ladder (`timeout` / `bridge_down` / `no_role`) uses the
  *     shared default, which already interpolates the live role, the REAL bridge
@@ -51,8 +53,13 @@ export function registerHealthcheckTools(
     },
     // Exercise the same client path real tools use (sign-in + bot-wall guards).
     probeFn: (path) => client.fetchHtml(path),
+    // Only claim errors fetchproxy didn't type: its own (protocol, hello
+    // rejected, session not ready, capability gaps) keep the shared labels.
     classifyThrown: (err) =>
-      err instanceof FetchproxyProtocolError ? undefined : { kind: 'other' },
+      err instanceof FetchproxyProtocolError ||
+      (err instanceof Error && err.name.startsWith('Fetchproxy'))
+        ? undefined
+        : { kind: 'other' },
     hints: {
       ok: `Bridge round-tripped ${PROBE_PATH} successfully. If real tools still hang, the problem is downstream of fetchproxy (Zillow redirecting on login, DataDome captcha, etc.) — not the bridge.`,
       protocol: `The bridge returned a protocol error before any HTTP response. Most commonly: no zillow.com tab is open, or the extension declined the request. Open zillow.com, sign in, and retry.`,

@@ -3,6 +3,8 @@ import type { ZillowClient } from '../../src/client.js';
 import { registerHealthcheckTools } from '../../src/tools/healthcheck.js';
 import {
   FetchproxyBridgeDownError,
+  FetchproxyCapabilityUnavailableError,
+  FetchproxyHelloRejectedError,
   FetchproxyProtocolError,
   FetchproxyTimeoutError,
   classifyBridgeError,
@@ -139,7 +141,7 @@ describe('zillow_healthcheck tool', () => {
     // The bridge role at failure is still in `bridge.role` (the shared tool
     // no longer duplicates it as `error.role_at_failure`).
     expect(parsed.bridge.role).toBe('peer');
-    expect(parsed.hint).toMatch(/extension popup/i);
+    expect(parsed.hint).toMatch(/open the ContextMint Bridge popup/);
   });
 
   it('bridge_down hint wins over the generic role=null hint when both apply', async () => {
@@ -162,7 +164,7 @@ describe('zillow_healthcheck tool', () => {
     const r = await harness.callTool('zillow_healthcheck', {});
     const parsed = parseToolResult<{ error: { kind: string }; hint: string }>(r);
     expect(parsed.error.kind).toBe('bridge_down');
-    expect(parsed.hint).toMatch(/service worker/i);
+    expect(parsed.hint).toMatch(/ContextMint Bridge's service worker is not responding/);
     expect(parsed.hint).not.toMatch(/never bound a role/);
   });
 
@@ -239,7 +241,49 @@ describe('zillow_healthcheck tool', () => {
     }>(r);
     expect(parsed.ok).toBe(false);
     expect(parsed.error.kind).toBe('bridge_down');
-    expect(parsed.hint).toMatch(/service worker/i);
+    expect(parsed.hint).toMatch(/ContextMint Bridge's service worker is not responding/);
+  });
+
+  // mcp-utils 2.8: a browser that lacks the API a verb needs (e.g. Safari) is
+  // labelled capability_unavailable — the browser's gap, not zillow-mcp's bug.
+  it('classifies a FetchproxyCapabilityUnavailableError as capability_unavailable, blaming the browser not the MCP', async () => {
+    const client = stubClient({
+      fetchHtml: vi.fn().mockRejectedValue(
+        new FetchproxyCapabilityUnavailableError(
+          'capability "fetch" is not available in this browser (safari)',
+          { capability: 'fetch', platform: 'safari' }
+        )
+      ),
+    });
+    harness = await createTestHarness((server) =>
+      registerHealthcheckTools(server, client)
+    );
+    const r = await harness.callTool('zillow_healthcheck', {});
+    const parsed = parseToolResult<{ ok: boolean; error: { kind: string }; hint: string }>(r);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.kind).toBe('capability_unavailable');
+    expect(parsed.hint).toMatch(/can't serve/);
+    expect(parsed.hint).toMatch(/The MCP isn't at fault/);
+  });
+
+  it('keeps capability_unavailable for a hello rejected over unsupported capabilities (not re-kinded to other)', async () => {
+    const client = stubClient({
+      fetchHtml: vi.fn().mockRejectedValue(
+        new FetchproxyHelloRejectedError({
+          mcpId: 'zillow-mcp',
+          reason: 'unsupported-capability: fetch (not available in this browser)',
+          platform: 'safari',
+        })
+      ),
+    });
+    harness = await createTestHarness((server) =>
+      registerHealthcheckTools(server, client)
+    );
+    const r = await harness.callTool('zillow_healthcheck', {});
+    const parsed = parseToolResult<{ ok: boolean; error: { kind: string }; hint: string }>(r);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.kind).toBe('capability_unavailable');
+    expect(parsed.hint).toMatch(/The MCP isn't at fault/);
   });
 
   it('surfaces freshness counters (last_success_at, last_failure_at, consecutive_failures, last_extension_message_at)', async () => {

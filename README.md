@@ -104,7 +104,7 @@ npm run build
 zillow-mcp talks to your browser through the **ContextMint Bridge** extension, which is shared across every fetchproxy-based MCP (resy-mcp, opentable-mcp, …). Install it once from the [ContextMint Bridge releases](https://github.com/nullnet-app/contextmint-bridge/releases):
 
 - **Chrome:** download the Chrome zip, unzip it, then `chrome://extensions` → toggle Developer mode → Load unpacked → pick the unzipped folder.
-- **Safari:** the bridge ships inside the ContextMint app, which has no public download link yet; once installed, enable the extension in Safari's settings.
+- **Safari:** not available yet — it will ship inside the ContextMint app, which has no public download. Use Chrome for now.
 
 ContextMint Bridge is the fetchproxy browser extension under its new name, from the same maintainer — fetchproxy's own README ([Install → Extension](https://github.com/chrischall/fetchproxy#extension)) points to it. Its source is public at [nullnet-app/contextmint-bridge](https://github.com/nullnet-app/contextmint-bridge): build it yourself (see that repo's README), or check a release zip against the `.sha256` file published beside it before loading it — `shasum -a 256 -c contextmint-bridge-chrome-<version>.zip.sha256`.
 
