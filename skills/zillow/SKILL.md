@@ -34,7 +34,9 @@ MCP server for Zillow — natural-language access to listings, property records,
 Get it from the [ContextMint Bridge releases](https://github.com/nullnet-app/contextmint-bridge/releases):
 
 - **Chrome:** download the Chrome zip, unzip it, then `chrome://extensions` → Developer mode → Load unpacked → pick the unzipped folder.
-- **Safari:** the bridge ships inside the ContextMint app — install the app and enable the extension in Safari's settings.
+- **Safari:** the bridge ships inside the ContextMint app, which has no public download link yet; once installed, enable the extension in Safari's settings.
+
+ContextMint Bridge is the renamed fetchproxy extension from the same maintainer (source: [nullnet-app/contextmint-bridge](https://github.com/nullnet-app/contextmint-bridge)); build it yourself or verify the zip with `shasum -a 256 -c contextmint-bridge-chrome-<version>.zip.sha256`.
 
 ### 3. Open zillow.com and sign in.
 

@@ -107,7 +107,7 @@ node dist/bundle.js    # launch the MCP server over stdio (also opens WS)
 
 ## Environment
 
-No env vars required. Auth lives in the user's signed-in zillow.com tab via the fetchproxy extension.
+No env vars required. Auth lives in the user's signed-in zillow.com tab via the ContextMint Bridge extension (the renamed fetchproxy extension, source at https://github.com/nullnet-app/contextmint-bridge).
 
 Optional:
 

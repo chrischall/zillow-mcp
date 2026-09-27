@@ -35,7 +35,9 @@ fpx pair -p zillow                         # prints a pair code → approve in C
 Requirements: the **ContextMint Bridge** browser extension installed
 ([releases](https://github.com/nullnet-app/contextmint-bridge/releases)), with an
 open `www.zillow.com` tab, and its Chrome **Site access** allowing
-`zillow.com`. For the saved-searches/saved-homes calls, that tab must
+`zillow.com`. (ContextMint Bridge is the renamed fetchproxy extension from the
+same maintainer; build it from source or verify the release zip with
+`shasum -a 256 -c contextmint-bridge-chrome-<version>.zip.sha256`.) For the saved-searches/saved-homes calls, that tab must
 also be **signed in**. Pairing persists — after the first approval every
 later `fpx` call reuses it.
 
