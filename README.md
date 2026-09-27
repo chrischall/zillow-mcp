@@ -6,7 +6,7 @@
 
 Zillow real-estate access as an MCP server for Claude — search listings, fetch property details, Zestimate history, your saved searches & homes, and market reports via natural language.
 
-> ⚠️ Zillow does not publish a public consumer API. The official [Bridge API](https://www.bridgeinteractive.com/developers/bridge-api/) is gated to MLS partners. This server uses the same private endpoints the zillow.com web app uses, routed through your own signed-in browser tab via the [fetchproxy](https://github.com/chrischall/fetchproxy) extension. Every request acts on behalf of your existing session — your cookies, your TLS, your JS context — exactly as if you'd clicked it in the browser yourself. Treat this as informal use of Zillow's website. Use at your own discretion.
+> ⚠️ Zillow does not publish a public consumer API. The official [Bridge API](https://www.bridgeinteractive.com/developers/bridge-api/) is gated to MLS partners. This server uses the same private endpoints the zillow.com web app uses, routed through your own signed-in browser tab via the [ContextMint Bridge](https://github.com/nullnet-app/contextmint-bridge) browser extension. Every request acts on behalf of your existing session — your cookies, your TLS, your JS context — exactly as if you'd clicked it in the browser yourself. Treat this as informal use of Zillow's website. Use at your own discretion.
 
 ## Why this exists
 
@@ -46,7 +46,7 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 
 By using this MCP server, you acknowledge and agree to the following:
 
-**1. This server accesses your own Zillow session.** Every request is dispatched through your own browser tab (logged in or not) via the fetchproxy extension. It does not — and cannot — access anyone else's account.
+**1. This server accesses your own Zillow session.** Every request is dispatched through your own browser tab (logged in or not) via the ContextMint Bridge extension. It does not — and cannot — access anyone else's account.
 
 **2. [Zillow's Terms of Use](https://www.zillow.com/z/corp/terms/) govern your use of this server**, just as they govern your direct use of zillow.com. The clauses most relevant here:
 
@@ -101,16 +101,10 @@ npm run build
 
 ### One-time browser setup
 
-zillow-mcp talks to your browser through the [fetchproxy](https://github.com/chrischall/fetchproxy) extension, which is shared across every fetchproxy-based MCP (resy-mcp, opentable-mcp, …). Install it once:
+zillow-mcp talks to your browser through the **ContextMint Bridge** extension, which is shared across every fetchproxy-based MCP (resy-mcp, opentable-mcp, …). Install it once from the [ContextMint Bridge releases](https://github.com/nullnet-app/contextmint-bridge/releases):
 
-```bash
-git clone https://github.com/chrischall/fetchproxy
-cd fetchproxy
-npm ci
-npm --workspace=@fetchproxy/extension-chrome run build
-```
-
-Then in Chrome: `chrome://extensions` → toggle Developer mode → Load unpacked → pick `packages/extension-chrome/dist/`.
+- **Chrome:** download the Chrome zip, unzip it, then `chrome://extensions` → toggle Developer mode → Load unpacked → pick the unzipped folder.
+- **Safari:** the bridge ships inside the ContextMint app — install the app and enable the extension in Safari's settings.
 
 Open zillow.com and sign in. That's all the auth this server needs.
 
@@ -118,12 +112,12 @@ Open zillow.com and sign in. That's all the auth this server needs.
 
 ```
 ┌────────────────┐  stdio   ┌──────────────────┐   WS   ┌──────────────────┐    fetch()    ┌─────────────┐
-│ MCP client     │◀────────▶│  dist/bundle.js  │◀──────▶│  fetchproxy      │◀────────────▶│ zillow.com  │
-│ (Claude, etc.) │          │  (Zillow MCP)    │ :37149 │  extension       │   (real TLS, │ (your tab)  │
+│ MCP client     │◀────────▶│  dist/bundle.js  │◀──────▶│  ContextMint     │◀────────────▶│ zillow.com  │
+│ (Claude, etc.) │          │  (Zillow MCP)    │ :37149 │  Bridge          │   (real TLS, │ (your tab)  │
 └────────────────┘          └──────────────────┘        │  (separate)      │   cookies)    └─────────────┘
 ```
 
-The MCP server runs in Node, but every HTTP call to zillow.com is dispatched into your live browser tab through the fetchproxy extension. Each request rides your existing session — `_abck`, TLS fingerprint, and cookies all match the page that's already on screen. No headless browser stand-in, no separate identity, no third-party proxy: just your real browser, acting on its own behalf, with the MCP server picking what to ask for.
+The MCP server runs in Node, but every HTTP call to zillow.com is dispatched into your live browser tab through the ContextMint Bridge extension. Each request rides your existing session — `_abck`, TLS fingerprint, and cookies all match the page that's already on screen. No headless browser stand-in, no separate identity, no third-party proxy: just your real browser, acting on its own behalf, with the MCP server picking what to ask for.
 
 ## Commands
 

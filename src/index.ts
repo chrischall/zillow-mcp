@@ -3,9 +3,9 @@
 //
 // Boot sequence:
 //   1. Construct a FetchproxyTransport listening on 127.0.0.1:37149.
-//      The shared fetchproxy Chrome/Safari extension — installed
+//      The shared ContextMint Bridge Chrome/Safari extension — installed
 //      separately, not in this repo — connects here.
-//      See https://github.com/chrischall/fetchproxy.
+//      See https://github.com/nullnet-app/contextmint-bridge/releases.
 //   2. ZillowClient.start() — brings the transport up.
 //   3. runMcp() — builds the MCP server, applies every tool registrar,
 //      prints the stderr banner, wires SIGINT/SIGTERM to close the
@@ -85,7 +85,7 @@ await runMcp({
   deps: client,
   banner:
     `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${port ?? 37149}. ` +
-    'Install the fetchproxy extension (see https://github.com/chrischall/fetchproxy) ' +
+    'Install the ContextMint Bridge extension (see https://github.com/nullnet-app/contextmint-bridge/releases) ' +
     'and sign into zillow.com. This project was developed and is maintained by AI (Claude). ' +
     'Use at your own discretion.',
   shutdown: { onSignal: () => client.close() },

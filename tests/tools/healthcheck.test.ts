@@ -294,7 +294,7 @@ describe('zillow_healthcheck tool', () => {
   // recovery guidance instead of paraphrasing the bare error message.
   it("surfaces the bridge-down error's .hint in the response's top-level hint", async () => {
     const BRIDGE_HINT =
-      'Click the fetchproxy extension icon to wake its service worker, then retry.';
+      'Click the ContextMint Bridge icon to wake its service worker, then retry.';
     const err = new FetchproxyBridgeDownError({
       originalError: 'Could not establish connection.',
       retryAttempted: true,

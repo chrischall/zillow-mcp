@@ -1,16 +1,16 @@
 ---
 name: zillow
-description: Look up real-estate listings, property details, Zestimates, saved searches/homes, and market reports on Zillow via MCP. Triggers on phrases like "find homes in", "what's the Zestimate for", "show my saved Zillow homes", "what's my saved Zillow search seeing", "what does Zillow say about", "Zillow market report for", or any request involving Zillow properties, prices, or your saved Zillow activity. Requires zillow-mcp installed and the fetchproxy extension active (see Setup below).
+description: Look up real-estate listings, property details, Zestimates, saved searches/homes, and market reports on Zillow via MCP. Triggers on phrases like "find homes in", "what's the Zestimate for", "show my saved Zillow homes", "what's my saved Zillow search seeing", "what does Zillow say about", "Zillow market report for", or any request involving Zillow properties, prices, or your saved Zillow activity. Requires zillow-mcp installed and the ContextMint Bridge extension active (see Setup below).
 ---
 
 # zillow-mcp
 
-MCP server for Zillow — natural-language access to listings, property records, Zestimates, your saved searches/homes, and market reports. Routes through your signed-in zillow.com tab via the fetchproxy browser extension, so Akamai sees a real browser session instead of a Node process.
+MCP server for Zillow — natural-language access to listings, property records, Zestimates, your saved searches/homes, and market reports. Routes through your signed-in zillow.com tab via the ContextMint Bridge browser extension, so Akamai sees a real browser session instead of a Node process.
 
 - **npm:** [npmjs.com/package/zillow-mcp](https://www.npmjs.com/package/zillow-mcp)
 - **Source:** [github.com/chrischall/zillow-mcp](https://github.com/chrischall/zillow-mcp)
 
-> ⚠️ Zillow does not publish a public consumer API. This server uses the same private endpoints the zillow.com web app calls, dispatched through your own signed-in browser tab via the fetchproxy extension. Use at your own discretion.
+> ⚠️ Zillow does not publish a public consumer API. This server uses the same private endpoints the zillow.com web app calls, dispatched through your own signed-in browser tab via the ContextMint Bridge extension. Use at your own discretion.
 
 ## Setup
 
@@ -29,16 +29,12 @@ MCP server for Zillow — natural-language access to listings, property records,
 }
 ```
 
-### 2. Install the fetchproxy extension (one-time, shared across all fetchproxy-based MCPs)
+### 2. Install the ContextMint Bridge extension (one-time, shared across all fetchproxy-based MCPs)
 
-```bash
-git clone https://github.com/chrischall/fetchproxy
-cd fetchproxy
-npm ci
-npm --workspace=@fetchproxy/extension-chrome run build
-```
+Get it from the [ContextMint Bridge releases](https://github.com/nullnet-app/contextmint-bridge/releases):
 
-Then in Chrome: `chrome://extensions` → Developer mode → Load unpacked → pick `packages/extension-chrome/dist/`.
+- **Chrome:** download the Chrome zip, unzip it, then `chrome://extensions` → Developer mode → Load unpacked → pick the unzipped folder.
+- **Safari:** the bridge ships inside the ContextMint app — install the app and enable the extension in Safari's settings.
 
 ### 3. Open zillow.com and sign in.
 
