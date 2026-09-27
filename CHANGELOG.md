@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.4](https://github.com/chrischall/zillow-mcp/compare/v1.1.3...v1.1.4) (2026-09-27)
+
+
+### Bug Fixes
+
+* **deps:** move to [@fetchproxy](https://github.com/fetchproxy) 3.4 for ContextMint Bridge errors, capability subsets and managed pins ([#274](https://github.com/chrischall/zillow-mcp/issues/274)) ([6c27728](https://github.com/chrischall/zillow-mcp/commit/6c2772837dacbd38deccffe251538385aec0971f))
+* **deps:** move to @chrischall/mcp-utils 2.8 and [@fetchproxy](https://github.com/fetchproxy) 3.4.1 for clearer browser-bridge errors ([#277](https://github.com/chrischall/zillow-mcp/issues/277)) ([0eed4a5](https://github.com/chrischall/zillow-mcp/commit/0eed4a5d17f8eb0cb46dbd8e04acd31a0485ed65))
+
 ## [1.1.3](https://github.com/chrischall/zillow-mcp/compare/v1.1.2...v1.1.3) (2026-09-25)
 
 
