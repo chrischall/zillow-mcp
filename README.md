@@ -38,8 +38,8 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | `zillow_get_market_report` | Median sale/list/rent, days on market, inventory, ZHVI for a region | |
 | `zillow_calculate_mortgage` | Local PITI calculator — principal+interest, taxes, insurance, HOA, PMI (no network) | |
 | `zillow_healthcheck` | Round-trip a public Zillow URL through the bridge to localize bridge/extension/Zillow-side failures | |
-| `zillow_register_session` | Register a named Zillow session (bridge port) in the local session registry | |
-| `zillow_set_active_session` | Switch which registered session subsequent tool calls route through | |
+| `zillow_register_session` | Record which Zillow account the signed-in tab belongs to, in the local session registry (a label only) | |
+| `zillow_set_active_session` | Mark a registered session as the current account label — does not change which account requests use (every call goes through the signed-in browser tab) | |
 | `zillow_get_session_context` | Inspect the active session + the registered-session list | |
 
 ## Acknowledgement of Terms

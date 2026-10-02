@@ -245,6 +245,19 @@ describe('zillow_compare_properties tool', () => {
     expect(parsed.count).toBe(2);
   });
 
+  it('a failed urls[] row keeps the URL as its re-runnable id (like bulk_get)', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (path.includes('/b/')) throw new Error('no listing');
+      return htmlWith({ zpid: 99, price: 999 });
+    });
+    const r = await harness.callTool('zillow_compare_properties', {
+      urls: ['/homedetails/a/99_zpid/', '/homedetails/b/98_zpid/'],
+    });
+    const parsed = parseToolResult<{ results: Array<{ zpid: string; error?: string }> }>(r);
+    expect(parsed.results[1].error).toBeDefined();
+    expect(parsed.results[1].zpid).toBe('/homedetails/b/98_zpid/');
+  });
+
   describe('bulk concurrency + retry-once-on-timeout (issue #78 follow-up)', () => {
     // Compare used to do unbounded Promise.all for up to 25 zpids. The
     // round-3 session that motivated #78 saw 7-of-20 timeouts at

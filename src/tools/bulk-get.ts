@@ -119,7 +119,7 @@ export interface BulkGetTuning {
 type Target = { zpid?: number | string; url?: string };
 
 /** The identity a caller needs to re-run a row: the zpid, else the URL. */
-function targetId(target: Target): string {
+export function targetId(target: Target): string {
   return target.zpid !== undefined ? String(target.zpid) : (target.url ?? '');
 }
 

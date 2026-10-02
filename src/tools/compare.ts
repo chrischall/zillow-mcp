@@ -7,6 +7,7 @@ import {
 } from '@chrischall/mcp-utils/fetchproxy';
 import { pivotSummary, runRowBatch } from '@chrischall/realty-core';
 import type { ZillowClient } from '../client.js';
+import { targetId } from './bulk-get.js';
 import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import {
   fetchPropertyRecord,
@@ -137,14 +138,16 @@ export function registerCompareTools(
         async (t) => {
           const { raw } = await fetchPropertyRecord(client, t);
           return {
-            zpid: String(raw.zpid ?? ('zpid' in t ? String(t.zpid) : '')),
+            zpid: String(raw.zpid ?? targetId(t)),
             property: format(raw, { includeDescription: include_description }),
           };
         },
         {
           kit: { runBoundedBatch, classifyRowError, retryOnceOnTimeout },
           toolLabel: 'zillow_compare_properties',
-          rowBase: (t) => ({ zpid: t.zpid !== undefined ? String(t.zpid) : '' }),
+          // The zpid, else the URL — the identity a caller needs to re-run
+          // a failed row (same as bulk_get).
+          rowBase: (t) => ({ zpid: targetId(t) }),
           concurrency: BRIDGE_CONCURRENCY,
         }
       );
