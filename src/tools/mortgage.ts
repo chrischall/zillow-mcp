@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   calculateMortgage,
+  registerMortgageTool,
   type MortgageInput as CoreMortgageInput,
 } from '@chrischall/realty-core';
 import { minifiedResult } from '@chrischall/mcp-utils';
@@ -67,31 +68,14 @@ export function computeMortgage(input: MortgageInput): MortgageBreakdown {
 }
 
 export function registerMortgageTools(server: McpServer): void {
-  server.registerTool(
-    'zillow_calculate_mortgage',
-    {
-      title: 'Calculate mortgage payment (local)',
-      description:
-        'Local-only mortgage payment calculator. Returns a full PITI breakdown (principal + interest, property tax, insurance, HOA, PMI) and total interest over the life of the loan. No network call — fully deterministic, safe to use for scenario comparison without burning a fetch. Provide either down_payment OR down_payment_percent; defaults to 20%. Property tax can be given as property_tax_annual or property_tax_rate (% of home price). PMI applies automatically when LTV > 80% and pmi_rate is provided.',
-      annotations: {
-        title: 'Calculate mortgage payment (local)',
-        readOnlyHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-      inputSchema: z.object({
-        home_price: z.number().positive(),
-        down_payment: z.number().nonnegative().optional(),
-        down_payment_percent: z.number().nonnegative().max(100).optional(),
-        interest_rate: z.number().nonnegative().describe('Annual %, e.g. 6.5'),
-        loan_term_years: z.number().int().positive().optional().describe('Default 30'),
-        property_tax_annual: z.number().nonnegative().optional(),
-        property_tax_rate: z.number().nonnegative().optional().describe('Annual % of home price'),
-        insurance_annual: z.number().nonnegative().optional(),
-        hoa_monthly: z.number().nonnegative().optional(),
-        pmi_rate: z.number().nonnegative().optional().describe('Annual %, applied when LTV > 80%'),
-      }),
-    },
-    async (input) => minifiedResult(computeMortgage(input as MortgageInput))
-  );
+  // Schema, description and canonical output are realty-core's shared
+  // registrar (fleet-audit#1090). `shape: 'canonical'` adds the echoed
+  // `home_price` to zillow's previous output (additive only) and caps
+  // `loan_term_years` at MAX_LOAN_TERM_YEARS.
+  registerMortgageTool(server, {
+    z,
+    prefix: 'zillow',
+    shape: 'canonical',
+    toResult: minifiedResult,
+  });
 }

@@ -3,11 +3,11 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import {
   BRIDGE_CONCURRENCY,
   classifyRowError,
-  mapWithConcurrency,
   retryOnceOnTimeout,
 } from '@chrischall/mcp-utils/fetchproxy';
+import { pivotSummary, runRowBatch } from '@chrischall/realty-core';
 import type { ZillowClient } from '../client.js';
-import { minifiedResult } from '@chrischall/mcp-utils';
+import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import {
   fetchPropertyRecord,
   format,
@@ -37,30 +37,28 @@ interface ComparePerProperty {
  * Build a compact summary table where each row is one field
  * (price, beds, etc.) and `values[i]` lines up with `results[i]`.
  */
-export function buildSummary(rows: ComparePerProperty[]): CompareSummaryRow[] {
-  const pick = (
-    label: string,
-    fn: (p: FormattedProperty) => number | string | null | undefined
-  ): CompareSummaryRow => ({
-    field: label,
-    values: rows.map((r) => (r.property ? fn(r.property) ?? null : null)),
-  });
-  return [
-    pick('price', (p) => p.price),
-    pick('zestimate', (p) => p.zestimate),
-    pick('rent_zestimate', (p) => p.rent_zestimate),
-    pick('beds', (p) => p.beds),
-    pick('baths', (p) => p.baths),
-    pick('living_area_sqft', (p) => p.living_area),
-    pick('lot_size_sqft', (p) => p.lot_size),
-    pick('lot_size_acres', (p) => p.lot_size_acres),
-    pick('year_built', (p) => p.year_built),
-    pick('home_type', (p) => p.home_type),
-    pick('status', (p) => p.status),
-    pick('days_on_zillow', (p) => p.days_on_zillow),
-    pick('tax_assessed_value', (p) => p.tax_assessed_value),
-    pick('neighborhood', (p) => p.neighborhood),
-  ];
+export function buildSummary(
+  rows: ReadonlyArray<ComparePerProperty>
+): CompareSummaryRow[] {
+  // realty-core `pivotSummary` (fleet-audit#1091): each cell is the row's
+  // value verbatim, `undefined` / failed row → null. `{ field, pick }`
+  // where zillow's summary label differs from the property key.
+  return pivotSummary<FormattedProperty>(rows, [
+    'price',
+    'zestimate',
+    'rent_zestimate',
+    'beds',
+    'baths',
+    { field: 'living_area_sqft', pick: (p) => p.living_area },
+    { field: 'lot_size_sqft', pick: (p) => p.lot_size },
+    'lot_size_acres',
+    'year_built',
+    'home_type',
+    'status',
+    'days_on_zillow',
+    'tax_assessed_value',
+    'neighborhood',
+  ]) as CompareSummaryRow[];
 }
 
 export function registerCompareTools(
@@ -130,33 +128,28 @@ export function registerCompareTools(
       // retry-once-on-timeout per row) so compare absorbs the same
       // transient SW evictions instead of failing rows.
       type Target = { zpid?: number | string; url?: string };
-      const results = await mapWithConcurrency<Target, ComparePerProperty>(
+      // realty-core `runRowBatch` (fleet-audit#1091): bounded + deadline-
+      // guarded fan-out, input-ordered rows, error rows classified with
+      // `status` = `error_kind` + `retryable`, envelope `{ count, ok,
+      // errored, pending?, results }`.
+      const envelope = await runRowBatch(
         targets as Target[],
-        BRIDGE_CONCURRENCY,
-        async (t): Promise<ComparePerProperty> => {
-          const fallbackZpid = 'zpid' in t ? String(t.zpid) : '';
-          try {
-            const { raw } = await retryOnceOnTimeout(() =>
-              fetchPropertyRecord(client, t)
-            );
-            return {
-              zpid: String(raw.zpid ?? fallbackZpid),
-              property: format(raw, { includeDescription: include_description }),
-            };
-          } catch (e) {
-            return { zpid: fallbackZpid, error: classifyRowError(e).message };
-          }
+        async (t) => {
+          const { raw } = await fetchPropertyRecord(client, t);
+          return {
+            zpid: String(raw.zpid ?? ('zpid' in t ? String(t.zpid) : '')),
+            property: format(raw, { includeDescription: include_description }),
+          };
+        },
+        {
+          kit: { runBoundedBatch, classifyRowError, retryOnceOnTimeout },
+          toolLabel: 'zillow_compare_properties',
+          rowBase: (t) => ({ zpid: t.zpid !== undefined ? String(t.zpid) : '' }),
+          concurrency: BRIDGE_CONCURRENCY,
         }
       );
-      const body: {
-        count: number;
-        summary?: CompareSummaryRow[];
-        results: ComparePerProperty[];
-      } = {
-        count: results.length,
-        results,
-      };
-      if (include_summary === true) body.summary = buildSummary(results);
+      const body: typeof envelope & { summary?: CompareSummaryRow[] } = envelope;
+      if (include_summary === true) body.summary = buildSummary(envelope.results);
       return minifiedResult(body);
     }
   );

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
 import {
   calculateAffordability,
+  registerAffordabilityTool,
   type AffordabilityInput as CoreAffordabilityInput,
   type AffordabilityResult,
 } from '@chrischall/realty-core';
@@ -235,47 +236,13 @@ function round2(n: number): number {
 // ---- Registration ----------------------------------------------------
 
 export function registerAffordabilityTools(server: McpServer): void {
-  server.registerTool(
-    'zillow_calculate_affordability',
-    {
-      title: 'Calculate max affordable home price',
-      description:
-        "Solve for the maximum home price you can afford under the standard 28/36 DTI rule. Inputs: monthly income, monthly recurring debts (car loans, student loans, etc.), down payment, interest rate, and optional property-tax rate / insurance / HOA / loan term. Output: max home price, the binding constraint (front-end vs back-end), and the full PITI breakdown at that price. No network — pure local math.",
-      annotations: {
-        title: 'Calculate max affordable home price',
-        readOnlyHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-      inputSchema: z.object({
-        monthly_income: z.number().positive(),
-        monthly_debts: z
-          .number()
-          .nonnegative()
-          .optional()
-          .describe('Sum of monthly debt payments (car, student loans, etc.)'),
-        down_payment: z.number().nonnegative(),
-        interest_rate: z.number().nonnegative().describe('Annual %, e.g. 6.5'),
-        loan_term_years: z.number().int().positive().optional().describe('Default 30'),
-        property_tax_rate: z.number().nonnegative().optional().describe('Annual % of home price, default 1.1'),
-        insurance_annual: z.number().nonnegative().optional(),
-        hoa_monthly: z.number().nonnegative().optional(),
-        front_end_dti: z
-          .number()
-          .positive()
-          .max(1)
-          .optional()
-          .describe('Front-end DTI cap as decimal, default 0.28'),
-        back_end_dti: z
-          .number()
-          .positive()
-          .max(1)
-          .optional()
-          .describe('Back-end DTI cap as decimal, default 0.36'),
-      }),
-    },
-    async (input) => minifiedResult(computeAffordability(input as AffordabilityInput))
-  );
+  // Shared realty-core registrar (fleet-audit#1090): same schema / DTI
+  // bounds zillow already had, plus the MAX_LOAN_TERM_YEARS cap.
+  registerAffordabilityTool(server, {
+    z,
+    prefix: 'zillow',
+    toResult: minifiedResult,
+  });
 
   server.registerTool(
     'zillow_estimate_rent_vs_buy',

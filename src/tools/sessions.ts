@@ -7,8 +7,8 @@ import type { SessionRegistry } from '../sessions.js';
  *
  * - `zillow_register_session` — adds (or refreshes) an authenticated
  *   session. (Issue #47.)
- * - `zillow_set_active_session` — explicitly switch which session
- *   subsequent calls route through. (Issue #47.)
+ * - `zillow_set_active_session` — mark which registered session is the
+ *   current account label (label only — see `routing` below). (Issue #47.)
  * - `zillow_get_session_context` — returns the full registry plus
  *   `active_session_id`. (Issue #48.)
  *
@@ -29,5 +29,12 @@ export function registerSessionTools(
   registerSharedSessionTools(server, registry, {
     prefix: 'zillow',
     serviceLabel: 'Zillow',
+    // Nothing in zillow-mcp reads the registry to route a request — every
+    // call rides the one bound browser tab — so the descriptions must not
+    // promise routing (fleet-audit#1092).
+    routing: 'label-only',
+    labelOnlyNote:
+      'Every zillow tool call goes through whichever browser tab the ContextMint Bridge ' +
+      'extension is signed into; to read a different account, sign that tab into it.',
   });
 }

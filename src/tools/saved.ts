@@ -179,7 +179,7 @@ export function registerSavedTools(
     {
       title: 'Get my saved Zillow searches',
       description:
-        "The signed-in user's saved searches on zillow.com (name, filters, new-listing count, notification frequency). Requires the user to be signed in at zillow.com in the bridged browser tab — throws SessionNotAuthenticatedError otherwise. Pass an optional `session_id` (from `zillow_register_session`) to target a specific signed-in account; defaults to the active session. Read-only; safe to call repeatedly.",
+        "The signed-in user's saved searches on zillow.com (name, filters, new-listing count, notification frequency). Requires the user to be signed in at zillow.com in the bridged browser tab — throws SessionNotAuthenticatedError otherwise. An optional `session_id` (from `zillow_register_session`) is checked against the session registry — an unknown id errors — but it is a label only: the request always goes through whichever browser tab the extension is signed into. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get my saved Zillow searches',
         readOnlyHint: true,
@@ -211,7 +211,7 @@ export function registerSavedTools(
     {
       title: 'Get my saved (favorited) Zillow homes',
       description:
-        "The signed-in user's saved (favorited) homes on zillow.com, flattened across all of the user's collections. Returns address, price, Zestimate, status, and when each home was saved. Pass an optional `session_id` (from `zillow_register_session`) to target a specific signed-in account; defaults to the active session. Requires the user to be signed in. Read-only; safe to call repeatedly.",
+        "The signed-in user's saved (favorited) homes on zillow.com, flattened across all of the user's collections. Returns address, price, Zestimate, status, and when each home was saved. An optional `session_id` (from `zillow_register_session`) is checked against the session registry — an unknown id errors — but it is a label only: the request always goes through whichever browser tab the extension is signed into. Requires the user to be signed in. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get my saved (favorited) Zillow homes',
         readOnlyHint: true,

@@ -42,6 +42,31 @@ describe('extractNextData', () => {
   });
 });
 
+describe('extractNextData — distinct failure messages + linear scan (fleet-audit#1145)', () => {
+  it('reports "not found" and "invalid JSON" as different ParseError messages', () => {
+    expect(() => extractNextData('<html>nope</html>')).toThrow(/not found/);
+    expect(() =>
+      extractNextData('<script id="__NEXT_DATA__" type="application/json">{not json}</script>')
+    ).toThrow(/Failed to parse __NEXT_DATA__ JSON/);
+  });
+
+  it('ignores a __NEXT_DATA__ marker that only appears inside another script body', () => {
+    const html =
+      '<script>var s = \'<script id="__NEXT_DATA__">{"evil":1}</script>\';</script>' +
+      '<script id="__NEXT_DATA__" type="application/json">{"good":1}</script>';
+    expect(extractNextData(html)).toEqual({ good: 1 });
+  });
+
+  it('stays fast on a hostile page of repeated unterminated <script openers', () => {
+    // The old /<script[^>]*id=...[^>]*>/i regex was quadratic here
+    // (200KB ≈ 3.5s in the audit's micro-benchmark).
+    const hostile = '<script '.repeat(100_000); // ~800KB
+    const t0 = performance.now();
+    expect(() => extractNextData(hostile)).toThrow(ParseError);
+    expect(performance.now() - t0).toBeLessThan(250);
+  });
+});
+
 describe('getPageProps', () => {
   it('returns props.pageProps when present', () => {
     expect(

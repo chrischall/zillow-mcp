@@ -306,6 +306,20 @@ describe('zillow_bulk_get tool', () => {
       expect(blockedRow?.error_kind).toBe('bot_challenge');
       const okRows = parsed.rows.filter((row) => row.zpid !== '20');
       expect(okRows.every((row) => row.error === undefined)).toBe(true);
+      // Cohort row envelope (fleet-audit#1091): ok/errored counts, every
+      // row carries a status, error rows carry `retryable`.
+      const env = parseToolResult<{
+        count: number;
+        ok: number;
+        errored: number;
+        rows: Array<{ zpid: string; status?: string; retryable?: boolean }>;
+      }>(r);
+      expect(env).toMatchObject({ count: 3, ok: 2, errored: 1 });
+      expect(env.rows.find((row) => row.zpid === '20')).toMatchObject({
+        status: 'bot_challenge',
+        retryable: true,
+      });
+      expect(env.rows.filter((row) => row.zpid !== '20').every((row) => row.status === 'ok')).toBe(true);
     });
 
     it('a px-captcha block NEVER round-trips through the not-found diagnosis path', async () => {

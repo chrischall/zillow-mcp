@@ -996,3 +996,18 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     });
   });
 });
+
+describe('listingsMatchLocation state-code noise set (fleet-audit#1144)', () => {
+  it('treats every realty-core state / territory code as non-discriminating', async () => {
+    const { FIRST_DIGIT_TO_STATES } = await import('@chrischall/realty-core');
+    const codes = new Set(
+      Object.values(FIRST_DIGIT_TO_STATES).flatMap((s) => [...s].map((c) => c.toLowerCase()))
+    );
+    for (const code of codes) {
+      // A query of only a state code has nothing discriminating → matches anything.
+      expect(listingsMatchLocation([], [code])).toBe(true);
+    }
+    // A real place token still discriminates.
+    expect(listingsMatchLocation([], ['lure'])).toBe(false);
+  });
+});

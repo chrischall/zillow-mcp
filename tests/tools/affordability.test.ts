@@ -1,3 +1,4 @@
+import { MAX_LOAN_TERM_YEARS } from '@chrischall/realty-core';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   computeAffordability,
@@ -221,6 +222,20 @@ describe('affordability tools — MCP integration', () => {
     }>(r);
     expect(parsed.max_home_price).toBeGreaterThan(0);
     expect(parsed.max_monthly_piti).toBe(3360); // 12000 * 0.28
+  });
+
+  it('caps loan_term_years / horizon_years in the advertised schemas', async () => {
+    const { tools } = await h.client.listTools();
+    const props = (name: string) =>
+      tools.find((t) => t.name === name)!.inputSchema.properties as Record<
+        string,
+        { maximum?: number }
+      >;
+    expect(props('zillow_calculate_affordability').loan_term_years.maximum).toBe(
+      MAX_LOAN_TERM_YEARS
+    );
+    expect(props('zillow_estimate_rent_vs_buy').loan_term_years.maximum).toBe(50);
+    expect(props('zillow_estimate_rent_vs_buy').horizon_years.maximum).toBe(50);
   });
 
   it('zillow_estimate_rent_vs_buy returns horizon + yearly series', async () => {

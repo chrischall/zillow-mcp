@@ -7,9 +7,10 @@
  * change without notice.
  *
  * The script tag has predictable boundaries — the body is straight JSON,
- * no JS-assignment shenanigans — so a simple find-the-close-tag
- * extractor works.
+ * no JS-assignment shenanigans.
  */
+
+import { extractNextDataText } from '@chrischall/mcp-utils/scrape';
 
 export class ParseError extends Error {
   constructor(message: string) {
@@ -18,28 +19,38 @@ export class ParseError extends Error {
   }
 }
 
-const OPEN_TAG_RE =
-  /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>/i;
-const CLOSE_TAG = '</script>';
-
+/**
+ * Parse the page's `__NEXT_DATA__` blob.
+ *
+ * The tag scan is mcp-utils' `extractNextDataText` (fleet-audit#1145): one
+ * linear, tag-bounded `indexOf` pass. The previous
+ * `/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>/i` regex backtracked
+ * quadratically over a page of repeated `<script ` openers with the `>`
+ * withheld, stalling the whole stdio server on a hostile response.
+ *
+ * Kept local (rather than calling `extractNextData`, which returns
+ * `undefined` for every failure) so the two failure modes stay distinct
+ * `ParseError` messages: "tag not found" vs "invalid JSON".
+ */
 export function extractNextData(html: string): Record<string, unknown> {
-  const openMatch = OPEN_TAG_RE.exec(html);
-  if (!openMatch) {
-    throw new ParseError('__NEXT_DATA__ script tag not found in HTML');
+  const json = extractNextDataText(html);
+  if (json === undefined) {
+    throw new ParseError(
+      '__NEXT_DATA__ script tag not found in HTML (or unterminated / oversized)'
+    );
   }
-  const start = openMatch.index + openMatch[0].length;
-  const end = html.indexOf(CLOSE_TAG, start);
-  if (end < 0) {
-    throw new ParseError('__NEXT_DATA__ script tag has no closing </script>');
-  }
-  const json = html.slice(start, end).trim();
+  let parsed: unknown;
   try {
-    return JSON.parse(json) as Record<string, unknown>;
+    parsed = JSON.parse(json);
   } catch (err) {
     throw new ParseError(
       `Failed to parse __NEXT_DATA__ JSON: ${(err as Error).message}`
     );
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ParseError('__NEXT_DATA__ JSON is not an object');
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /**

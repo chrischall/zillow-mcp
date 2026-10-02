@@ -1,3 +1,4 @@
+import { MAX_LOAN_TERM_YEARS } from '@chrischall/realty-core';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   computeMortgage,
@@ -147,5 +148,25 @@ describe('zillow_calculate_mortgage tool', () => {
     expect(parsed.monthly_total).toBeGreaterThan(
       parsed.monthly_principal_interest
     );
+  });
+
+  it('returns the canonical realty-core breakdown, including the echoed home_price (fleet-audit#1090)', async () => {
+    const parsed = parseToolResult<Record<string, unknown>>(
+      await harness.callTool('zillow_calculate_mortgage', {
+        home_price: 500_000,
+        down_payment_percent: 20,
+        interest_rate: 6,
+      })
+    );
+    expect(parsed.home_price).toBe(500_000);
+    expect(parsed.ltv_percent).toBe(80);
+    expect(parsed).toHaveProperty('total_paid_over_loan');
+  });
+
+  it('caps loan_term_years at MAX_LOAN_TERM_YEARS in the advertised schema', async () => {
+    const { tools } = await harness.client.listTools();
+    const tool = tools.find((t) => t.name === 'zillow_calculate_mortgage');
+    const props = tool!.inputSchema.properties as Record<string, { maximum?: number }>;
+    expect(props.loan_term_years.maximum).toBe(MAX_LOAN_TERM_YEARS);
   });
 });

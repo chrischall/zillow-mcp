@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tokenize } from '@chrischall/realty-core';
+import { FIRST_DIGIT_TO_STATES, tokenize } from '@chrischall/realty-core';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { viewArg, viewResponse } from '../view.js';
@@ -210,13 +210,14 @@ export function locationTokens(location: string): string[] {
  * lost from the error message), but mismatch detection uses the
  * non-state subset.
  */
-const US_STATE_CODES = new Set([
-  'al', 'ak', 'az', 'ar', 'ca', 'co', 'ct', 'de', 'fl', 'ga', 'hi', 'id',
-  'il', 'in', 'ia', 'ks', 'ky', 'la', 'me', 'md', 'ma', 'mi', 'mn', 'ms',
-  'mo', 'mt', 'ne', 'nv', 'nh', 'nj', 'nm', 'ny', 'nc', 'nd', 'oh', 'ok',
-  'or', 'pa', 'ri', 'sc', 'sd', 'tn', 'tx', 'ut', 'vt', 'va', 'wa', 'wv',
-  'wi', 'wy', 'dc', 'pr',
-]);
+const US_STATE_CODES: ReadonlySet<string> = new Set(
+  // realty-core's ZIP-prefix table already enumerates every USPS state /
+  // territory / military code (fleet-audit#1144) — derive the set from it,
+  // as compass does, instead of hand-maintaining a 52-entry copy.
+  Object.values(FIRST_DIGIT_TO_STATES).flatMap((states) =>
+    [...states].map((code) => code.toLowerCase())
+  )
+);
 
 /**
  * Return true when at least one of the `listings`' addresses contains

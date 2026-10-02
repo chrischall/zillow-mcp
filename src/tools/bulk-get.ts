@@ -10,6 +10,7 @@ import {
   retryOnceOnTimeout,
   sleep,
 } from '@chrischall/mcp-utils/fetchproxy';
+import { runRowBatch, throwIfAborted } from '@chrischall/realty-core';
 import { BotWallError, type ZillowClient } from '../client.js';
 import {
   fetchPropertyRecord,
@@ -115,37 +116,38 @@ export interface BulkGetTuning {
   rng?: () => number;
 }
 
-interface BulkGetRow {
-  zpid: string;
-  property?: FormattedProperty;
-  error?: string;
-  /**
-   * Issue #90: machine-readable error classification so callers can
-   * branch without string-matching. Present only on error rows. The
-   * critical value is `bot_challenge` (the resilience kit's canonical
-   * bot-wall {@link FetchErrorKind}, 0.10.0) — distinct from a generic
-   * `error`/not-found so a bot-wall is never mistaken for a gone listing.
-   */
-  error_kind?:
-    | 'bot_challenge'
-    | 'timeout'
-    | 'bridge_down'
-    | 'protocol'
-    | 'pending'
-    | 'other';
-}
-
 type Target = { zpid?: number | string; url?: string };
 
+/** The identity a caller needs to re-run a row: the zpid, else the URL. */
+function targetId(target: Target): string {
+  return target.zpid !== undefined ? String(target.zpid) : (target.url ?? '');
+}
+
 /**
- * Fetch one target, with the #78 timeout retry AND the #90 bot-wall
- * backoff retry layered on. Returns a per-row envelope; never throws.
+ * `classifyRowError` plus the bot-wall: a `BotWallError` that survived
+ * its backoff retries is kind `bot_challenge` (the resilience kit's
+ * canonical bot-wall kind, issue #90) — never a generic miss.
+ */
+function classifyBulkRowError(err: unknown): { kind: string; message: string } {
+  if (err instanceof BotWallError) {
+    return { kind: 'bot_challenge', message: err.message };
+  }
+  return classifyRowError(err);
+}
+
+/**
+ * Fetch one target, with the #78 timeout retry (per sub-request) AND the
+ * #90 bot-wall backoff retry layered on. Resolves to the row's success
+ * fields or throws; realty-core's `runRowBatch` classifies a throw into
+ * the row envelope.
  *
  * On a bot-wall block we back off (full jitter, floored at the wall's
  * own retry-after hint) and retry up to `maxCaptchaRetries`. If it never
- * clears, the row is returned with `error_kind: 'bot_challenge'` and the
- * wall's retry-after seconds so the caller can finish it in a second
- * pass — it is NEVER downgraded to a generic miss.
+ * clears, the final `BotWallError` is rethrown (→ `bot_challenge`) and
+ * its retry-after seconds recorded for the envelope's `retry_after_s`.
+ * The batch signal is re-checked before every token wait and after every
+ * backoff sleep: a multi-request row stops once the deadline has
+ * answered it `pending` (RowAbandonedError → `pending`, not an error).
  */
 async function fetchOneRow(
   client: ZillowClient,
@@ -154,91 +156,36 @@ async function fetchOneRow(
   cfg: Required<Omit<BulkGetTuning, 'rng'>> & { rng: () => number },
   blockedRetryAfter: { seconds: number },
   signal?: AbortSignal
-): Promise<BulkGetRow> {
-  const fallbackZpid = 'zpid' in target ? String(target.zpid) : '';
-  let lastBotWall: BotWallError | null = null;
-  // fleet-audit#289: `runBoundedBatch` aborts `signal` when the overall
-  // deadline answers, but its runners keep pulling queued items. Bail out
-  // before every dial (and after every wait) so an abandoned row never
-  // fires another homedetails fetch through the user's browser. The row
-  // is discarded by then — the deadline already backfilled it `pending`.
-  const abandoned = (): BulkGetRow => ({
-    zpid: fallbackZpid,
-    error: 'bulk_get overall deadline reached; row abandoned',
-    error_kind: 'pending',
-  });
-
-  for (let attempt = 0; attempt <= cfg.maxCaptchaRetries; attempt++) {
-    if (signal?.aborted) return abandoned();
-    // Spend a token before every attempt — the throttle paces total
-    // request volume across the whole fan-out.
+): Promise<{ zpid: string; property: FormattedProperty }> {
+  for (let attempt = 0; ; attempt++) {
+    throwIfAborted(signal);
     await bucket.acquire();
-    if (signal?.aborted) return abandoned();
+    throwIfAborted(signal);
     try {
       const { raw } = await retryOnceOnTimeout(() =>
         fetchPropertyRecord(client, target)
       );
-      return {
-        zpid: String(raw.zpid ?? fallbackZpid),
-        property: format(raw),
-      };
+      return { zpid: String(raw.zpid ?? targetId(target)), property: format(raw) };
     } catch (e) {
-      if (e instanceof BotWallError) {
-        lastBotWall = e;
-        if (attempt < cfg.maxCaptchaRetries) {
-          // Honour the wall's retry-after hint as a floor, but never wait
-          // longer than the backoff cap on a single in-batch retry — a
-          // 30s server hint shouldn't stall the whole batch. Anything
-          // still blocked after the bounded retries is reported in the
-          // partial-result envelope with the *full* retry-after for a
-          // second pass.
-          const retryAfterMs = Math.min(
-            e.retryAfterSeconds * 1_000,
-            cfg.backoffCapMs
-          );
-          const delay = backoffDelayMs(attempt, {
-            baseMs: cfg.backoffBaseMs,
-            capMs: cfg.backoffCapMs,
-            rng: cfg.rng,
-            retryAfterMs,
-          });
-          await sleep(delay);
-          if (signal?.aborted) return abandoned();
-          continue;
-        }
-        // Retries exhausted — surface the block, distinctly.
+      if (!(e instanceof BotWallError)) throw e;
+      if (attempt >= cfg.maxCaptchaRetries) {
         blockedRetryAfter.seconds = Math.max(
           blockedRetryAfter.seconds,
           e.retryAfterSeconds
         );
-        return {
-          zpid: fallbackZpid,
-          error: e.message,
-          error_kind: 'bot_challenge',
-        };
+        throw e;
       }
-      // Non-bot-wall failure: classify with the cohort helper (timeout /
-      // bridge_down / protocol / other) and stop — these are not the
-      // bot-wall, so backoff-retry doesn't apply.
-      const classified = classifyRowError(e);
-      return {
-        zpid: fallbackZpid,
-        error: classified.message,
-        error_kind: classified.kind,
-      };
+      const retryAfterMs = Math.min(e.retryAfterSeconds * 1_000, cfg.backoffCapMs);
+      await sleep(
+        backoffDelayMs(attempt, {
+          baseMs: cfg.backoffBaseMs,
+          capMs: cfg.backoffCapMs,
+          rng: cfg.rng,
+          retryAfterMs,
+        })
+      );
     }
   }
-  // Unreachable in practice (loop always returns), but keeps the
-  // type-checker happy and is defensive if maxCaptchaRetries < 0.
-  blockedRetryAfter.seconds = Math.max(
-    blockedRetryAfter.seconds,
-    lastBotWall?.retryAfterSeconds ?? 0
-  );
-  return {
-    zpid: fallbackZpid,
-    error: lastBotWall?.message ?? 'unknown bulk-get failure',
-    error_kind: lastBotWall ? 'bot_challenge' : 'other',
-  };
 }
 
 export function registerBulkGetTools(
@@ -263,11 +210,11 @@ export function registerBulkGetTools(
       description:
         `Fetch up to ${BULK_GET_MAX} Zillow property records in a single call — the "give me everything for these N saved homes" endpoint. Returns one structured row per input id ` +
         '(no pivoted side-by-side summary table — for 2-25 listings with a comparison summary use `zillow_compare_properties`). Each row is either ' +
-        '`{ zpid, property }` on success or `{ zpid, error, error_kind }` on failure — one bad zpid never fails the ' +
+        '`{ zpid, status: "ok", property }` on success or `{ zpid, status, error_kind, retryable, error }` on failure (`status` = `error_kind`) — one bad zpid never fails the ' +
         `whole call. Calls fan out concurrently against \`/homedetails/<zpid>_zpid/\` (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions). ` +
         `Big lists fan out bounded to ${BRIDGE_CONCURRENCY} in flight and paced by a per-host requests-per-minute throttle (burst ${BULK_GET_CHUNK_SIZE}) so the batch doesn't trip Zillow's PerimeterX bot-wall (issue #90). ` +
         'If the bot-wall is hit, the blocked sub-requests are retried with exponential backoff; anything still blocked is reported with `error_kind: "bot_challenge"` (distinct from a missing listing) and the response carries a `{ blocked, retry_after_s }` envelope so you can finish the rest in a second pass. ' +
-        'The whole call is bounded by an overall hard deadline (issue #98): a single slow/hung row never wedges the server — when the deadline is reached any row that has not yet settled is returned with `error_kind: "pending"` and the response carries a `{ pending }` count so you can re-run just those ids.',
+        'The whole call is bounded by an overall hard deadline (issue #98): a single slow/hung row never wedges the server — when the deadline is reached any row that has not yet settled is returned with `error_kind: "pending"` and the response carries a `{ pending }` count so you can re-run just those ids. The envelope also reports `count` / `ok` / `errored`.',
       annotations: {
         title: 'Bulk-fetch Zillow properties by zpid',
         readOnlyHint: true,
@@ -319,66 +266,33 @@ export function registerBulkGetTools(
       const blockedRetryAfter = { seconds: 0 };
 
       // Fan out at BRIDGE_CONCURRENCY (#78), bounded by the overall hard
-      // deadline (#98) — both owned by the shared `runBoundedBatch`
-      // primitive (hoisted from this MCP's old local `runWithDeadline`).
+      // deadline (#98), through realty-core's shared `runRowBatch`
+      // (fleet-audit#1091): input-ordered rows, a `pending` backfill for
+      // anything the deadline cut off (never a generic miss), and the
+      // cohort envelope `{ count, ok, errored, pending?, blocked?, rows }`.
+      // Every error row carries `status` = `error_kind` + `retryable`.
       // The shared `bucket` still gates the *absolute* request rate (the
-      // bot-wall governor, #90 part b): every `fetchOneRow` attempt spends
-      // a token before it dials, so the per-host RPM ceiling holds
-      // regardless of how the fan-out is scheduled. Results land in
-      // index-addressable, input-ordered slots; any slot still unsettled
-      // when the deadline fires is backfilled by `onTimeout` as a `pending`
-      // row, so the response always has exactly one row per input and the
-      // call returns partial results instead of hanging for the full client
-      // timeout. A `pending` row is NEVER a generic miss / not-found.
-      const rows: BulkGetRow[] = await runBoundedBatch<Target, BulkGetRow>(
+      // bot-wall governor, #90 part b): every attempt spends a token.
+      const rows = await runRowBatch(
         targets,
         (target, signal) =>
           fetchOneRow(client, bucket, target, cfg, blockedRetryAfter, signal),
         {
+          // No kit retry: the timeout retry is per sub-request inside
+          // fetchOneRow, so a timeout doesn't replay the captcha loop.
+          kit: { runBoundedBatch, classifyRowError: classifyBulkRowError },
+          toolLabel: 'zillow_bulk_get',
+          rowBase: (target) => ({ zpid: targetId(target) }),
           deadlineMs: cfg.overallDeadlineMs,
           concurrency: BRIDGE_CONCURRENCY,
-          onTimeout: (target) => {
-            const zpid =
-              target.zpid !== undefined
-                ? String(target.zpid)
-                : (target.url ?? '');
-            return {
-              zpid,
-              error:
-                'bulk_get overall deadline reached before this row settled — ' +
-                'the request is still pending (likely a slow/hung sub-request). ' +
-                'Re-run just the pending ids; a single slow row no longer wedges the batch.',
-              error_kind: 'pending',
-            };
-          },
+          resultsKey: 'rows',
         }
       );
-
-      const blocked = rows.filter(
-        (r) => r.error_kind === 'bot_challenge'
-      ).length;
-      const pending = rows.filter((r) => r.error_kind === 'pending').length;
-
-      const envelope: {
-        count: number;
-        rows: BulkGetRow[];
-        blocked?: number;
-        retry_after_s?: number;
-        pending?: number;
-      } = { count: rows.length, rows };
-      if (blocked > 0) {
-        // Partial result — some ids are still bot-walled. Surface the
-        // count + a retry-after hint so the caller can re-run just the
-        // blocked ids after waiting (issue #90).
-        envelope.blocked = blocked;
-        envelope.retry_after_s =
-          blockedRetryAfter.seconds > 0 ? blockedRetryAfter.seconds : undefined;
-      }
-      if (pending > 0) {
-        // Partial result — the overall deadline cut some rows off before
-        // they settled (issue #98). Surface the count so the caller can
-        // re-run just the pending ids.
-        envelope.pending = pending;
+      const envelope: typeof rows & { retry_after_s?: number } = rows;
+      if ((envelope.blocked ?? 0) > 0 && blockedRetryAfter.seconds > 0) {
+        // Partial result — some ids are still bot-walled. Advise a wait
+        // before re-running just the blocked ids (issue #90).
+        envelope.retry_after_s = blockedRetryAfter.seconds;
       }
       return minifiedResult(envelope);
     }

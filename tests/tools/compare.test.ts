@@ -307,6 +307,19 @@ describe('zillow_compare_properties tool', () => {
       }>(r);
       expect(parsed.results[0].error).toBeDefined();
       expect(parsed.results[0].error).toMatch(/timeout/i);
+      // Cohort row envelope (fleet-audit#1091).
+      const env = parseToolResult<{
+        ok: number;
+        errored: number;
+        results: Array<{ zpid: string; status?: string; error_kind?: string; retryable?: boolean }>;
+      }>(r);
+      expect(env).toMatchObject({ ok: 0, errored: 2 });
+      expect(env.results[0]).toMatchObject({
+        zpid: '42',
+        status: 'timeout',
+        error_kind: 'timeout',
+        retryable: true,
+      });
     });
 
     it('surfaces a "bridge unreachable" error when FetchproxyBridgeDownError fires after the revive retry', async () => {

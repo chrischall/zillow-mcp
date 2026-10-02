@@ -146,3 +146,10 @@ describe('viewResponse', () => {
     expect(data.photo).toBe('https://cdn/a.jpg');
   });
 });
+
+describe('shared realty-core view helpers (fleet-audit#1175)', () => {
+  it('ZW_VIEWS is realty-core REALTY_VIEWS', async () => {
+    const { REALTY_VIEWS } = await import('@chrischall/realty-core');
+    expect(ZW_VIEWS).toBe(REALTY_VIEWS);
+  });
+});
