@@ -18,8 +18,8 @@
  *                          optional price band (issue #52, plumbed
  *                          through to bulk in issue #74)
  */
-import { existsSync, readFileSync } from 'node:fs';
 import {
+  LocalityAliasMap,
   SUFFIX_PAIRS,
   addressMatch,
   buildVariants,
@@ -503,79 +503,46 @@ export const DEFAULT_LOCALITY_ALIASES: Array<[string, string]> = [
   ['Sugar Mountain', 'Banner Elk'],
 ];
 
-let cachedAliasMap: Record<string, string[]> | null = null;
-let cachedAliasPath: string | null = null;
+const DEFAULT_ALIAS_MAP = LocalityAliasMap.fromJSON(DEFAULT_LOCALITY_ALIASES);
+
+let cachedAlias: { path: string; map: LocalityAliasMap } | null = null;
 let cachedAliasFailurePath: string | null = null;
 
 /**
- * Build the canonical alias map: `{ "lake lure": ["Rutherfordton"], ... }`.
- * Reads `ZILLOW_LOCALITY_ALIASES_FILE` (a JSON array of `[a, b]` pairs).
- * Falls back to `DEFAULT_LOCALITY_ALIASES` on missing/malformed config.
+ * The locality alias map. Reads `ZILLOW_LOCALITY_ALIASES_FILE` (a JSON array
+ * of `[a, b]` pairs, each registered both ways) via realty-core's
+ * `LocalityAliasMap.fromFile`. That also accepts realty-core's
+ * `{ "entries": [...] }` document. Falls back to `DEFAULT_LOCALITY_ALIASES`
+ * when the file is missing or malformed, logging once per path. A good load
+ * is cached until the path changes. A bad path is negative-cached.
  */
-export function loadLocalityAliases(): Record<string, string[]> {
+export function loadLocalityAliases(): LocalityAliasMap {
   const path = process.env.ZILLOW_LOCALITY_ALIASES_FILE?.trim();
   if (!path) {
-    cachedAliasMap = null;
-    cachedAliasPath = null;
+    cachedAlias = null;
     cachedAliasFailurePath = null;
-    return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+    return DEFAULT_ALIAS_MAP;
   }
-  if (cachedAliasMap && cachedAliasPath === path) return cachedAliasMap;
-  if (cachedAliasFailurePath === path) return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
-  cachedAliasMap = null;
-  cachedAliasPath = null;
-  if (!existsSync(path)) {
-    console.error(
-      `[zillow-mcp] ZILLOW_LOCALITY_ALIASES_FILE="${path}" not found — falling back to DEFAULT_LOCALITY_ALIASES.`
-    );
-    cachedAliasFailurePath = path;
-    return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
-  }
+  if (cachedAlias?.path === path) return cachedAlias.map;
+  if (cachedAliasFailurePath === path) return DEFAULT_ALIAS_MAP;
+  cachedAlias = null;
   try {
-    const raw = readFileSync(path, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      !Array.isArray(parsed) ||
-      !parsed.every(
-        (p) =>
-          Array.isArray(p) &&
-          p.length === 2 &&
-          p.every((s) => typeof s === 'string')
-      )
-    ) {
-      console.error(
-        `[zillow-mcp] ZILLOW_LOCALITY_ALIASES_FILE="${path}" must be a JSON array of [string, string] pairs — falling back.`
-      );
-      cachedAliasFailurePath = path;
-      return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
-    }
-    cachedAliasMap = buildAliasMap(parsed as Array<[string, string]>);
-    cachedAliasPath = path;
+    const map = LocalityAliasMap.fromFile(path);
+    cachedAlias = { path, map };
     cachedAliasFailurePath = null;
-    return cachedAliasMap;
+    return map;
   } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
     console.error(
-      `[zillow-mcp] failed to load ZILLOW_LOCALITY_ALIASES_FILE="${path}": ${
-        err instanceof Error ? err.message : String(err)
-      } — falling back to DEFAULT_LOCALITY_ALIASES.`
+      (err as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+        ? `[zillow-mcp] ZILLOW_LOCALITY_ALIASES_FILE="${path}" not found — falling back to DEFAULT_LOCALITY_ALIASES.`
+        : err instanceof TypeError
+          ? `[zillow-mcp] ZILLOW_LOCALITY_ALIASES_FILE="${path}" must be a JSON array of [string, string] pairs (${detail}) — falling back to DEFAULT_LOCALITY_ALIASES.`
+          : `[zillow-mcp] failed to load ZILLOW_LOCALITY_ALIASES_FILE="${path}": ${detail} — falling back to DEFAULT_LOCALITY_ALIASES.`
     );
     cachedAliasFailurePath = path;
-    return buildAliasMap(DEFAULT_LOCALITY_ALIASES);
+    return DEFAULT_ALIAS_MAP;
   }
-}
-
-function buildAliasMap(pairs: Array<[string, string]>): Record<string, string[]> {
-  const map: Record<string, string[]> = {};
-  const add = (k: string, v: string) => {
-    const key = k.toLowerCase();
-    if (!map[key]) map[key] = [];
-    if (!map[key].includes(v)) map[key].push(v);
-  };
-  for (const [a, b] of pairs) {
-    add(a, b);
-    add(b, a);
-  }
-  return map;
 }
 
 /**
@@ -602,8 +569,10 @@ async function localityRemap(
     }
   }
   // 2. Alias substitution.
-  const aliasMap = loadLocalityAliases();
-  const aliases = aliasMap[input.city.toLowerCase()] ?? [];
+  const { aliases } = loadLocalityAliases().lookup({
+    city: input.city,
+    state: input.state ?? '',
+  });
   for (const alias of aliases) {
     const slug = buildAddressSlug({ ...input, city: alias });
     const hit = await resolveDirect(client, slug, input.address);

@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ZillowClient } from '../../src/client.js';
 import { registerGetByAddressTools } from '../../src/tools/get-by-address.js';
 import { registerResolveAddressesTools } from '../../src/tools/resolve-addresses.js';
@@ -67,22 +70,114 @@ function htmlListing(args: {
   )}</script>`;
 }
 
+const aliasesOf = (city: string, state = 'NC'): string[] =>
+  loadLocalityAliases().lookup({ city, state }).aliases;
+
 describe('locality alias defaults', () => {
   it('ships with Lake Lure ↔ Rutherfordton (issue #81 #75)', () => {
-    const aliases = loadLocalityAliases();
-    expect(aliases['lake lure']).toContain('Rutherfordton');
-    expect(aliases['rutherfordton']).toContain('Lake Lure');
+    expect(aliasesOf('Lake Lure')).toContain('Rutherfordton');
+    expect(aliasesOf('Rutherfordton')).toContain('Lake Lure');
   });
 
   it('ships with Beech Mountain ↔ Banner Elk and Sugar Mountain ↔ Banner Elk', () => {
-    const aliases = loadLocalityAliases();
-    expect(aliases['beech mountain']).toContain('Banner Elk');
-    expect(aliases['sugar mountain']).toContain('Banner Elk');
+    expect(aliasesOf('Beech Mountain')).toContain('Banner Elk');
+    expect(aliasesOf('Sugar Mountain')).toContain('Banner Elk');
+    // Registered both ways, partners collected in order.
+    expect(aliasesOf('Banner Elk')).toEqual(['Beech Mountain', 'Sugar Mountain']);
+  });
+
+  it('matches the city case-insensitively and in any state (pairs are state-less)', () => {
+    expect(aliasesOf('LAKE LURE', 'SC')).toEqual(['Rutherfordton']);
+    expect(loadLocalityAliases().lookup({ city: 'lake lure', state: '' }).aliases).toEqual([
+      'Rutherfordton',
+    ]);
   });
 
   it('exports the defaults as a constant', () => {
     expect(DEFAULT_LOCALITY_ALIASES).toBeDefined();
     expect(Array.isArray(DEFAULT_LOCALITY_ALIASES)).toBe(true);
+  });
+});
+
+describe('ZILLOW_LOCALITY_ALIASES_FILE (documented [a, b] pair format)', () => {
+  const ENV = 'ZILLOW_LOCALITY_ALIASES_FILE';
+  let dir: string;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'zillow-aliases-'));
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    delete process.env[ENV];
+    loadLocalityAliases(); // unset env resets the cache
+    errSpy.mockRestore();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const writeAliases = (name: string, body: string): string => {
+    const p = join(dir, name);
+    writeFileSync(p, body);
+    return p;
+  };
+
+  it('loads the documented pair format, both ways, replacing the defaults', () => {
+    process.env[ENV] = writeAliases(
+      'a.json',
+      JSON.stringify([
+        ['Lake Lure', 'Chimney Rock'],
+        ['Hilton Head', 'Bluffton'],
+      ])
+    );
+    expect(aliasesOf('Lake Lure')).toEqual(['Chimney Rock']);
+    expect(aliasesOf('Chimney Rock')).toEqual(['Lake Lure']);
+    expect(aliasesOf('hilton head', 'SC')).toEqual(['Bluffton']);
+    expect(aliasesOf('Beech Mountain')).toEqual([]); // overrides, not merges
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it('de-duplicates partners of a shared city in file order', () => {
+    process.env[ENV] = writeAliases(
+      'b.json',
+      JSON.stringify([
+        ['A', 'Hub'],
+        ['B', 'Hub'],
+        ['A', 'Hub'],
+      ])
+    );
+    expect(aliasesOf('Hub')).toEqual(['A', 'B']);
+    expect(aliasesOf('A')).toEqual(['Hub']);
+  });
+
+  it('caches a successful load and re-reads only when the path changes', () => {
+    const first = writeAliases('c1.json', JSON.stringify([['X', 'Y']]));
+    process.env[ENV] = first;
+    expect(aliasesOf('X')).toEqual(['Y']);
+    writeFileSync(first, JSON.stringify([['X', 'Z']]));
+    expect(aliasesOf('X')).toEqual(['Y']); // cached
+    process.env[ENV] = writeAliases('c2.json', JSON.stringify([['X', 'Z']]));
+    expect(aliasesOf('X')).toEqual(['Z']);
+  });
+
+  it('falls back to the defaults (once-logged) when the file is missing', () => {
+    process.env[ENV] = join(dir, 'nope.json');
+    expect(aliasesOf('Lake Lure')).toEqual(['Rutherfordton']);
+    expect(aliasesOf('Lake Lure')).toEqual(['Rutherfordton']);
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(String(errSpy.mock.calls[0][0])).toMatch(/not found — falling back to DEFAULT_LOCALITY_ALIASES/);
+  });
+
+  it('falls back to the defaults when a pair is malformed', () => {
+    process.env[ENV] = writeAliases('bad.json', JSON.stringify([['Lake Lure', 'A', 'B']]));
+    expect(aliasesOf('Lake Lure')).toEqual(['Rutherfordton']);
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(String(errSpy.mock.calls[0][0])).toMatch(/\[0\] must be a \[string, string\] pair/);
+  });
+
+  it('falls back to the defaults on invalid JSON', () => {
+    process.env[ENV] = writeAliases('junk.json', '{not json');
+    expect(aliasesOf('Lake Lure')).toEqual(['Rutherfordton']);
+    expect(String(errSpy.mock.calls[0][0])).toMatch(/failed to load ZILLOW_LOCALITY_ALIASES_FILE/);
   });
 });
 
