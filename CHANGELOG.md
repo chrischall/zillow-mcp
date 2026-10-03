@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.5](https://github.com/chrischall/zillow-mcp/compare/v1.1.4...v1.1.5) (2026-10-03)
+
+
+### Bug Fixes
+
+* **compare:** keep the URL on failed urls[] rows and correct session docs ([#283](https://github.com/chrischall/zillow-mcp/issues/283)) ([04819aa](https://github.com/chrischall/zillow-mcp/commit/04819aa86bb176febe2f1a44c3e8cb346de21d50))
+* **deps:** adopt @chrischall/mcp-utils 2.12.0 and realty-core 0.5.1 shared tools ([#281](https://github.com/chrischall/zillow-mcp/issues/281)) ([c59e0c2](https://github.com/chrischall/zillow-mcp/commit/c59e0c22268d21f7070572ca019b5124383b5b21))
+* **deps:** adopt @chrischall/realty-core 0.6.0 locality-alias loader ([#284](https://github.com/chrischall/zillow-mcp/issues/284)) ([541faca](https://github.com/chrischall/zillow-mcp/commit/541faca9277d5d8029d3f8bd255fadc4fa744768))
+* keep credentials and report edge_blocked on CDN/WAF blocks (mcp-utils 2.10.0) ([#280](https://github.com/chrischall/zillow-mcp/issues/280)) ([6ef67b6](https://github.com/chrischall/zillow-mcp/commit/6ef67b6de68d0315a0534d5a617ada5ac841773a))
+* report CDN/WAF blocks as edge_blocked, not a rejected credential (mcp-utils 2.9.0) ([#278](https://github.com/chrischall/zillow-mcp/issues/278)) ([8148272](https://github.com/chrischall/zillow-mcp/commit/81482721f830034748a44cb1d58fd12da1bc3943))
+
 ## [1.1.4](https://github.com/chrischall/zillow-mcp/compare/v1.1.3...v1.1.4) (2026-09-27)
 
 
