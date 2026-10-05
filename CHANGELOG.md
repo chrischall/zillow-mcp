@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.7](https://github.com/chrischall/zillow-mcp/compare/v1.1.6...v1.1.7) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** require @chrischall/mcp-utils 2.14.0 and MCP SDK 2.3.0 ([#289](https://github.com/chrischall/zillow-mcp/issues/289)) ([f25810a](https://github.com/chrischall/zillow-mcp/commit/f25810a8d208b5e7ec1a1514729c1fc01354d39f))
+
 ## [1.1.6](https://github.com/chrischall/zillow-mcp/compare/v1.1.5...v1.1.6) (2026-10-03)
 
 
