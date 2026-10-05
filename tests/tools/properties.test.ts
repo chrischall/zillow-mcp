@@ -817,7 +817,7 @@ describe('zillow_get_property tool', () => {
         expect(parsed.last_sold_status).toBe('available');
       });
 
-      it('last_sold_status="never_sold" when priceHistory has events but no Sold', async () => {
+      it('last_sold_status="not_in_history" when priceHistory has events but no Sold', async () => {
         // Distinguishes "Zillow saw a price change but no sale" from
         // "Zillow has no history for this property".
         mockFetchHtml.mockResolvedValue(
@@ -830,7 +830,7 @@ describe('zillow_get_property tool', () => {
         );
         const result = await harness.callTool('zillow_get_property', { zpid: 1 });
         const parsed = parseToolResult<{ last_sold_status: string }>(result);
-        expect(parsed.last_sold_status).toBe('never_sold');
+        expect(parsed.last_sold_status).toBe('not_in_history');
       });
 
       it('last_sold_status="unavailable" when priceHistory is absent', async () => {

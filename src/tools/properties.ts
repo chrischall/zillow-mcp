@@ -215,10 +215,12 @@ export interface FormattedProperty {
    * Disambiguates "Zillow has no record of a sale" from "lookup
    * failed" (issue #77). Always present.
    * - `available`   — a Sold event was found in the price history.
-   * - `never_sold`  — price history was non-empty but had no Sold event.
+   * - `not_in_history` — price history was non-empty but had no Sold event.
+   *   Zillow often carries only the current listing, so this is NOT proof
+   *   the home never sold.
    * - `unavailable` — no price history at all (Zillow may simply not have it).
    */
-  last_sold_status: 'available' | 'never_sold' | 'unavailable';
+  last_sold_status: 'available' | 'not_in_history' | 'unavailable';
   tax_assessed_value?: number;
   tax_assessed_year?: number;
   schools?: RawProperty['schools'];
@@ -670,10 +672,11 @@ export function format(
   } else {
     out.last_sold_date = null;
     out.last_sold_price = null;
-    // Non-empty history without a Sold event = never_sold; empty/absent = unavailable.
+    // Non-empty history without a Sold event = not_in_history (the history is
+    // often just the current listing); empty/absent = unavailable.
     out.last_sold_status =
       Array.isArray(raw.priceHistory) && raw.priceHistory.length > 0
-        ? 'never_sold'
+        ? 'not_in_history'
         : 'unavailable';
   }
 
