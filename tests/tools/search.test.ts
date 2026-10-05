@@ -4,6 +4,7 @@ import {
   LocationNotResolved,
   buildSearchPath,
   buildSearchQueryState,
+  matchesHomeTypes,
   formatListing,
   listingsMatchLocation,
   locationTokens,
@@ -195,7 +196,15 @@ describe('buildSearchQueryState', () => {
     const fs = sqs.filterState as Record<string, unknown>;
     expect(fs.isCondo).toEqual({ value: true });
     expect(fs.isTownhouse).toEqual({ value: true });
-    expect(fs.isSingleFamily).toBeUndefined();
+    expect(fs.isSingleFamily).toEqual({ value: false });
+    expect(fs.isApartment).toEqual({ value: false });
+  });
+
+  it('matchesHomeTypes drops listings of other types but keeps unknowns', () => {
+    expect(matchesHomeTypes('CONDO', ['house'])).toBe(false);
+    expect(matchesHomeTypes('SINGLE_FAMILY', ['house'])).toBe(true);
+    expect(matchesHomeTypes(undefined, ['house'])).toBe(true);
+    expect(matchesHomeTypes('CONDO', undefined)).toBe(true);
   });
 
   it('flips the right filters for status=for_rent', () => {
@@ -1009,5 +1018,21 @@ describe('listingsMatchLocation state-code noise set (fleet-audit#1144)', () => 
     }
     // A real place token still discriminates.
     expect(listingsMatchLocation([], ['lure'])).toBe(false);
+  });
+});
+
+describe('formatListing sold fields', () => {
+  it('surfaces sold_date and days_on_zillow when Zillow provides them', () => {
+    const f = formatListing({
+      zpid: 1,
+      hdpData: { homeInfo: { zpid: 1, dateSold: Date.UTC(2026, 8, 12), daysOnZillow: 4 } },
+    })!;
+    expect(f.sold_date).toBe('2026-09-12');
+    expect(f.days_on_zillow).toBe(4);
+  });
+  it('omits them for active listings', () => {
+    const f = formatListing({ zpid: 2, hdpData: { homeInfo: { zpid: 2 } } })!;
+    expect(f).not.toHaveProperty('sold_date');
+    expect(f).not.toHaveProperty('days_on_zillow');
   });
 });

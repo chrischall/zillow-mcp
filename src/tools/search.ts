@@ -49,6 +49,23 @@ type HomeType =
   | 'land'
   | 'apartment';
 
+/** Zillow's `homeType` value for each filter type, to drop stragglers the filter lets through. */
+const ZILLOW_HOME_TYPE: Record<HomeType, string> = {
+  house: 'SINGLE_FAMILY',
+  condo: 'CONDO',
+  townhouse: 'TOWNHOUSE',
+  multi_family: 'MULTI_FAMILY',
+  manufactured: 'MANUFACTURED',
+  land: 'LOT',
+  apartment: 'APARTMENT',
+};
+
+/** True when `home_type` is unknown or one of the requested types. */
+export function matchesHomeTypes(home_type: string | undefined, types?: HomeType[]): boolean {
+  if (!types || types.length === 0 || !home_type) return true;
+  return types.some((t) => ZILLOW_HOME_TYPE[t] === home_type);
+}
+
 const HOME_TYPE_FILTERS: Record<HomeType, string> = {
   house: 'isSingleFamily',
   condo: 'isCondo',
@@ -88,6 +105,9 @@ export interface RawListing {
       longitude?: number;
       zestimate?: number;
       rentZestimate?: number;
+      /** Epoch ms; present on recently-sold results. */
+      dateSold?: number;
+      daysOnZillow?: number;
     };
   };
   detailUrl?: string;
@@ -111,6 +131,9 @@ export interface FormattedListing {
   longitude?: number;
   zestimate?: number;
   rent_zestimate?: number;
+  /** YYYY-MM-DD; only on sold results. */
+  sold_date?: string;
+  days_on_zillow?: number;
   image_url?: string;
   url?: string;
 }
@@ -144,6 +167,12 @@ export function formatListing(raw: RawListing): FormattedListing | null {
     longitude: info.longitude,
     zestimate: info.zestimate,
     rent_zestimate: info.rentZestimate,
+    ...(typeof info.dateSold === 'number' && info.dateSold > 0
+      ? { sold_date: new Date(info.dateSold).toISOString().slice(0, 10) }
+      : {}),
+    ...(typeof info.daysOnZillow === 'number' && info.daysOnZillow >= 0
+      ? { days_on_zillow: info.daysOnZillow }
+      : {}),
     image_url: raw.imgSrc,
     url,
   };
@@ -302,8 +331,10 @@ export function buildSearchQueryState(
     filterState.baths = { min: input.baths_min };
   }
   if (input.home_types && input.home_types.length > 0) {
-    for (const ht of input.home_types) {
-      filterState[HOME_TYPE_FILTERS[ht]] = { value: true };
+    // Zillow includes every type it is not told to exclude, so a filter
+    // that only switches the wanted types on narrows nothing.
+    for (const ht of Object.keys(HOME_TYPE_FILTERS) as HomeType[]) {
+      filterState[HOME_TYPE_FILTERS[ht]] = { value: input.home_types.includes(ht) };
     }
   }
   const sqs: Record<string, unknown> = {
@@ -673,8 +704,9 @@ export function registerSearchTools(
           const f = formatListing(r);
           if (!f || seen.has(f.zpid)) continue;
           seen.add(f.zpid);
-          aggregated.push(f);
           added++;
+          if (!matchesHomeTypes(f.home_type, input.home_types)) continue;
+          aggregated.push(f);
           if (aggregated.length >= limit) break;
         }
         if (added === 0) break; // repeated page — Zillow clamped/ignored pagination
