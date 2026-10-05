@@ -5,8 +5,8 @@
 
 ### Bug Fixes
 
-* **properties:** report not_in_history instead of never_sold ([#294](https://github.com/chrischall/zillow-mcp/issues/294)) ([11b656a](https://github.com/chrischall/zillow-mcp/commit/11b656a0bbd3402e018bf1a6836a54fc6e750202))
-* **search:** exclude unselected home types; add sold_date and days_on_zillow ([#293](https://github.com/chrischall/zillow-mcp/issues/293)) ([c039f21](https://github.com/chrischall/zillow-mcp/commit/c039f213883a313e445be624e804b9089ef46158))
+* **properties:** report not_in_history instead of never_sold (thanks @Marius-Juston) ([#294](https://github.com/chrischall/zillow-mcp/issues/294)) ([11b656a](https://github.com/chrischall/zillow-mcp/commit/11b656a0bbd3402e018bf1a6836a54fc6e750202))
+* **search:** exclude unselected home types; add sold_date and days_on_zillow (thanks @Marius-Juston) ([#293](https://github.com/chrischall/zillow-mcp/issues/293)) ([c039f21](https://github.com/chrischall/zillow-mcp/commit/c039f213883a313e445be624e804b9089ef46158))
 
 ## [1.1.7](https://github.com/chrischall/zillow-mcp/compare/v1.1.6...v1.1.7) (2026-10-05)
 
