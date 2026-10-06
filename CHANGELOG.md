@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/chrischall/zillow-mcp/compare/v1.1.8...v1.2.0) (2026-10-06)
+
+
+### Features
+
+* **search:** exhaustive area sweeps with completeness metadata ([#297](https://github.com/chrischall/zillow-mcp/issues/297)) ([4156820](https://github.com/chrischall/zillow-mcp/commit/4156820d2795c5890b45ac999055b008ca3c5b17))
+
 ## [1.1.8](https://github.com/chrischall/zillow-mcp/compare/v1.1.7...v1.1.8) (2026-10-05)
 
 
