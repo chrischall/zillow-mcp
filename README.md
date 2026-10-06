@@ -21,7 +21,8 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 
 | Tool | Purpose | Auth-scoped |
 | --- | --- | :---: |
-| `zillow_search_properties` | Search listings by location, status, price band, beds/baths, home type | |
+| `zillow_search_properties` | Search listings by location, status, price band, beds/baths, home type. Optional `map_bounds` viewport; `include_meta` reports Zillow's own total vs fetched, so truncation is visible | |
+| `zillow_sweep_area` | Exhaustive enumeration of an area: recursive map tiling until no tile is truncated, deduped, with a completeness summary and drift warnings; optional JSON output file | |
 | `zillow_get_property` | Full record for a zpid (price, Zestimate, beds, schools, neighborhood, price history) | |
 | `zillow_get_by_address` | Resolve a free-text address (with optional city/state/zip) to its Zillow zpid + canonical URL | |
 | `zillow_resolve_addresses` | Batch-resolve many free-text addresses (or structured rows) to zpids + canonical URLs | |

@@ -13,6 +13,7 @@ This is a "Pattern A" fetchproxy MCP (every call rides through fetchproxy), not 
 | Tool | File | Endpoint | Kind |
 | --- | --- | --- | --- |
 | `zillow_search_properties` | `tools/search.ts` | GET `/homes/<location>_rb/?searchQueryState=...` SSR | read |
+| `zillow_sweep_area` | `tools/search.ts` | Same SSR search, per map tile (`searchQueryState.mapBounds`), quartering tiles whose `totalResultCount` exceeds what paging returns | read (optional local file write) |
 | `zillow_get_property` | `tools/properties.ts` | GET SSR `/homedetails/<zpid>_zpid/` (`__NEXT_DATA__` gdpClientCache) | read |
 | `zillow_get_by_address` | `tools/get-by-address.ts` | GET `/homes/<address-slug>_rb/` SSR — shared 4-rung resolver (`resolver.ts`) | read |
 | `zillow_resolve_addresses` | `tools/resolve-addresses.ts` | Batch over the shared resolver (`resolver.ts`), bridge-concurrency-bounded | read |
@@ -63,7 +64,8 @@ src/
   sessions.ts           # re-exports SessionRegistry from
                         #   @chrischall/mcp-utils/session (fleet-shared)
   tools/
-    search.ts           # zillow_search_properties (buildSearchQueryState + formatListing)
+    search.ts           # zillow_search_properties (buildSearchQueryState + formatListing),
+                        #   runRegionSearch (paging + completeness meta), zillow_sweep_area
     properties.ts       # zillow_get_property + the shared fetchPropertyRecord
                         #   (SSR /homedetails/ scrape) + format()
     resolver.ts         # shared 4-rung address resolver (resolveAddressFull)
@@ -119,7 +121,7 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 
 - All tools prefixed `zillow_*`.
 - Tool return shape: `minifiedResult(data)` imported from `@chrischall/mcp-utils` → `{ content: [{ type: 'text', text: JSON.stringify(data) }] }`. Don't hand-roll the wrapper, and don't reintroduce a local re-export seam for it — importing straight from the barrel is what keeps a fleet-wide pass from landing the symbol twice in one file.
-- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for the local-only computation/registry tools. The session-registry tools (`register_session`, `set_active_session`) are the only writes, and come from the shared `@chrischall/mcp-utils/session` registration — they mutate in-memory state, not zillow.com.
+- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for the local-only computation/registry tools. The session-registry tools (`register_session`, `set_active_session`) are the only writes, and come from the shared `@chrischall/mcp-utils/session` registration — they mutate in-memory state, not zillow.com. One documented exception: `zillow_sweep_area` sets `readOnlyHint: false` because its optional `output_path` writes a local JSON file (absolute path, `.json` only, never overwriting an existing file); it is still read-only against Zillow.
 - Path-only inputs to `ZillowClient`: pass `/some/path?with=query`, never a full URL. `FetchproxyTransport` prepends `https://www.zillow.com`. When a tool takes a `url` arg from the user, reduce it via `urlToPath` from `src/url.ts`.
 - Write a failing test before implementation (TDD).
 - ESM + NodeNext: imports use `.js` extensions even for `.ts` source.

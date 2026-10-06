@@ -1,5 +1,8 @@
 import { z } from 'zod';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, extname, isAbsolute } from 'node:path';
 import { FIRST_DIGIT_TO_STATES, tokenize } from '@chrischall/realty-core';
+import { minifiedResult } from '@chrischall/mcp-utils';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { viewArg, viewResponse } from '../view.js';
@@ -194,6 +197,8 @@ export interface SearchInput {
    * handler for the public `auto_paginate` flag.
    */
   page?: number;
+  /** Optional map viewport; intersects the resolved region (tiling / sweeps). */
+  map_bounds?: MapBounds;
 }
 
 export interface RegionSelection {
@@ -347,6 +352,13 @@ export function buildSearchQueryState(
     sqs.regionSelection = region.regionSelection;
     sqs.mapBounds = region.mapBounds;
   }
+  if (input.map_bounds) {
+    // A caller-supplied viewport narrows the search to that box (Zillow's
+    // list results are the region ∩ the visible map), which is how a dense
+    // market is enumerated tile by tile under the per-query page cap.
+    sqs.mapBounds = input.map_bounds;
+    sqs.isMapVisible = true;
+  }
   if (input.page !== undefined && input.page > 1) {
     sqs.pagination = { currentPage: input.page };
   }
@@ -372,7 +384,180 @@ interface ZillowPageState {
     regionSelection?: RegionSelection[];
     mapBounds?: MapBounds;
   };
-  cat1?: { searchResults?: { listResults?: RawListing[] } };
+  cat1?: {
+    searchResults?: { listResults?: RawListing[] };
+    searchList?: { totalResultCount?: number; totalPages?: number; resultsPerPage?: number };
+  };
+  categoryTotals?: { cat1?: { totalResultCount?: number } };
+}
+
+/**
+ * Zillow's own count of matching listings for a search page, or null when
+ * the page doesn't carry one (shape drift). Read from `cat1.searchList`
+ * first, then `categoryTotals.cat1`.
+ */
+export function totalResultCount(sps: ZillowPageState | null): number | null {
+  const a = sps?.cat1?.searchList?.totalResultCount;
+  if (typeof a === 'number' && a >= 0) return a;
+  const b = sps?.categoryTotals?.cat1?.totalResultCount;
+  if (typeof b === 'number' && b >= 0) return b;
+  return null;
+}
+
+/**
+ * Re-apply the numeric filters to a formatted listing. Zillow has been seen
+ * relaxing filters on later pages; a listing whose field is missing is kept.
+ */
+export function passesNumericFilters(f: FormattedListing, input: SearchInput): boolean {
+  if (input.price_min !== undefined && f.price !== undefined && f.price < input.price_min) return false;
+  if (input.price_max !== undefined && f.price !== undefined && f.price > input.price_max) return false;
+  if (input.beds_min !== undefined && f.beds !== undefined && f.beds < input.beds_min) return false;
+  if (input.baths_min !== undefined && f.baths !== undefined && f.baths < input.baths_min) return false;
+  return true;
+}
+
+/** True when a listing with coordinates sits outside the bounds (with a small tolerance). */
+export function outsideBounds(f: FormattedListing, b: MapBounds, tol = 0.002): boolean {
+  if (f.latitude === undefined || f.longitude === undefined) return false;
+  return (
+    f.latitude > b.north + tol ||
+    f.latitude < b.south - tol ||
+    f.longitude > b.east + tol ||
+    f.longitude < b.west - tol
+  );
+}
+
+export interface SearchMeta {
+  /** Zillow's own total for the query, or null when the page carried none. */
+  total_result_count: number | null;
+  pages_fetched: number;
+  /** Unique listings seen on the fetched pages (before the filter guard). */
+  fetched: number;
+  /** Listings dropped because Zillow returned them outside the numeric filters. */
+  dropped_filter_guard: number;
+  /** Listings that passed the home-type and numeric guards (what the total should count). */
+  matched: number;
+  /** Zillow's total minus `matched` when positive: matches Zillow counted that this search did not return. */
+  shortfall: number;
+  /** Up to 200 listings dropped by the guards, with the reason (for auditing filter drift). */
+  dropped: Array<{ zpid: string; address: string; price?: number; beds?: number; baths?: number; home_type?: string; reason: string }>;
+  /** Listings dropped by the home-type guard. */
+  dropped_home_type: number;
+  /** Listings outside `map_bounds` (Zillow ignoring the viewport). */
+  outside_bounds: number;
+  /** True when Zillow reports more matches than were fetched. */
+  truncated: boolean;
+  /** Why the page walk stopped. */
+  stop_reason: 'limit' | 'empty_page' | 'repeat_page' | 'single_page' | 'max_pages' | 'budget' | 'page_error' | 'over_split_threshold';
+  /** Set when stop_reason is 'page_error': the error from the page that failed. */
+  page_error?: string;
+}
+
+/**
+ * One filtered search over a resolved region, walking pages until the
+ * limit / an empty page / a repeated page. Returns the listings plus a
+ * completeness report so callers can tell a full answer from a capped one.
+ */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function runRegionSearch(
+  client: ZillowClient,
+  input: SearchInput & { auto_paginate?: boolean },
+  region: ResolvedRegion,
+  limit: number,
+  opts: {
+    splitAbove?: number;
+    /** Hard cap on pages fetched (a caller's remaining request budget); hitting it stops with `budget`. */
+    maxPages?: number;
+    /** Pause before every page after the first. */
+    delayMs?: number;
+  } = {}
+): Promise<{ results: FormattedListing[]; meta: SearchMeta }> {
+  const autoPaginate = input.auto_paginate !== false;
+  const wantsMore = autoPaginate && limit > ZILLOW_PAGE_SIZE;
+  const aggregated: FormattedListing[] = [];
+  const seen = new Set<string>();
+  let total: number | null = null;
+  let pages = 0;
+  let droppedFilter = 0;
+  let droppedType = 0;
+  let outside = 0;
+  const dropped: SearchMeta['dropped'] = [];
+  const drop = (f: FormattedListing, reason: string) => {
+    if (dropped.length < 200) dropped.push({ zpid: f.zpid, address: f.address, price: f.price, beds: f.beds, baths: f.baths, home_type: f.home_type, reason });
+  };
+  const pageCap = Math.min(MAX_PAGES, opts.maxPages ?? MAX_PAGES);
+  let stop: SearchMeta['stop_reason'] = pageCap < MAX_PAGES ? 'budget' : 'max_pages';
+  let pageError: string | undefined;
+  for (let page = 1; page <= pageCap; page++) {
+    if (page > 1 && opts.delayMs) await sleep(opts.delayMs);
+    const sqs = buildSearchQueryState({ ...input, page }, region);
+    let html: string;
+    try {
+      html = await client.fetchHtml(buildSearchPath(input.location, sqs));
+    } catch (e) {
+      // Zillow answers deep pages (e.g. page 25 of a large sold search) with
+      // a 400. Keep what earlier pages returned and report the truncation;
+      // only a failing first page is a real error.
+      if (page === 1) throw e;
+      stop = 'page_error';
+      pageError = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      break;
+    }
+    const sps = extractSearchPageState(html);
+    pages++;
+    if (total === null) total = totalResultCount(sps);
+    if (page === 1 && opts.splitAbove !== undefined && total !== null && total > opts.splitAbove) {
+      // The caller will split this area anyway; don't page through it.
+      stop = 'over_split_threshold';
+      break;
+    }
+    const raw = sps?.cat1?.searchResults?.listResults ?? [];
+    if (raw.length === 0) { stop = 'empty_page'; break; }
+    let added = 0;
+    for (const r of raw) {
+      const f = formatListing(r);
+      if (!f || seen.has(f.zpid)) continue;
+      seen.add(f.zpid);
+      added++;
+      if (input.map_bounds && outsideBounds(f, input.map_bounds)) outside++;
+      if (!matchesHomeTypes(f.home_type, input.home_types)) { droppedType++; drop(f, 'home_type'); continue; }
+      if (!passesNumericFilters(f, input)) { droppedFilter++; drop(f, filterFailure(f, input)); continue; }
+      aggregated.push(f);
+      if (aggregated.length >= limit) break;
+    }
+    if (added === 0) { stop = 'repeat_page'; break; }
+    if (aggregated.length >= limit) { stop = 'limit'; break; }
+    if (!wantsMore) { stop = 'single_page'; break; }
+  }
+  const fetched = seen.size;
+  const matched = fetched - droppedFilter - droppedType;
+  const shortfall = total !== null ? Math.max(0, total - matched) : 0;
+  // Truncated when Zillow served fewer listings than it counted (it stopped
+  // paging early), or when filter-passing matches fall short of the total and
+  // we stopped paging ourselves. Zillow pads pages with off-filter listings,
+  // so `fetched` alone can exceed the total while matches are still missing;
+  // a shortfall after Zillow ran out of pages is a guard disagreement, which
+  // the caller sees as `shortfall` + `dropped`.
+  const stoppedEarly = stop === 'max_pages' || stop === 'budget' || stop === 'limit' || stop === 'single_page' || stop === 'page_error' || stop === 'over_split_threshold';
+  const truncated = total !== null ? total > fetched || (shortfall > 0 && stoppedEarly) : stoppedEarly;
+  return {
+    results: aggregated.slice(0, limit),
+    meta: {
+      total_result_count: total,
+      pages_fetched: pages,
+      fetched,
+      dropped_filter_guard: droppedFilter,
+      dropped_home_type: droppedType,
+      matched,
+      shortfall,
+      dropped,
+      outside_bounds: outside,
+      truncated,
+      stop_reason: stop,
+      ...(pageError ? { page_error: pageError } : {}),
+    },
+  };
 }
 
 /**
@@ -640,6 +825,14 @@ export function registerSearchTools(
           .describe(
             'Max listings to return (default 40, max 1000). When > 40 and `auto_paginate` is true (the default), the tool walks Zillow\'s pagination server-side and aggregates pages until `limit` is reached, an empty page is returned, or a page adds no new listings. Zillow caps each search response at ~40 listings (issue #54).'
           ),
+        map_bounds: z
+          .object({ north: z.number(), south: z.number(), east: z.number(), west: z.number() })
+          .optional()
+          .describe('Optional map viewport (lat/lng box) to intersect with the location — use to tile dense markets.'),
+        include_meta: z
+          .boolean()
+          .optional()
+          .describe('When true, return {meta, results}: meta carries Zillow\'s own total_result_count, pages fetched, listings dropped by the filter/home-type guards, and `truncated` (more matches exist than were returned).'),
         auto_paginate: z
           .boolean()
           .optional()
@@ -656,9 +849,8 @@ export function registerSearchTools(
     // `{ ...input, page }` below carries only Zillow query fields — inert
     // either way (`buildSearchQueryState` reads named fields, never a spread),
     // but the type now says so.
-    async ({ view, ...input }) => {
+    async ({ view, include_meta, ...input }) => {
       const limit = input.limit ?? 40;
-      const autoPaginate = input.auto_paginate !== false;
       // Step 1: resolve. Either we got a region we can pin into a
       // filtered second request, or we got an address-shaped match
       // where Zillow's resolver returned the listing directly.
@@ -676,61 +868,207 @@ export function registerSearchTools(
           .slice(0, limit);
         return viewResponse(view, formatted);
       }
-      // Step 2: filtered search with the region pinned in. When the
-      // caller asks for more than fits on one Zillow page (default ~40
-      // results), walk `pagination.currentPage` and aggregate until
-      // either the limit is met or Zillow returns an empty page (the
-      // natural terminator). The single-page path is preserved when
-      // `limit` is at or below the default — pagination only kicks in
-      // for callers that explicitly asked for more. (Issue #54.)
-      const aggregated: FormattedListing[] = [];
-      // zpids already aggregated (fleet-audit#291): Zillow may clamp an
-      // out-of-range `currentPage` to the last valid page, or ignore
-      // pagination, instead of returning an empty page. Skip repeats and
-      // stop as soon as a page contributes nothing new, rather than
-      // walking all MAX_PAGES and padding the result with duplicates.
-      const seen = new Set<string>();
-      // First page: always fetched. Subsequent pages: only if the
-      // caller wants more than one page worth AND opted into auto-pagination.
-      const wantsMore = autoPaginate && limit > ZILLOW_PAGE_SIZE;
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        const sqs = buildSearchQueryState({ ...input, page }, resolved.region);
-        const html = await client.fetchHtml(buildSearchPath(input.location, sqs));
-        const sps = extractSearchPageState(html);
-        const raw = sps?.cat1?.searchResults?.listResults ?? [];
-        if (raw.length === 0) break; // natural terminator
-        let added = 0;
-        for (const r of raw) {
-          const f = formatListing(r);
-          if (!f || seen.has(f.zpid)) continue;
-          seen.add(f.zpid);
-          added++;
-          if (!matchesHomeTypes(f.home_type, input.home_types)) continue;
-          aggregated.push(f);
-          if (aggregated.length >= limit) break;
-        }
-        if (added === 0) break; // repeated page — Zillow clamped/ignored pagination
-        if (!wantsMore) break;
-        if (aggregated.length >= limit) break;
+      // Step 2: filtered search with the region pinned in, paginated, with a
+      // completeness report (Zillow's own total vs what was fetched) so a
+      // capped answer is never mistaken for a complete one.
+      const { results, meta } = await runRegionSearch(client, input, resolved.region, limit);
+      if (include_meta) {
+        return viewResponse(view, { meta, results });
       }
-      // Answer in the requested rung, exactly as the single-round-trip
-      // branch above does. This is the PRIMARY path — every city/ZIP/
-      // neighbourhood query lands here — and it returned an unprojected
-      // `minifiedResult` while the schema advertised `view`, so the
-      // parameter was declared and did nothing for almost every caller.
-      // A declared parameter that is silently ignored is worse than no
-      // parameter: it reads as honoured.
-      //
-      // Note what this does NOT change today: both branches emit
-      // `FormattedListing`, a fixed key set whose only media field is the
-      // constructed `image_url`, and `view.ts` keeps that by name (#119). So
-      // compact and full currently serialize to the same bytes here and no
-      // output test can tell the fix from the bug — which is exactly why the
-      // guard for it is a wiring assertion (`tests/tools/view-wiring.test.ts`)
-      // rather than an output one. The point is the contract: the moment a
-      // media field joins the shape, compact acts on it instead of the
-      // parameter having quietly meant nothing all along.
-      return viewResponse(view, aggregated.slice(0, limit));
+      if (meta.stop_reason === 'page_error') {
+        // A deep page failed and earlier pages were kept: never let that pass
+        // as a complete answer just because the caller didn't ask for meta.
+        return viewResponse(view, {
+          warning: `Results truncated: Zillow failed on page ${meta.pages_fetched + 1} (${meta.page_error}); returning the ${results.length} listings from earlier pages.`,
+          meta,
+          results,
+        });
+      }
+      return viewResponse(view, results);
     }
   );
+
+  server.registerTool(
+    'zillow_sweep_area',
+    {
+      title: 'Exhaustively sweep a Zillow search area',
+      description:
+        "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas. Sequential requests with a delay. Read-only against Zillow; the only write is the optional local output file.",
+      annotations: { title: 'Sweep Zillow area', readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+      inputSchema: z.object({
+        location: z.string().describe('City / ZIP / county used to resolve the region (e.g. "King County, WA").'),
+        bounds: z
+          .object({ north: z.number(), south: z.number(), east: z.number(), west: z.number() })
+          .optional()
+          .describe('Optional box to sweep; defaults to the resolved region\'s map bounds.'),
+        status: z.enum(['for_sale', 'for_rent', 'sold']).optional(),
+        price_min: z.number().int().nonnegative().optional(),
+        price_max: z.number().int().nonnegative().optional(),
+        beds_min: z.number().int().nonnegative().optional(),
+        baths_min: z.number().int().nonnegative().optional(),
+        home_types: z.array(z.enum(['house', 'condo', 'townhouse', 'multi_family', 'manufactured', 'land', 'apartment'])).optional(),
+        max_depth: z.number().int().min(0).max(8).optional().describe('Max quarterings per tile (default 6).'),
+        tile_cap: z.number().int().positive().max(1000).optional().describe('Treat a tile as complete only if its total is at most this (default 400).'),
+        delay_ms: z.number().int().min(0).max(10000).optional().describe('Pause before every Zillow request, including each page within a tile (default 1200).'),
+        max_requests: z.number().int().positive().max(400).optional().describe('Hard request budget (default 150), counting the resolve call and every page; the sweep stops mid-tile rather than exceed it.'),
+        output_path: z.string().optional().describe('Optional absolute path of a NEW .json file to write the full results (and per-tile counts) to; an existing file is never overwritten. Omit to get the results inline; use a file for large areas so the listings stay out of the conversation.'),
+      }),
+    },
+    async (input) => {
+      return minifiedResult(await sweepArea(client, input));
+    }
+  );
+}
+
+export interface SweepInput {
+  location: string;
+  bounds?: MapBounds;
+  status?: 'for_sale' | 'for_rent' | 'sold';
+  price_min?: number;
+  price_max?: number;
+  beds_min?: number;
+  baths_min?: number;
+  home_types?: HomeType[];
+  max_depth?: number;
+  tile_cap?: number;
+  delay_ms?: number;
+  max_requests?: number;
+  output_path?: string;
+}
+
+/** Which numeric filter a listing fails (first match). */
+export function filterFailure(f: FormattedListing, input: SearchInput): string {
+  if (input.price_min !== undefined && f.price !== undefined && f.price < input.price_min) return 'price_below_min';
+  if (input.price_max !== undefined && f.price !== undefined && f.price > input.price_max) return 'price_above_max';
+  if (input.beds_min !== undefined && f.beds !== undefined && f.beds < input.beds_min) return 'beds_below_min';
+  if (input.baths_min !== undefined && f.baths !== undefined && f.baths < input.baths_min) return 'baths_below_min';
+  return 'other';
+}
+
+/**
+ * `output_path` comes from the model, so guard it before any request: an
+ * absolute path (a relative one would land wherever the server's cwd is), a
+ * `.json` file (not a dotfile or script), and never an existing file.
+ */
+export function assertWritableOutputPath(p: string): void {
+  if (!isAbsolute(p)) throw new Error(`output_path must be an absolute path; got "${p}".`);
+  if (extname(p).toLowerCase() !== '.json') throw new Error(`output_path must end in .json; got "${p}".`);
+  if (existsSync(p)) throw new Error(`output_path ${p} already exists; refusing to overwrite it. Pass a new file path.`);
+}
+
+/** Split a box into four quadrants. */
+export function quarter(b: MapBounds): MapBounds[] {
+  const mLat = (b.north + b.south) / 2;
+  const mLng = (b.east + b.west) / 2;
+  return [
+    { north: b.north, south: mLat, west: b.west, east: mLng },
+    { north: b.north, south: mLat, west: mLng, east: b.east },
+    { north: mLat, south: b.south, west: b.west, east: mLng },
+    { north: mLat, south: b.south, west: mLng, east: b.east },
+  ];
+}
+
+export async function sweepArea(client: ZillowClient, input: SweepInput) {
+  const maxDepth = input.max_depth ?? 6;
+  const tileCap = input.tile_cap ?? 400;
+  const delay = input.delay_ms ?? 1200;
+  const budget = input.max_requests ?? 150;
+  if (input.output_path !== undefined) assertWritableOutputPath(input.output_path);
+  const resolved = await resolveLocationOrListings(client, input.location);
+  if (resolved.kind !== 'region') {
+    throw new LocationNotResolved(input.location, 'sweeps need a region (city, ZIP, county), not an address');
+  }
+  const root = input.bounds ?? resolved.region.mapBounds;
+  const byZpid = new Map<string, FormattedListing & { tile: string }>();
+  const tiles: Array<{ id: string; bounds: MapBounds; depth: number; total: number | null; fetched: number; kept: number; truncated: boolean; split: boolean; outside_bounds: number; dropped_filter_guard: number; matched?: number; shortfall?: number }> = [];
+  const droppedAll = new Map<string, SearchMeta['dropped'][number] & { tile: string }>();
+  const tileErrors: Array<{ id: string; bounds: MapBounds; error: string }> = [];
+  const warnings = new Set<string>();
+  let requests = 1; // the resolve call
+  let budgetHit = false;
+  const queue: Array<{ id: string; b: MapBounds; depth: number }> = [{ id: 't', b: root, depth: 0 }];
+  while (queue.length) {
+    const t = queue.shift()!;
+    if (requests >= budget) { budgetHit = true; tiles.push({ id: t.id, bounds: t.b, depth: t.depth, total: null, fetched: 0, kept: 0, truncated: true, split: false, outside_bounds: 0, dropped_filter_guard: 0 }); continue; }
+    if (delay) await sleep(delay);
+    let res: Awaited<ReturnType<typeof runRegionSearch>>;
+    try {
+      res = await runRegionSearch(
+      client,
+      { location: input.location, status: input.status, price_min: input.price_min, price_max: input.price_max, beds_min: input.beds_min, baths_min: input.baths_min, home_types: input.home_types, map_bounds: t.b, auto_paginate: true },
+      resolved.region,
+      SEARCH_LIMIT_MAX,
+      { splitAbove: t.depth < maxDepth ? tileCap : undefined, maxPages: budget - requests, delayMs: delay }
+    );
+    } catch (e) {
+      // One failing tile must not discard the rest of the sweep.
+      requests += 1;
+      tileErrors.push({ id: t.id, bounds: t.b, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
+      tiles.push({ id: t.id, bounds: t.b, depth: t.depth, total: null, fetched: 0, kept: 0, truncated: true, split: false, outside_bounds: 0, dropped_filter_guard: 0 });
+      continue;
+    }
+    const { results, meta } = res;
+    requests += meta.pages_fetched;
+    if (meta.stop_reason === 'budget' && meta.truncated) budgetHit = true;
+    if (meta.stop_reason === 'page_error') warnings.add('Zillow refused a deep result page (HTTP error) on some tiles; those tiles kept what earlier pages returned and count as truncated.');
+    if (meta.total_result_count === null) warnings.add('Zillow returned no total count on some tiles (shape drift?) — completeness for those tiles inferred from paging only.');
+    if (meta.dropped_filter_guard > 0) warnings.add('Zillow returned listings outside the numeric filters; they were dropped by the guard (filter drift).');
+    if (meta.outside_bounds > 0) warnings.add('Zillow returned listings outside the requested tile (viewport ignored?) — they are kept but deduped.');
+    const needsSplit = (meta.truncated || (meta.total_result_count ?? 0) > tileCap) && t.depth < maxDepth;
+    tiles.push({ id: t.id, bounds: t.b, depth: t.depth, total: meta.total_result_count, fetched: meta.fetched, kept: results.length, truncated: meta.truncated && !needsSplit, split: needsSplit, outside_bounds: meta.outside_bounds, dropped_filter_guard: meta.dropped_filter_guard, matched: meta.matched, shortfall: meta.shortfall });
+    if (!needsSplit) {
+      for (const d of meta.dropped) if (!droppedAll.has(d.zpid)) droppedAll.set(d.zpid, { ...d, tile: t.id });
+      if (meta.shortfall > 0 && !meta.truncated) warnings.add('Zillow counted more matches than passed the local filter guard on some tiles (Zillow and the guard disagree about a few listings, e.g. half-baths) — see `dropped` in the output file.');
+    }
+    if (needsSplit) {
+      quarter(t.b).forEach((q, k) => queue.push({ id: `${t.id}${k}`, b: q, depth: t.depth + 1 }));
+      continue; // children re-fetch this area; don't double count
+    }
+    for (const r of results) if (!byZpid.has(r.zpid)) byZpid.set(r.zpid, { ...r, tile: t.id });
+  }
+  const leaves = tiles.filter((t) => !t.split);
+  const stillTruncated = leaves.filter((t) => t.truncated);
+  const out = {
+    source: 'zillow',
+    swept_at: new Date().toISOString(),
+    query: { ...input, output_path: undefined },
+    root_bounds: root,
+    requests,
+    budget_hit: budgetHit,
+    tiles,
+    unique_listings: byZpid.size,
+    complete: !budgetHit && tileErrors.length === 0 && stillTruncated.length === 0,
+    tile_errors: tileErrors,
+    warnings: [...warnings],
+    results: [...byZpid.values()],
+    dropped: [...droppedAll.values()],
+  };
+  if (input.output_path) {
+    mkdirSync(dirname(input.output_path), { recursive: true });
+    try {
+      // 'wx': never clobber a file that appeared while the sweep ran.
+      writeFileSync(input.output_path, JSON.stringify(out, null, 1), { flag: 'wx' });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`output_path ${input.output_path} already exists; refusing to overwrite it. Pass a new file path.`);
+      }
+      throw e;
+    }
+  }
+  return {
+    ...(input.output_path ? { output_path: input.output_path } : {}),
+    complete: out.complete,
+    unique_listings: out.unique_listings,
+    requests,
+    leaf_tiles: leaves.length,
+    split_tiles: tiles.length - leaves.length,
+    truncated_leaf_tiles: stillTruncated.map((t) => ({ id: t.id, total: t.total, fetched: t.fetched, bounds: t.bounds })),
+    budget_hit: budgetHit,
+    ...(tileErrors.length ? { tile_errors: tileErrors } : {}),
+    sum_of_leaf_totals: leaves.reduce((a, t) => a + (t.total ?? 0), 0),
+    sum_of_leaf_shortfall: leaves.reduce((a, t) => a + (t.shortfall ?? 0), 0),
+    dropped_by_reason: [...droppedAll.values()].reduce<Record<string, number>>((a, d) => ((a[d.reason] = (a[d.reason] ?? 0) + 1), a), {}),
+    warnings: out.warnings,
+    ...(input.output_path ? {} : { results: out.results }),
+  };
 }

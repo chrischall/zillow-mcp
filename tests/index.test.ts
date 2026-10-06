@@ -19,6 +19,7 @@ const mockClient = {
 
 const EXPECTED_TOOLS = [
   'zillow_search_properties',
+  'zillow_sweep_area',
   'zillow_get_property',
   'zillow_get_zestimate_history',
   'zillow_get_saved_searches',

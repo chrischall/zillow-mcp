@@ -46,7 +46,8 @@ That's it. No API keys, no env vars.
 
 ### Public data
 
-- **`zillow_search_properties`** — Search by location + filters (price, beds, home type, status). Returns matching listings with price, Zestimate, beds/baths, sqft, image, and homedetails URL.
+- **`zillow_search_properties`** — Search by location + filters (price, beds, home type, status). Returns matching listings with price, Zestimate, beds/baths, sqft, image, and homedetails URL. Pass `include_meta: true` to see Zillow's own total and whether the answer was truncated.
+- **`zillow_sweep_area`** — Every listing matching the filters in an area, not just the first pages: tiles the map until no tile is truncated and reports whether the sweep is complete. Use it when the user needs the whole inventory ("all 3-bed townhomes under $900k in this county"); pass `output_path` for large areas.
 - **`zillow_get_property`** — Full property record by `zpid` or homedetails URL. Returns address, price, Zestimate, rent Zestimate, beds, baths, sqft, year built, schools, price history.
 - **`zillow_get_zestimate_history`** — Time series of Zestimate values for a property.
 - **`zillow_get_market_report`** — Median sale/list/rent price, days on market, inventory, ZHVI for a Zillow region (e.g. `/home-values/6181/brooklyn-ny/`).

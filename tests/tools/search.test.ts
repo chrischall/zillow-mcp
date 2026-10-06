@@ -831,6 +831,38 @@ describe('zillow_search_properties tool (two-step resolve + filter)', () => {
     expect(parsed).toHaveLength(3);
   });
 
+  it('surfaces a truncation warning by default when a later page fails', async () => {
+    // Before runRegionSearch swallowed deep-page errors, a failing page 2+
+    // threw. It now keeps earlier pages — which must not look complete to a
+    // caller that did not ask for include_meta.
+    const region = {
+      regionSelection: [{ regionId: 70190, regionType: 7 }],
+      mapBounds: { north: 36, south: 35, east: -82, west: -82.5 },
+    };
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (!path.includes('searchQueryState=')) {
+        return htmlWithState({ ...region, listResults: [lakeLureListing(1)] });
+      }
+      const sqs = JSON.parse(decodeURIComponent(path.split('searchQueryState=')[1]!)) as Record<string, unknown>;
+      const page = (sqs.pagination as { currentPage?: number } | undefined)?.currentPage ?? 1;
+      if (page >= 2) throw new Error('Zillow API error: 400 for GET /homes/...');
+      return htmlWithState({
+        ...region,
+        listResults: Array.from({ length: 40 }, (_, i) => lakeLureListing(i + 1)),
+      });
+    });
+    const r = await harness.callTool('zillow_search_properties', {
+      location: 'Lake Lure, NC 28746',
+      limit: 200,
+    });
+    expect(r.isError).toBeFalsy();
+    const parsed = parseToolResult<{ warning: string; meta: { stop_reason: string; truncated: boolean }; results: unknown[] }>(r);
+    expect(parsed.warning).toMatch(/truncated/i);
+    expect(parsed.warning).toMatch(/400/);
+    expect(parsed.meta).toMatchObject({ stop_reason: 'page_error', truncated: true });
+    expect(parsed.results).toHaveLength(40);
+  });
+
   /**
    * `view` wiring (#225).
    *

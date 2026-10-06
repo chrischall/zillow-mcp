@@ -62,6 +62,10 @@
     {
       "name": "zillow_calculate_mortgage",
       "description": "Local PITI mortgage-payment calculator — no network"
+    },
+    {
+      "name": "zillow_sweep_area",
+      "description": "Exhaustively enumerate Zillow listings in an area by recursive map tiling and report completeness; returns the listings inline, or writes them to an optional JSON output_path."
     }
   ]
 }
