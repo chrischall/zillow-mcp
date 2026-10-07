@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/chrischall/zillow-mcp/compare/v1.2.0...v1.2.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** add MCP_CONFIRM_ELICITATION=off opt-out and pick up fetchproxy relay fixes ([#301](https://github.com/chrischall/zillow-mcp/issues/301)) ([b077ed2](https://github.com/chrischall/zillow-mcp/commit/b077ed2f2046ee52dc83150ad9a750709724a972))
+
 ## [1.2.0](https://github.com/chrischall/zillow-mcp/compare/v1.1.8...v1.2.0) (2026-10-06)
 
 
