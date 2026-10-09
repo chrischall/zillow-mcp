@@ -11,3 +11,18 @@
  * here so existing imports (`from '../url.js'`) keep working unchanged.
  */
 export { urlToPath } from '@chrischall/realty-core';
+
+/**
+ * True when `path` (a urlToPath result) has a pathname under `prefix` and
+ * no `.`/`..` segments, literal or percent-encoded — the browser would
+ * normalise those and walk the credentialed GET out of `prefix`
+ * (fleet-audit#814). Only the pathname is checked; the query string is
+ * not, so `/user/acct?/home-values/` does not pass.
+ */
+export function isPathUnder(path: string, prefix: string): boolean {
+  const pathname = path.split(/[?#]/, 1)[0];
+  if (!pathname.startsWith(prefix)) return false;
+  return !pathname
+    .split('/')
+    .some((seg) => /^(?:\.|%2e){1,2}$/i.test(seg));
+}

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
-import { fetchPropertyRecord } from './properties.js';
+import { fetchPropertyRecord, zpidSchema } from './properties.js';
 
 /**
  * Zillow embeds the full photo gallery for a property inside the
@@ -137,8 +137,7 @@ export function registerPhotosTools(
         openWorldHint: true,
       },
       inputSchema: z.object({
-        zpid: z
-          .union([z.number().int().positive(), z.string()])
+        zpid: zpidSchema
           .optional()
           .describe('Zillow Property ID (numeric)'),
         url: z

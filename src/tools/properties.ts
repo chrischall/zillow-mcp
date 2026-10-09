@@ -13,7 +13,7 @@ import {
 import { type ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
-import { urlToPath } from '../url.js';
+import { isPathUnder, urlToPath } from '../url.js';
 import {
   extractFeatures,
   loadCommunities,
@@ -301,6 +301,16 @@ export function findPropertyInPageProps(pageProps: Record<string, unknown>): Raw
   return null;
 }
 
+/**
+ * Shared input schema for a zpid: a positive integer or an all-digit
+ * string (fleet-audit#814 — an unconstrained string was interpolated into
+ * `/homedetails/<zpid>_zpid/`).
+ */
+export const zpidSchema = z.union([
+  z.number().int().positive(),
+  z.string().regex(/^\d+$/, 'zpid must be numeric'),
+]);
+
 export class InvalidPropertyUrlError extends Error {
   constructor(url: string) {
     super(
@@ -342,12 +352,27 @@ export function buildPath(args: {
   zpid?: number | string;
   url?: string;
 }): string {
-  if (args.zpid !== undefined) return `/homedetails/${args.zpid}_zpid/`;
+  if (args.zpid !== undefined) {
+    // fleet-audit#814: a string zpid is interpolated into the path, so it
+    // must be digits only or it could steer the credentialed GET elsewhere.
+    if (!/^\d+$/.test(String(args.zpid))) {
+      throw new Error(
+        `zillow property tool: zpid must be numeric, got ${JSON.stringify(String(args.zpid))}`
+      );
+    }
+    return `/homedetails/${args.zpid}_zpid/`;
+  }
   if (args.url) {
     if (extractZpidFromUrl(args.url) === null) {
       throw new InvalidPropertyUrlError(args.url);
     }
-    return urlToPath(args.url);
+    const path = urlToPath(args.url);
+    if (!isPathUnder(path, '/homedetails/')) {
+      throw new Error(
+        `zillow property tool: url must be a zillow.com /homedetails/ page, got ${JSON.stringify(args.url)}`
+      );
+    }
+    return path;
   }
   throw new Error('zillow property tool: must provide either zpid or url');
 }
@@ -729,8 +754,7 @@ export function registerPropertyTools(
         openWorldHint: true,
       },
       inputSchema: z.object({
-        zpid: z
-          .union([z.number().int().positive(), z.string()])
+        zpid: zpidSchema
           .optional()
           .describe('Zillow Property ID (numeric)'),
         url: z

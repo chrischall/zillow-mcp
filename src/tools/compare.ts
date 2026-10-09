@@ -13,6 +13,7 @@ import {
   fetchPropertyRecord,
   format,
   type FormattedProperty,
+  zpidSchema,
 } from './properties.js';
 
 /**
@@ -81,7 +82,7 @@ export function registerCompareTools(
       },
       inputSchema: z.object({
         zpids: z
-          .array(z.union([z.number().int().positive(), z.string()]))
+          .array(zpidSchema)
           .min(2)
           .max(25)
           .optional()

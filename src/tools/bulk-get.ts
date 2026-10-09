@@ -16,6 +16,7 @@ import {
   fetchPropertyRecord,
   format,
   type FormattedProperty,
+  zpidSchema,
 } from './properties.js';
 
 // `chunk` comes from the shared resilience kit. The fan-out no longer
@@ -223,7 +224,7 @@ export function registerBulkGetTools(
       },
       inputSchema: z.object({
         zpids: z
-          .array(z.union([z.number().int().positive(), z.string()]))
+          .array(zpidSchema)
           .min(1)
           .max(BULK_GET_MAX)
           .optional()
