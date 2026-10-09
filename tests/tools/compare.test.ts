@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 import { BotWallError, type ZillowClient } from '../../src/client.js';
 import { buildSummary, registerCompareTools } from '../../src/tools/compare.js';
 import {
@@ -94,7 +94,7 @@ describe('buildSummary', () => {
 });
 
 describe('zillow_compare_properties tool', () => {
-  it('setup', async () => {
+  beforeAll(async () => {
     harness = await createTestHarness((server) =>
       registerCompareTools(server, mockClient)
     );
@@ -373,7 +373,7 @@ describe('zillow_compare_properties bot-wall handling (fleet-audit#811)', () => 
     if (h) await h.close();
   });
 
-  it('setup', async () => {
+  beforeAll(async () => {
     h = await createTestHarness((server) =>
       registerCompareTools(server, mockClient, {
         ratePerMinute: 60_000,
