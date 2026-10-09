@@ -208,6 +208,22 @@ function resolveTuning(tuning: BulkGetTuning): ResolvedTuning {
 }
 
 /**
+ * Throw when a call passes both `zpids` and `urls` — only one list was
+ * ever fetched, so the other was silently dropped (fleet-audit#812).
+ */
+export function assertOneTargetList(
+  toolLabel: string,
+  zpids: unknown[] | undefined,
+  urls: unknown[] | undefined
+): void {
+  if (zpids && zpids.length > 0 && urls && urls.length > 0) {
+    throw new Error(
+      `${toolLabel}: provide either zpids or urls, not both — make two calls (or convert the urls to zpids).`
+    );
+  }
+}
+
+/**
  * Fetch N property records with the full bulk hardening: BRIDGE_CONCURRENCY
  * fan-out (#78), one shared token bucket for the whole call (#90 part b),
  * bot-wall backoff retries with a `bot_challenge` row kind (#90), and the
@@ -307,7 +323,7 @@ export function registerBulkGetTools(
           .max(BULK_GET_MAX)
           .optional()
           .describe(
-            `Zpids to fetch. 1..${BULK_GET_MAX}. Provide either zpids or urls.`
+            `Zpids to fetch. 1..${BULK_GET_MAX}. Provide either zpids or urls, not both.`
           ),
         urls: z
           .array(z.string())
@@ -320,6 +336,7 @@ export function registerBulkGetTools(
       }),
     },
     async ({ zpids, urls }) => {
+      assertOneTargetList('zillow_bulk_get', zpids, urls);
       const targets: Target[] | null =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))

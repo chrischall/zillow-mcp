@@ -231,6 +231,16 @@ describe('zillow_compare_properties tool', () => {
     });
   });
 
+  it('rejects zpids and urls together instead of silently dropping urls (fleet-audit#812)', async () => {
+    const r = await harness.callTool('zillow_compare_properties', {
+      zpids: [1, 2],
+      urls: ['/homedetails/a/3_zpid/', '/homedetails/b/4_zpid/'],
+    });
+    expect(r.isError).toBeTruthy();
+    expect((r.content[0] as { text: string }).text).toMatch(/not both/);
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
   it('accepts urls as an alternative to zpids', async () => {
     mockFetchHtml.mockImplementation(async () =>
       htmlWith({ zpid: 99, price: 999 })

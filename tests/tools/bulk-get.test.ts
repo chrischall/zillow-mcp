@@ -64,6 +64,16 @@ describe('zillow_bulk_get tool', () => {
     );
   });
 
+  it('rejects zpids and urls together instead of silently dropping urls (fleet-audit#812)', async () => {
+    const r = await harness.callTool('zillow_bulk_get', {
+      zpids: [1],
+      urls: ['/homedetails/a/3_zpid/'],
+    });
+    expect(r.isError).toBeTruthy();
+    expect((r.content[0] as { text: string }).text).toMatch(/not both/);
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
   it('returns one row per input zpid, fetched concurrently (issue #46)', async () => {
     mockFetchHtml.mockImplementation(async (path: string) => {
       const m = /\/homedetails\/(\d+)_zpid/.exec(path);

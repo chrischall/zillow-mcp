@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { pivotSummary } from '@chrischall/realty-core';
 import type { ZillowClient } from '../client.js';
 import {
+  assertOneTargetList,
   runPropertyBatch,
   type BulkGetTuning,
 } from './bulk-get.js';
@@ -81,7 +82,7 @@ export function registerCompareTools(
           .max(25)
           .optional()
           .describe(
-            'Array of 2-25 zpids to compare. Provide either zpids or urls. For larger batches, use `zillow_bulk_get`.'
+            'Array of 2-25 zpids to compare. Provide either zpids or urls, not both. For larger batches, use `zillow_bulk_get`.'
           ),
         urls: z
           .array(z.string())
@@ -89,7 +90,7 @@ export function registerCompareTools(
           .max(25)
           .optional()
           .describe(
-            'Array of 2-25 Zillow homedetails URLs/paths to compare. Provide either zpids or urls.'
+            'Array of 2-25 Zillow homedetails URLs/paths to compare. Provide either zpids or urls, not both.'
           ),
         include_summary: z
           .boolean()
@@ -106,6 +107,7 @@ export function registerCompareTools(
       }),
     },
     async ({ zpids, urls, include_summary, include_description }) => {
+      assertOneTargetList('zillow_compare_properties', zpids, urls);
       const targets =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))
