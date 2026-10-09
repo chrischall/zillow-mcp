@@ -178,6 +178,22 @@ describe('autocomplete street-match selection (issue #101)', () => {
     expect(selectAutocompleteMatch(candidates, '3538 Trent St')).toBeNull();
   });
 
+  it('anchors on a 1-2 digit house number instead of taking the first street hit', () => {
+    const candidates = [
+      '1200 Main St Lake Lure, NC 28746', // shares the street, wrong number
+      '12 Main St Lake Lure, NC 28746', // exact
+    ];
+    expect(selectAutocompleteMatch(candidates, '12 Main St')).toBe(
+      '12 Main St Lake Lure, NC 28746'
+    );
+  });
+
+  it('misses when only a short-house-number neighbour is offered', () => {
+    expect(
+      selectAutocompleteMatch(['120 Main St Lake Lure, NC 28746'], '12 Main St')
+    ).toBeNull();
+  });
+
   it('returns null when input tokenizes to nothing discriminating', () => {
     expect(selectAutocompleteMatch(['1 St City, ST 00000'], '1 St')).toBeNull();
   });

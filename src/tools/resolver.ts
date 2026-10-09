@@ -383,7 +383,8 @@ export async function fetchAutocompleteAddressCandidates(
 /**
  * Whole-token street-match the caller's input address against the
  * autocomplete candidate ids. A candidate wins only when EVERY
- * discriminating input token (length >= 3) appears as a WHOLE token in the
+ * discriminating input token (length >= 3, plus every all-digit token so a
+ * 1-2 digit house number still anchors) appears as a WHOLE token in the
  * candidate — i.e. set membership, not substring containment, so a
  * partial-street near-miss ("Trent St" vs "Trenton Ave") never matches.
  * (This is stricter than the search-fallback rung's substring match: the
@@ -397,8 +398,12 @@ export function selectAutocompleteMatch(
   candidates: string[],
   inputAddress: string
 ): string | null {
-  const inputTokens = locationTokens(inputAddress).filter((t) => t.length >= 3);
-  if (inputTokens.length === 0) return null;
+  const tokens = locationTokens(inputAddress);
+  // Pathological input with no discriminating word (e.g. "1 St") is a miss.
+  if (!tokens.some((t) => t.length >= 3)) return null;
+  // Short all-digit tokens (a "12" house number) are still discriminating:
+  // without them "12 Main St" would take the first "1200 Main St" candidate.
+  const inputTokens = tokens.filter((t) => t.length >= 3 || /^\d+$/.test(t));
   for (const cand of candidates) {
     const candTokens = new Set(locationTokens(cand));
     if (inputTokens.every((t) => candTokens.has(t))) return cand;
