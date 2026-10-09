@@ -43,6 +43,16 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | `zillow_set_active_session` | Mark a registered session as the current account label — does not change which account requests use (every call goes through the signed-in browser tab) | |
 | `zillow_get_session_context` | Inspect the active session + the registered-session list | |
 
+### Input and output contract
+
+Changes to tool inputs and outputs, so you can adjust any scripts or prompts that call these tools:
+
+- **`zillow_compare_properties` reports bot-wall rows like `zillow_bulk_get` does.** A row that Zillow keeps blocking with a captcha now comes back as `error_kind: "bot_challenge"` instead of a generic error kind, so you can tell it apart from a missing listing. The response can also include `blocked` (how many rows stayed blocked), `retry_after_s` (how many seconds to wait before retrying just those rows) and `pending` (how many rows did not finish before the overall deadline; those rows have `error_kind: "pending"`).
+
+- **A zpid must be a number.** Every tool that takes a `zpid` (`zillow_get_property`, `zillow_bulk_get`, `zillow_compare_properties`, `zillow_get_property_photos`, `zillow_get_zestimate_history`, `zillow_get_price_history`, `zillow_get_tax_history`) accepts a positive whole number, or a string of digits only such as `"12345"`. Any other string, such as `"12345_zpid"` or a URL, is now rejected as invalid input. Pass a homedetails URL in the `url` or `urls` field instead.
+
+- **Pass `zpids` or `urls`, not both.** `zillow_bulk_get` and `zillow_compare_properties` now return an error when a call includes both lists. Before, the `urls` list was silently ignored. To fetch both kinds, make two calls.
+
 ## Acknowledgement of Terms
 
 By using this MCP server, you acknowledge and agree to the following:
