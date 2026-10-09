@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.2](https://github.com/chrischall/zillow-mcp/compare/v1.2.1...v1.2.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* annotate tools truthfully and sync manifests with the served tools ([#309](https://github.com/chrischall/zillow-mcp/issues/309)) ([5006dcf](https://github.com/chrischall/zillow-mcp/commit/5006dcfaf44009c99a642df90eac5a72d7f6593f))
+* declare the plugin MCP config under the mcpServers key Claude Code reads ([#310](https://github.com/chrischall/zillow-mcp/issues/310)) ([047ee32](https://github.com/chrischall/zillow-mcp/commit/047ee322f86ee1b1e8c5b6597bac84d57a0636cc))
+* **deps:** update @chrischall/mcp-utils to 3.0.0 ([#308](https://github.com/chrischall/zillow-mcp/issues/308)) ([04e16da](https://github.com/chrischall/zillow-mcp/commit/04e16daed51f6ed4a6999784643e6a275bc2089b))
+* resolve low-severity audit findings ([#303](https://github.com/chrischall/zillow-mcp/issues/303)) ([d611fca](https://github.com/chrischall/zillow-mcp/commit/d611fcae2c76ed1e02c6fc9ace18684af04b1426))
+* warn and fall back to the default bridge port on an invalid ZILLOW_WS_PORT ([#307](https://github.com/chrischall/zillow-mcp/issues/307)) ([2af3111](https://github.com/chrischall/zillow-mcp/commit/2af31112630d5261120d0086de9f514c421239d6))
+
+
+### Documentation
+
+* **bulk-get:** note bulk_get and compare_properties reject calls that pass both zpids and urls ([b2b1dea](https://github.com/chrischall/zillow-mcp/commit/b2b1deac3231a13473a29b91a3c594143ff704a6))
+* **compare:** note bot_challenge rows and blocked/retry_after_s/pending fields ([b2b1dea](https://github.com/chrischall/zillow-mcp/commit/b2b1deac3231a13473a29b91a3c594143ff704a6))
+* **properties:** note that string zpids must now contain digits only ([b2b1dea](https://github.com/chrischall/zillow-mcp/commit/b2b1deac3231a13473a29b91a3c594143ff704a6))
+
 ## [1.2.1](https://github.com/chrischall/zillow-mcp/compare/v1.2.0...v1.2.1) (2026-10-07)
 
 
