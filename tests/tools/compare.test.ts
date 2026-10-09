@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import type { ZillowClient } from '../../src/client.js';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
+import { BotWallError, type ZillowClient } from '../../src/client.js';
 import { buildSummary, registerCompareTools } from '../../src/tools/compare.js';
 import {
   FetchproxyBridgeDownError,
@@ -94,7 +94,7 @@ describe('buildSummary', () => {
 });
 
 describe('zillow_compare_properties tool', () => {
-  it('setup', async () => {
+  beforeAll(async () => {
     harness = await createTestHarness((server) =>
       registerCompareTools(server, mockClient)
     );
@@ -231,6 +231,16 @@ describe('zillow_compare_properties tool', () => {
     });
   });
 
+  it('rejects zpids and urls together instead of silently dropping urls (fleet-audit#812)', async () => {
+    const r = await harness.callTool('zillow_compare_properties', {
+      zpids: [1, 2],
+      urls: ['/homedetails/a/3_zpid/', '/homedetails/b/4_zpid/'],
+    });
+    expect(r.isError).toBeTruthy();
+    expect((r.content[0] as { text: string }).text).toMatch(/not both/);
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
   it('accepts urls as an alternative to zpids', async () => {
     mockFetchHtml.mockImplementation(async () =>
       htmlWith({ zpid: 99, price: 999 })
@@ -351,5 +361,80 @@ describe('zillow_compare_properties tool', () => {
       expect(parsed.results[0].error).toBeDefined();
       expect(parsed.results[0].error).toMatch(/^bridge unreachable: /);
     });
+  });
+});
+
+// fleet-audit#811: compare shares bulk_get's bot-wall hardening — a
+// token-bucket throttle, backoff retry on a px-captcha block, and a
+// `bot_challenge` row kind distinct from a missing listing.
+describe('zillow_compare_properties bot-wall handling (fleet-audit#811)', () => {
+  let h: Awaited<ReturnType<typeof createTestHarness>>;
+  afterAll(async () => {
+    if (h) await h.close();
+  });
+
+  beforeAll(async () => {
+    h = await createTestHarness((server) =>
+      registerCompareTools(server, mockClient, {
+        ratePerMinute: 60_000,
+        burst: 1000,
+        backoffBaseMs: 1,
+        backoffCapMs: 4,
+        rng: () => 1,
+        overallDeadlineMs: 2_000,
+      })
+    );
+  });
+
+  it('reports a persistent px-captcha block as bot_challenge with a blocked count', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (path.includes('/2_zpid/')) throw new BotWallError(path, 9);
+      return htmlWith({ zpid: 1, price: 1 });
+    });
+    const r = await h.callTool('zillow_compare_properties', { zpids: [1, 2] });
+    const parsed = parseToolResult<{
+      blocked?: number;
+      retry_after_s?: number;
+      results: Array<{ zpid: string; error_kind?: string }>;
+    }>(r);
+    expect(parsed.results[1].error_kind).toBe('bot_challenge');
+    expect(parsed.blocked).toBe(1);
+    expect(parsed.retry_after_s).toBe(9);
+  });
+
+  it('retries a px-captcha-blocked row with backoff and recovers', async () => {
+    let calls = 0;
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      if (path.includes('/2_zpid/') && calls++ === 0) {
+        throw new BotWallError(path, 0);
+      }
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      return htmlWith({ zpid: m ? parseInt(m[1], 10) : 0, price: 5 });
+    });
+    const r = await h.callTool('zillow_compare_properties', { zpids: [1, 2] });
+    const parsed = parseToolResult<{
+      ok: number;
+      results: Array<{ zpid: string; status: string }>;
+    }>(r);
+    expect(parsed.ok).toBe(2);
+  });
+
+  it('keeps include_description working through the shared fetcher', async () => {
+    mockFetchHtml.mockImplementation(async (path: string) => {
+      const m = /\/homedetails\/(\d+)_zpid/.exec(path);
+      return htmlWith({
+        zpid: m ? parseInt(m[1], 10) : 0,
+        price: 5,
+        description: 'Sunny corner lot',
+      });
+    });
+    const r = await h.callTool('zillow_compare_properties', {
+      zpids: [1, 2],
+      include_description: true,
+    });
+    const parsed = parseToolResult<{
+      results: Array<{ property?: { description?: string } }>;
+    }>(r);
+    expect(parsed.results[0].property?.description).toBe('Sunny corner lot');
   });
 });

@@ -40,12 +40,44 @@
       "description": "Search Zillow listings by location and optional filters (status, price, beds/baths, home type)"
     },
     {
+      "name": "zillow_sweep_area",
+      "description": "Exhaustively enumerate Zillow listings in an area by recursive map tiling and report completeness; returns the listings inline, or writes them to an optional JSON output_path."
+    },
+    {
       "name": "zillow_get_property",
-      "description": "Fetch a property's full details (price, Zestimate, beds, schools, price history) by zpid or homedetails URL"
+      "description": "Fetch a property's details (price, Zestimate, beds/baths, size, schools; price history on request) by zpid or homedetails URL"
+    },
+    {
+      "name": "zillow_get_by_address",
+      "description": "Resolve a free-text address to its Zillow zpid and homedetails URL"
+    },
+    {
+      "name": "zillow_resolve_addresses",
+      "description": "Resolve a batch of addresses to Zillow zpids and homedetails URLs in one call"
+    },
+    {
+      "name": "zillow_bulk_get",
+      "description": "Fetch many Zillow property records in one call by zpid or URL, one row per input"
+    },
+    {
+      "name": "zillow_compare_properties",
+      "description": "Side-by-side comparison of 2-25 properties with a pivoted summary table"
+    },
+    {
+      "name": "zillow_get_property_photos",
+      "description": "The full photo gallery for a property by zpid or URL"
     },
     {
       "name": "zillow_get_zestimate_history",
       "description": "Historical Zestimate time series for a property by zpid or URL"
+    },
+    {
+      "name": "zillow_get_price_history",
+      "description": "Listing-price events (listed, price changes, pending, sold) for a property by zpid or URL"
+    },
+    {
+      "name": "zillow_get_tax_history",
+      "description": "Year-by-year property-tax and assessed-value record for a property by zpid or URL"
     },
     {
       "name": "zillow_get_saved_searches",
@@ -57,15 +89,35 @@
     },
     {
       "name": "zillow_get_market_report",
-      "description": "Market report for a region — median sale/list/rent prices, days on market, ZHVI"
+      "description": "Market report for a region — median sale/list prices, days on market, inventory, new listings, ZHVI and its year-over-year change"
     },
     {
       "name": "zillow_calculate_mortgage",
       "description": "Local PITI mortgage-payment calculator — no network"
     },
     {
-      "name": "zillow_sweep_area",
-      "description": "Exhaustively enumerate Zillow listings in an area by recursive map tiling and report completeness; returns the listings inline, or writes them to an optional JSON output_path."
+      "name": "zillow_calculate_affordability",
+      "description": "Local 28/36 debt-to-income affordability calculator: max home price from income, debts, down payment and rate — no network"
+    },
+    {
+      "name": "zillow_estimate_rent_vs_buy",
+      "description": "Local projection of the cumulative cost of buying versus renting over N years — no network"
+    },
+    {
+      "name": "zillow_healthcheck",
+      "description": "Check the browser bridge with a no-op zillow.com round-trip (robots.txt)"
+    },
+    {
+      "name": "zillow_register_session",
+      "description": "Register a named account label in the local session registry (label only — calls always use the signed-in browser tab)"
+    },
+    {
+      "name": "zillow_set_active_session",
+      "description": "Mark a registered session label as active (label only — does not switch accounts)"
+    },
+    {
+      "name": "zillow_get_session_context",
+      "description": "Show the registered sessions and which one is active"
     }
   ]
 }

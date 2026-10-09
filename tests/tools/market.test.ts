@@ -171,6 +171,58 @@ describe('zillow_get_market_report tool', () => {
     expect(mockFetchHtml.mock.calls[0][0]).toBe('/home-values/12/x/');
   });
 
+  // fleet-audit#814: region_path / url must stay under /home-values/.
+  it('keeps a region_path that only mentions /home-values/ in its query under /home-values/', async () => {
+    mockFetchHtml.mockResolvedValue(htmlWith(FIXTURE_PAGE_PROPS));
+    await harness.callTool('zillow_get_market_report', {
+      region_path: '/user/acct?/home-values/',
+    });
+    expect(mockFetchHtml.mock.calls[0][0]).toBe(
+      '/home-values/user/acct?/home-values/'
+    );
+  });
+
+  it('rejects a url outside /home-values/', async () => {
+    const result = await harness.callTool('zillow_get_market_report', {
+      url: 'https://www.zillow.com/myzillow/SavedSearches',
+    });
+    expect(result.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
+  it('rejects dot segments that climb out of /home-values/', async () => {
+    const result = await harness.callTool('zillow_get_market_report', {
+      region_path: '/home-values/../myzillow/SavedSearches',
+    });
+    expect(result.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
+  it('rejects backslash dot segments that climb out of /home-values/', async () => {
+    for (const region_path of [
+      '/home-values/x\\..\\..\\myzillow/SavedSearches',
+      '/home-values/x%5c..%5c..%5cmyzillow/SavedSearches',
+    ]) {
+      const result = await harness.callTool('zillow_get_market_report', {
+        region_path,
+      });
+      expect(result.isError).toBeTruthy();
+    }
+    const viaUrl = await harness.callTool('zillow_get_market_report', {
+      url: '/home-values/x\\..\\..\\myzillow/SavedSearches',
+    });
+    expect(viaUrl.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
+  it('rejects a region_path that has /home-values/ somewhere other than the start', async () => {
+    const result = await harness.callTool('zillow_get_market_report', {
+      region_path: '/foo/home-values/x',
+    });
+    expect(result.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
   it('errors when both region and analytics are missing', async () => {
     mockFetchHtml.mockResolvedValue(htmlWith({}));
     const result = await harness.callTool('zillow_get_market_report', {

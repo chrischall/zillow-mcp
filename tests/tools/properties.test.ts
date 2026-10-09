@@ -103,6 +103,47 @@ describe('buildPath', () => {
   it('throws a clear hint when neither zpid nor url is provided', () => {
     expect(() => buildPath({})).toThrow(/zpid or url/);
   });
+
+  // fleet-audit#814: a string zpid / url must not steer the credentialed
+  // GET to an arbitrary zillow.com path.
+  it('rejects a non-numeric string zpid', () => {
+    expect(() =>
+      buildPath({ zpid: '1/../../myzillow/SavedSearches?x=' })
+    ).toThrow(/numeric/);
+  });
+
+  it('accepts a numeric string zpid', () => {
+    expect(buildPath({ zpid: '12345' })).toBe('/homedetails/12345_zpid/');
+  });
+
+  it('rejects a url outside /homedetails/', () => {
+    expect(() =>
+      buildPath({ url: 'https://www.zillow.com/myzillow/1_zpid/' })
+    ).toThrow(/homedetails/);
+  });
+
+  it('rejects dot segments in a url path', () => {
+    expect(() =>
+      buildPath({ url: '/homedetails/../myzillow/SavedSearches/1_zpid/' })
+    ).toThrow(/homedetails/);
+    expect(() =>
+      buildPath({ url: '/homedetails/%2e%2e/myzillow/1_zpid/' })
+    ).toThrow(/homedetails/);
+  });
+
+  // The URL parser treats '\\' as '/' for http(s), so backslash dot
+  // segments would climb out of /homedetails/ once the browser resolves them.
+  it('rejects backslash dot segments in a url path', () => {
+    expect(() =>
+      buildPath({ url: '/homedetails/1_zpid/\\..\\..\\..\\myzillow/SavedSearches' })
+    ).toThrow(/homedetails/);
+    expect(() =>
+      buildPath({ url: '/homedetails/1_zpid/%5c..%5c..%5cmyzillow/SavedSearches' })
+    ).toThrow(/homedetails/);
+    expect(() =>
+      buildPath({ url: '/homedetails\\1_zpid/' })
+    ).toThrow(/homedetails/);
+  });
 });
 
 describe('findPropertyInPageProps', () => {
@@ -317,6 +358,14 @@ describe('zillow_get_property tool', () => {
     harness = await createTestHarness((server) =>
       registerPropertyTools(server, mockClient)
     );
+  });
+
+  it('rejects a path-steering string zpid before any fetch (fleet-audit#814)', async () => {
+    const result = await harness.callTool('zillow_get_property', {
+      zpid: '1/../../myzillow/SavedSearches?x=',
+    });
+    expect(result.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
   });
 
   it('fetches /homedetails/<zpid>_zpid/ and formats the property', async () => {

@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
-import { urlToPath } from '../url.js';
+import { isPathUnder, urlToPath } from '../url.js';
 
 /**
  * Zillow's market data lives on the "home values" page,
@@ -115,15 +115,41 @@ export function format(
 }
 
 /**
+ * fleet-audit#814: the resolved path must stay under `/home-values/` (by
+ * pathname, not a substring anywhere in the string) with no dot segments.
+ */
+function underHomeValues(path: string, input: string): string {
+  if (!isPathUnder(path, '/home-values/')) {
+    throw new Error(
+      `zillow_get_market_report: expected a zillow.com /home-values/ page, got ${JSON.stringify(input)}`
+    );
+  }
+  return path;
+}
+
+/**
  * Resolve a market-report path. Accepts a full URL or a slug under
  * `/home-values/`. Plain slugs (`6181/brooklyn-ny/`) are normalized
  * by prepending `/home-values/`.
  */
 function pathFromInput(args: { region_path?: string; url?: string }): string {
-  if (args.url) return urlToPath(args.url);
+  if (args.url) return underHomeValues(urlToPath(args.url), args.url);
   if (args.region_path) {
     const p = urlToPath(args.region_path);
-    return p.includes('/home-values/') ? p : `/home-values${p}`;
+    // A path with /home-values/ somewhere other than the start would be
+    // prefixed into a different page than the caller meant — reject it.
+    if (
+      !p.startsWith('/home-values/') &&
+      p.split(/[?#]/, 1)[0].includes('/home-values/')
+    ) {
+      throw new Error(
+        `zillow_get_market_report: region_path must start with /home-values/ or be a slug under it, got ${JSON.stringify(args.region_path)}`
+      );
+    }
+    return underHomeValues(
+      p.startsWith('/home-values/') ? p : `/home-values${p}`,
+      args.region_path
+    );
   }
   throw new Error(
     'zillow_get_market_report: provide either region_path (e.g. "/home-values/6181/brooklyn-ny/") or url.'

@@ -1,19 +1,14 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/server';
-import {
-  BRIDGE_CONCURRENCY,
-  classifyRowError,
-  retryOnceOnTimeout,
-} from '@chrischall/mcp-utils/fetchproxy';
-import { pivotSummary, runRowBatch } from '@chrischall/realty-core';
+import { pivotSummary } from '@chrischall/realty-core';
 import type { ZillowClient } from '../client.js';
-import { targetId } from './bulk-get.js';
-import { minifiedResult, runBoundedBatch } from '@chrischall/mcp-utils';
 import {
-  fetchPropertyRecord,
-  format,
-  type FormattedProperty,
-} from './properties.js';
+  assertOneTargetList,
+  runPropertyBatch,
+  type BulkGetTuning,
+} from './bulk-get.js';
+import { minifiedResult } from '@chrischall/mcp-utils';
+import { type FormattedProperty, zpidSchema } from './properties.js';
 
 /**
  * Side-by-side comparison of N Zillow properties. Calls
@@ -64,7 +59,8 @@ export function buildSummary(
 
 export function registerCompareTools(
   server: McpServer,
-  client: ZillowClient
+  client: ZillowClient,
+  tuning: BulkGetTuning = {}
 ): void {
   server.registerTool(
     'zillow_compare_properties',
@@ -72,7 +68,7 @@ export function registerCompareTools(
       title: 'Compare multiple Zillow properties side-by-side',
       description:
         'Side-by-side analysis of 2-25 Zillow properties. **If you just want N property records, use `zillow_bulk_get` instead** — compare is for genuine side-by-side (its pivoted summary table is the value-add); bulk_get is the fetch-many endpoint and accepts up to 200 ids. (Issue #79 raised this cap from 8 to 25 — a 19-listing analysis now fits in one call instead of three.) ' +
-        'Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won\'t fail the whole call. Calls fan out concurrently (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions).',
+        'Provide an array of zpids (or homedetails URLs). Returns the full per-property record per row (with `extracted_features` populated). Pass `include_summary: true` for an extra pivoted summary table (one row per field) — defaults off because `results[].property.*` already carries everything. The raw `description` is omitted from each row by default — pass `include_description: true` to keep it. Errors for individual properties are captured per-row — one bad zpid won\'t fail the whole call. Calls fan out concurrently (capped at 6 in flight, per issue #78, with retry-once-on-timeout per sub-request to absorb transient SW evictions), paced by the same throttle as `zillow_bulk_get`; a bot-wall block is retried with backoff and, if it persists, reported as `error_kind: "bot_challenge"` (distinct from a missing listing) with `{ blocked, retry_after_s }` on the envelope. The call is bounded by an overall deadline — unsettled rows come back as `error_kind: "pending"`.',
       annotations: {
         title: 'Compare multiple Zillow properties side-by-side',
         readOnlyHint: true,
@@ -81,12 +77,12 @@ export function registerCompareTools(
       },
       inputSchema: z.object({
         zpids: z
-          .array(z.union([z.number().int().positive(), z.string()]))
+          .array(zpidSchema)
           .min(2)
           .max(25)
           .optional()
           .describe(
-            'Array of 2-25 zpids to compare. Provide either zpids or urls. For larger batches, use `zillow_bulk_get`.'
+            'Array of 2-25 zpids to compare. Provide either zpids or urls, not both. For larger batches, use `zillow_bulk_get`.'
           ),
         urls: z
           .array(z.string())
@@ -94,7 +90,7 @@ export function registerCompareTools(
           .max(25)
           .optional()
           .describe(
-            'Array of 2-25 Zillow homedetails URLs/paths to compare. Provide either zpids or urls.'
+            'Array of 2-25 Zillow homedetails URLs/paths to compare. Provide either zpids or urls, not both.'
           ),
         include_summary: z
           .boolean()
@@ -111,6 +107,7 @@ export function registerCompareTools(
       }),
     },
     async ({ zpids, urls, include_summary, include_description }) => {
+      assertOneTargetList('zillow_compare_properties', zpids, urls);
       const targets =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))
@@ -122,35 +119,14 @@ export function registerCompareTools(
           'zillow_compare_properties: provide an array of at least 2 zpids or urls.'
         );
       }
-      // Issue #78 follow-up: compare used to do unbounded `Promise.all`
-      // for up to 25 zpids. The round-3 session that motivated #78 saw
-      // 7-of-20 timeouts at unlimited concurrency — 25 sits in the same
-      // risk window. Mirror bulk-get's pacing (BRIDGE_CONCURRENCY +
-      // retry-once-on-timeout per row) so compare absorbs the same
-      // transient SW evictions instead of failing rows.
-      type Target = { zpid?: number | string; url?: string };
-      // realty-core `runRowBatch` (fleet-audit#1091): bounded + deadline-
-      // guarded fan-out, input-ordered rows, error rows classified with
-      // `status` = `error_kind` + `retryable`, envelope `{ count, ok,
-      // errored, pending?, results }`.
-      const envelope = await runRowBatch(
-        targets as Target[],
-        async (t) => {
-          const { raw } = await fetchPropertyRecord(client, t);
-          return {
-            zpid: String(raw.zpid ?? targetId(t)),
-            property: format(raw, { includeDescription: include_description }),
-          };
-        },
-        {
-          kit: { runBoundedBatch, classifyRowError, retryOnceOnTimeout },
-          toolLabel: 'zillow_compare_properties',
-          // The zpid, else the URL — the identity a caller needs to re-run
-          // a failed row (same as bulk_get).
-          rowBase: (t) => ({ zpid: targetId(t) }),
-          concurrency: BRIDGE_CONCURRENCY,
-        }
-      );
+      // Same fan-out as zillow_bulk_get (fleet-audit#811): bounded
+      // concurrency + retry-once-on-timeout (#78), a token-bucket throttle
+      // and bot-wall backoff with a `bot_challenge` row kind (#90), and
+      // the overall deadline with `pending` backfill (#98).
+      const envelope = await runPropertyBatch(client, targets, tuning, {
+        toolLabel: 'zillow_compare_properties',
+        formatOptions: { includeDescription: include_description },
+      });
       const body: typeof envelope & { summary?: CompareSummaryRow[] } = envelope;
       if (include_summary === true) body.summary = buildSummary(envelope.results);
       return minifiedResult(body);

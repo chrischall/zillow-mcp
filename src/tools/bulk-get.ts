@@ -16,6 +16,7 @@ import {
   fetchPropertyRecord,
   format,
   type FormattedProperty,
+  zpidSchema,
 } from './properties.js';
 
 // `chunk` comes from the shared resilience kit. The fan-out no longer
@@ -155,7 +156,8 @@ async function fetchOneRow(
   target: Target,
   cfg: Required<Omit<BulkGetTuning, 'rng'>> & { rng: () => number },
   blockedRetryAfter: { seconds: number },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  formatOptions?: Parameters<typeof format>[1]
 ): Promise<{ zpid: string; property: FormattedProperty }> {
   for (let attempt = 0; ; attempt++) {
     throwIfAborted(signal);
@@ -165,7 +167,10 @@ async function fetchOneRow(
       const { raw } = await retryOnceOnTimeout(() =>
         fetchPropertyRecord(client, target)
       );
-      return { zpid: String(raw.zpid ?? targetId(target)), property: format(raw) };
+      return {
+        zpid: String(raw.zpid ?? targetId(target)),
+        property: format(raw, formatOptions),
+      };
     } catch (e) {
       if (!(e instanceof BotWallError)) throw e;
       if (attempt >= cfg.maxCaptchaRetries) {
@@ -188,12 +193,10 @@ async function fetchOneRow(
   }
 }
 
-export function registerBulkGetTools(
-  server: McpServer,
-  client: ZillowClient,
-  tuning: BulkGetTuning = {}
-): void {
-  const cfg = {
+type ResolvedTuning = Required<Omit<BulkGetTuning, 'rng'>> & { rng: () => number };
+
+function resolveTuning(tuning: BulkGetTuning): ResolvedTuning {
+  return {
     ratePerMinute: tuning.ratePerMinute ?? ZILLOW_RPM,
     burst: tuning.burst ?? ZILLOW_BURST,
     backoffBaseMs: tuning.backoffBaseMs ?? CAPTCHA_BACKOFF_BASE_MS,
@@ -202,6 +205,98 @@ export function registerBulkGetTools(
     overallDeadlineMs: tuning.overallDeadlineMs ?? OVERALL_DEADLINE_MS,
     rng: tuning.rng ?? Math.random,
   };
+}
+
+/**
+ * Throw when a call passes both `zpids` and `urls` — only one list was
+ * ever fetched, so the other was silently dropped (fleet-audit#812).
+ */
+export function assertOneTargetList(
+  toolLabel: string,
+  zpids: unknown[] | undefined,
+  urls: unknown[] | undefined
+): void {
+  if (zpids && zpids.length > 0 && urls && urls.length > 0) {
+    throw new Error(
+      `${toolLabel}: provide either zpids or urls, not both — make two calls (or convert the urls to zpids).`
+    );
+  }
+}
+
+/**
+ * Fetch N property records with the full bulk hardening: BRIDGE_CONCURRENCY
+ * fan-out (#78), one shared token bucket for the whole call (#90 part b),
+ * bot-wall backoff retries with a `bot_challenge` row kind (#90), and the
+ * overall hard deadline with `pending` backfill (#98). Shared by
+ * `zillow_bulk_get` and `zillow_compare_properties` (fleet-audit#811).
+ * Adds `retry_after_s` to the envelope when rows are still bot-walled.
+ */
+export async function runPropertyBatch<K extends string = 'results'>(
+  client: ZillowClient,
+  targets: Target[],
+  tuning: BulkGetTuning,
+  opts: {
+    toolLabel: string;
+    resultsKey?: K;
+    formatOptions?: Parameters<typeof format>[1];
+  }
+) {
+  const cfg = resolveTuning(tuning);
+  // Issue #90: one shared token bucket governs total request volume
+  // across the whole call (every sub-request and every captcha retry
+  // spends a token). Track the worst captcha retry-after hint so the
+  // partial-result envelope can advise a wait.
+  const bucket = new TokenBucket({
+    ratePerMinute: cfg.ratePerMinute,
+    burst: cfg.burst,
+  });
+  const blockedRetryAfter = { seconds: 0 };
+
+  // Fan out at BRIDGE_CONCURRENCY (#78), bounded by the overall hard
+  // deadline (#98), through realty-core's shared `runRowBatch`
+  // (fleet-audit#1091): input-ordered rows, a `pending` backfill for
+  // anything the deadline cut off (never a generic miss), and the
+  // cohort envelope `{ count, ok, errored, pending?, blocked?, <rows> }`.
+  // Every error row carries `status` = `error_kind` + `retryable`.
+  const rows = await runRowBatch(
+    targets,
+    (target, signal) =>
+      fetchOneRow(
+        client,
+        bucket,
+        target,
+        cfg,
+        blockedRetryAfter,
+        signal,
+        opts.formatOptions
+      ),
+    {
+      // No kit retry: the timeout retry is per sub-request inside
+      // fetchOneRow, so a timeout doesn't replay the captcha loop.
+      kit: { runBoundedBatch, classifyRowError: classifyBulkRowError },
+      toolLabel: opts.toolLabel,
+      // The zpid, else the URL — the identity a caller needs to re-run
+      // a failed row.
+      rowBase: (target) => ({ zpid: targetId(target) }),
+      deadlineMs: cfg.overallDeadlineMs,
+      concurrency: BRIDGE_CONCURRENCY,
+      resultsKey: opts.resultsKey,
+    }
+  );
+  const envelope: typeof rows & { retry_after_s?: number } = rows;
+  if ((envelope.blocked ?? 0) > 0 && blockedRetryAfter.seconds > 0) {
+    // Partial result — some ids are still bot-walled. Advise a wait
+    // before re-running just the blocked ids (issue #90).
+    envelope.retry_after_s = blockedRetryAfter.seconds;
+  }
+  return envelope;
+}
+
+export function registerBulkGetTools(
+  server: McpServer,
+  client: ZillowClient,
+  tuning: BulkGetTuning = {}
+): void {
 
   server.registerTool(
     'zillow_bulk_get',
@@ -223,12 +318,12 @@ export function registerBulkGetTools(
       },
       inputSchema: z.object({
         zpids: z
-          .array(z.union([z.number().int().positive(), z.string()]))
+          .array(zpidSchema)
           .min(1)
           .max(BULK_GET_MAX)
           .optional()
           .describe(
-            `Zpids to fetch. 1..${BULK_GET_MAX}. Provide either zpids or urls.`
+            `Zpids to fetch. 1..${BULK_GET_MAX}. Provide either zpids or urls, not both.`
           ),
         urls: z
           .array(z.string())
@@ -241,6 +336,7 @@ export function registerBulkGetTools(
       }),
     },
     async ({ zpids, urls }) => {
+      assertOneTargetList('zillow_bulk_get', zpids, urls);
       const targets: Target[] | null =
         zpids && zpids.length > 0
           ? zpids.map((zpid) => ({ zpid }))
@@ -254,46 +350,10 @@ export function registerBulkGetTools(
             ').'
         );
       }
-
-      // Issue #90: one shared token bucket governs total request volume
-      // across the whole call (every sub-request and every captcha retry
-      // spends a token). Track the worst captcha retry-after hint so the
-      // partial-result envelope can advise a wait.
-      const bucket = new TokenBucket({
-        ratePerMinute: cfg.ratePerMinute,
-        burst: cfg.burst,
+      const envelope = await runPropertyBatch(client, targets, tuning, {
+        toolLabel: 'zillow_bulk_get',
+        resultsKey: 'rows',
       });
-      const blockedRetryAfter = { seconds: 0 };
-
-      // Fan out at BRIDGE_CONCURRENCY (#78), bounded by the overall hard
-      // deadline (#98), through realty-core's shared `runRowBatch`
-      // (fleet-audit#1091): input-ordered rows, a `pending` backfill for
-      // anything the deadline cut off (never a generic miss), and the
-      // cohort envelope `{ count, ok, errored, pending?, blocked?, rows }`.
-      // Every error row carries `status` = `error_kind` + `retryable`.
-      // The shared `bucket` still gates the *absolute* request rate (the
-      // bot-wall governor, #90 part b): every attempt spends a token.
-      const rows = await runRowBatch(
-        targets,
-        (target, signal) =>
-          fetchOneRow(client, bucket, target, cfg, blockedRetryAfter, signal),
-        {
-          // No kit retry: the timeout retry is per sub-request inside
-          // fetchOneRow, so a timeout doesn't replay the captcha loop.
-          kit: { runBoundedBatch, classifyRowError: classifyBulkRowError },
-          toolLabel: 'zillow_bulk_get',
-          rowBase: (target) => ({ zpid: targetId(target) }),
-          deadlineMs: cfg.overallDeadlineMs,
-          concurrency: BRIDGE_CONCURRENCY,
-          resultsKey: 'rows',
-        }
-      );
-      const envelope: typeof rows & { retry_after_s?: number } = rows;
-      if ((envelope.blocked ?? 0) > 0 && blockedRetryAfter.seconds > 0) {
-        // Partial result — some ids are still bot-walled. Advise a wait
-        // before re-running just the blocked ids (issue #90).
-        envelope.retry_after_s = blockedRetryAfter.seconds;
-      }
       return minifiedResult(envelope);
     }
   );
