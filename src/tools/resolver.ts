@@ -26,6 +26,7 @@ import {
   compoundSplits,
   expandSuffix,
 } from '@chrischall/realty-core';
+import { readEnvVar } from '@chrischall/mcp-utils';
 import { FetchproxyTimeoutError } from '@chrischall/mcp-utils/fetchproxy';
 import type { ZillowClient } from '../client.js';
 import { ParseError } from '../next-data.js';
@@ -522,7 +523,9 @@ let cachedAliasFailurePath: string | null = null;
  * is cached until the path changes. A bad path is negative-cached.
  */
 export function loadLocalityAliases(): LocalityAliasMap {
-  const path = process.env.ZILLOW_LOCALITY_ALIASES_FILE?.trim();
+  // readEnvVar trims and treats blank / 'undefined' / 'null' / unexpanded
+  // `${...}` placeholders (an unset optional .mcpb user_config) as unset.
+  const path = readEnvVar('ZILLOW_LOCALITY_ALIASES_FILE');
   if (!path) {
     cachedAlias = null;
     cachedAliasFailurePath = null;

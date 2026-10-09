@@ -174,6 +174,14 @@ describe('ZILLOW_LOCALITY_ALIASES_FILE (documented [a, b] pair format)', () => {
     expect(String(errSpy.mock.calls[0][0])).toMatch(/\[0\] must be a \[string, string\] pair/);
   });
 
+  it('treats an unexpanded manifest placeholder as unset (defaults, no warning)', () => {
+    // The .mcpb manifest passes `${user_config.…}`; an unset optional entry
+    // can reach the server verbatim and must not be read as a file path.
+    process.env[ENV] = '${user_config.zillow_locality_aliases_file}';
+    expect(aliasesOf('Lake Lure')).toEqual(['Rutherfordton']);
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
   it('falls back to the defaults on invalid JSON', () => {
     process.env[ENV] = writeAliases('junk.json', '{not json');
     expect(aliasesOf('Lake Lure')).toEqual(['Rutherfordton']);

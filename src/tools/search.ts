@@ -894,7 +894,11 @@ export function registerSearchTools(
       title: 'Exhaustively sweep a Zillow search area',
       description:
         "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas. Sequential requests with a delay. Read-only against Zillow; the only write is the optional local output file.",
-      annotations: { title: 'Sweep Zillow area', readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+      // destructiveHint: false — read-only against Zillow; the only write is
+      // the optional local output_path, which must be a NEW absolute .json
+      // file (existing files are refused and the write uses flag 'wx'), so no
+      // prior state is ever lost. Purely additive.
+      annotations: { title: 'Sweep Zillow area', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       inputSchema: z.object({
         location: z.string().describe('City / ZIP / county used to resolve the region (e.g. "King County, WA").'),
         bounds: z
