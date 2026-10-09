@@ -49,6 +49,8 @@ Changes to tool inputs and outputs, so you can adjust any scripts or prompts tha
 
 - **`zillow_compare_properties` reports bot-wall rows like `zillow_bulk_get` does.** A row that Zillow keeps blocking with a captcha now comes back as `error_kind: "bot_challenge"` instead of a generic error kind, so you can tell it apart from a missing listing. The response can also include `blocked` (how many rows stayed blocked), `retry_after_s` (how many seconds to wait before retrying just those rows) and `pending` (how many rows did not finish before the overall deadline; those rows have `error_kind: "pending"`).
 
+- **A zpid must be a number.** Every tool that takes a `zpid` (`zillow_get_property`, `zillow_bulk_get`, `zillow_compare_properties`, `zillow_get_property_photos`, `zillow_get_zestimate_history`, `zillow_get_price_history`, `zillow_get_tax_history`) accepts a positive whole number, or a string of digits only such as `"12345"`. Any other string, such as `"12345_zpid"` or a URL, is now rejected as invalid input. Pass a homedetails URL in the `url` or `urls` field instead.
+
 ## Acknowledgement of Terms
 
 By using this MCP server, you acknowledge and agree to the following:
