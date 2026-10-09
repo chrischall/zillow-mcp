@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { urlToPath } from '../src/url.js';
+import { isPathUnder, urlToPath } from '../src/url.js';
 
 describe('urlToPath', () => {
   it('strips the origin from an absolute Zillow URL', () => {
@@ -24,5 +24,26 @@ describe('urlToPath', () => {
     // `hash` is intentionally left out — Zillow's server doesn't see it
     // anyway. Behavior choice: prefer path+search clean.
     expect(urlToPath('https://www.zillow.com/x#frag')).toBe('/x');
+  });
+});
+
+describe('isPathUnder', () => {
+  it('accepts a plain path under the prefix', () => {
+    expect(isPathUnder('/homedetails/1_zpid/?a=1', '/homedetails/')).toBe(true);
+  });
+
+  it('rejects backslash and %5c separators', () => {
+    expect(
+      isPathUnder('/homedetails/1_zpid/\\..\\..\\myzillow/', '/homedetails/')
+    ).toBe(false);
+    expect(isPathUnder('/homedetails/x%5Cy/', '/homedetails/')).toBe(false);
+  });
+
+  // The URL parser strips tab/newline, so `.\t.` becomes `..` in the
+  // browser even though no literal segment equals `..`.
+  it('rejects a path that the URL parser normalises out of the prefix', () => {
+    expect(
+      isPathUnder('/homedetails/.\t./myzillow/SavedSearches', '/homedetails/')
+    ).toBe(false);
   });
 });

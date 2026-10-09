@@ -136,6 +136,16 @@ function pathFromInput(args: { region_path?: string; url?: string }): string {
   if (args.url) return underHomeValues(urlToPath(args.url), args.url);
   if (args.region_path) {
     const p = urlToPath(args.region_path);
+    // A path with /home-values/ somewhere other than the start would be
+    // prefixed into a different page than the caller meant — reject it.
+    if (
+      !p.startsWith('/home-values/') &&
+      p.split(/[?#]/, 1)[0].includes('/home-values/')
+    ) {
+      throw new Error(
+        `zillow_get_market_report: region_path must start with /home-values/ or be a slug under it, got ${JSON.stringify(args.region_path)}`
+      );
+    }
     return underHomeValues(
       p.startsWith('/home-values/') ? p : `/home-values${p}`,
       args.region_path

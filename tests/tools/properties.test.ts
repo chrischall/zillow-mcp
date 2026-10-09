@@ -130,6 +130,20 @@ describe('buildPath', () => {
       buildPath({ url: '/homedetails/%2e%2e/myzillow/1_zpid/' })
     ).toThrow(/homedetails/);
   });
+
+  // The URL parser treats '\\' as '/' for http(s), so backslash dot
+  // segments would climb out of /homedetails/ once the browser resolves them.
+  it('rejects backslash dot segments in a url path', () => {
+    expect(() =>
+      buildPath({ url: '/homedetails/1_zpid/\\..\\..\\..\\myzillow/SavedSearches' })
+    ).toThrow(/homedetails/);
+    expect(() =>
+      buildPath({ url: '/homedetails/1_zpid/%5c..%5c..%5cmyzillow/SavedSearches' })
+    ).toThrow(/homedetails/);
+    expect(() =>
+      buildPath({ url: '/homedetails\\1_zpid/' })
+    ).toThrow(/homedetails/);
+  });
 });
 
 describe('findPropertyInPageProps', () => {

@@ -198,6 +198,31 @@ describe('zillow_get_market_report tool', () => {
     expect(mockFetchHtml).not.toHaveBeenCalled();
   });
 
+  it('rejects backslash dot segments that climb out of /home-values/', async () => {
+    for (const region_path of [
+      '/home-values/x\\..\\..\\myzillow/SavedSearches',
+      '/home-values/x%5c..%5c..%5cmyzillow/SavedSearches',
+    ]) {
+      const result = await harness.callTool('zillow_get_market_report', {
+        region_path,
+      });
+      expect(result.isError).toBeTruthy();
+    }
+    const viaUrl = await harness.callTool('zillow_get_market_report', {
+      url: '/home-values/x\\..\\..\\myzillow/SavedSearches',
+    });
+    expect(viaUrl.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
+  it('rejects a region_path that has /home-values/ somewhere other than the start', async () => {
+    const result = await harness.callTool('zillow_get_market_report', {
+      region_path: '/foo/home-values/x',
+    });
+    expect(result.isError).toBeTruthy();
+    expect(mockFetchHtml).not.toHaveBeenCalled();
+  });
+
   it('errors when both region and analytics are missing', async () => {
     mockFetchHtml.mockResolvedValue(htmlWith({}));
     const result = await harness.callTool('zillow_get_market_report', {
