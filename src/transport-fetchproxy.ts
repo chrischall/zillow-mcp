@@ -35,14 +35,13 @@ import type {
   ServerFetchResult,
   ZillowTransport,
 } from './transport.js';
+import { DEFAULT_WS_PORT } from './ws-port.js';
 
 // Re-export typed errors so callers importing from this module keep working.
 export {
   FetchproxyBridgeDownError,
   FetchproxyTimeoutError,
 } from '@chrischall/mcp-utils/fetchproxy';
-
-const DEFAULT_PORT = 37_149;
 
 export interface FetchproxyTransportOptions {
   port?: number;
@@ -84,7 +83,7 @@ export class FetchproxyTransport implements ZillowTransport {
   private readonly inner: SharedFetchproxyTransport;
 
   constructor(opts: FetchproxyTransportOptions) {
-    const port = opts.port ?? DEFAULT_PORT;
+    const port = opts.port ?? DEFAULT_WS_PORT;
     this.inner = createFetchproxyTransport<SharedFetchproxyTransport>({
       port,
       serverName: opts.server ?? 'zillow-mcp',

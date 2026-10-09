@@ -37,13 +37,14 @@ import { registerGetByAddressTools } from './tools/get-by-address.js';
 import { registerBulkGetTools } from './tools/bulk-get.js';
 import { registerResolveAddressesTools } from './tools/resolve-addresses.js';
 import { SessionRegistry } from './sessions.js';
+import { resolveWsPort } from './ws-port.js';
 import { registerSessionTools } from './tools/sessions.js';
 
 const VERSION = '1.2.1'; // x-release-please-version
 
-const port = process.env.ZILLOW_WS_PORT
-  ? Number(process.env.ZILLOW_WS_PORT)
-  : undefined;
+// Validated ZILLOW_WS_PORT (fleet-audit#916): junk / out-of-range values
+// warn on stderr and fall back to the default instead of becoming NaN.
+const { port, effectivePort } = resolveWsPort();
 
 const transport = new FetchproxyTransport({ port, version: VERSION });
 
@@ -84,7 +85,7 @@ await runMcp({
   tools,
   deps: client,
   banner:
-    `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${port ?? 37149}. ` +
+    `[zillow-mcp] v${VERSION} — WebSocket bridge via @fetchproxy/server on 127.0.0.1:${effectivePort}. ` +
     'Install the ContextMint Bridge extension (see https://github.com/nullnet-app/contextmint-bridge/releases) ' +
     'and sign into zillow.com. This project was developed and is maintained by AI (Claude). ' +
     'Use at your own discretion.',
