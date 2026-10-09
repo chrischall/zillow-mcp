@@ -31,7 +31,53 @@
       "command": "node",
       "args": [
         "${__dirname}/dist/bundle.js"
-      ]
+      ],
+      "env": {
+        "ZILLOW_WS_PORT": "${user_config.zillow_ws_port}",
+        "ZILLOW_COMMUNITIES_FILE": "${user_config.zillow_communities_file}",
+        "ZILLOW_LOCALITY_ALIASES_FILE": "${user_config.zillow_locality_aliases_file}",
+        "ZILLOW_DEBUG": "${user_config.zillow_debug}",
+        "FETCHPROXY_WS_HOST": "${user_config.fetchproxy_ws_host}",
+        "FETCHPROXY_IDENTITY_DIR": "${user_config.fetchproxy_identity_dir}"
+      }
+    }
+  },
+  "user_config": {
+    "zillow_ws_port": {
+      "type": "string",
+      "title": "fetchproxy WebSocket port",
+      "description": "Override the fetchproxy WebSocket port (default 37149).",
+      "required": false
+    },
+    "zillow_communities_file": {
+      "type": "file",
+      "title": "Communities file",
+      "description": "Path to a JSON file containing a string array that overrides the default community vocabulary used for feature extraction.",
+      "required": false
+    },
+    "zillow_locality_aliases_file": {
+      "type": "file",
+      "title": "Locality aliases file",
+      "description": "Path to a JSON file of [a, b] locality pairs (each registered both ways) that overrides the default locality aliases used by the address resolver.",
+      "required": false
+    },
+    "zillow_debug": {
+      "type": "string",
+      "title": "Debug logging (advanced)",
+      "description": "Set to 1 for verbose fetchproxy transport logging to stderr.",
+      "required": false
+    },
+    "fetchproxy_ws_host": {
+      "type": "string",
+      "title": "fetchproxy bind address (advanced)",
+      "description": "Bind interface for the fetchproxy concentrator, a literal IP only (default 127.0.0.1). Keep on loopback; it exists for hosted deployments that run each MCP in its own network namespace.",
+      "required": false
+    },
+    "fetchproxy_identity_dir": {
+      "type": "string",
+      "title": "fetchproxy identity directory (advanced)",
+      "description": "Absolute path where the fetchproxy long-term identity keypair is stored (default ~/.fetchproxy/identity/).",
+      "required": false
     }
   },
   "tools": [

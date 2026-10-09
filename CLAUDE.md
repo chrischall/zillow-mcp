@@ -115,13 +115,16 @@ Optional:
 
 ```
 ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
+ZILLOW_COMMUNITIES_FILE=/path/to/communities.json     # override the community vocabulary (JSON string array)
+ZILLOW_LOCALITY_ALIASES_FILE=/path/to/aliases.json   # override the locality aliases (JSON array of [a, b] pairs)
+ZILLOW_DEBUG=1         # verbose fetchproxy transport logging to stderr
 ```
 
 ## Conventions
 
 - All tools prefixed `zillow_*`.
 - Tool return shape: `minifiedResult(data)` imported from `@chrischall/mcp-utils` → `{ content: [{ type: 'text', text: JSON.stringify(data) }] }`. Don't hand-roll the wrapper, and don't reintroduce a local re-export seam for it — importing straight from the barrel is what keeps a fleet-wide pass from landing the symbol twice in one file.
-- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for the local-only computation/registry tools. The session-registry tools (`register_session`, `set_active_session`) are the only writes, and come from the shared `@chrischall/mcp-utils/session` registration — they mutate in-memory state, not zillow.com. One documented exception: `zillow_sweep_area` sets `readOnlyHint: false` because its optional `output_path` writes a local JSON file (absolute path, `.json` only, never overwriting an existing file); it is still read-only against Zillow.
+- Tool annotations: every tool sets `title`, `readOnlyHint: true`, `idempotentHint: true`, and `openWorldHint`. The last is `true` for network-bound tools and `false` for the local-only computation/registry tools. The session-registry tools (`register_session`, `set_active_session`) are the only writes, and come from the shared `@chrischall/mcp-utils/session` registration — they mutate in-memory state, not zillow.com. One documented exception: `zillow_sweep_area` sets `readOnlyHint: false` because its optional `output_path` writes a local JSON file (absolute path, `.json` only, never overwriting an existing file); it is still read-only against Zillow. All three writes set an explicit `destructiveHint: false` (the spec defaults it to true): the sweep only ever creates a new file, and the session writes are undone by `zillow_set_active_session`. The shared session registrar exposes no annotation option, so `src/tools/sessions.ts` adds it through a server view; `tests/tool-annotations.test.ts` pins every write's classification and every tool's `openWorldHint` off `tools/list`.
 - Path-only inputs to `ZillowClient`: pass `/some/path?with=query`, never a full URL. `FetchproxyTransport` prepends `https://www.zillow.com`. When a tool takes a `url` arg from the user, reduce it via `urlToPath` from `src/url.ts`.
 - Write a failing test before implementation (TDD).
 - ESM + NodeNext: imports use `.js` extensions even for `.ts` source.
