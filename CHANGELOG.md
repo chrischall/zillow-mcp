@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/chrischall/zillow-mcp/compare/v1.2.2...v1.2.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** Bump @modelcontextprotocol/server from 2.3.0 to 2.3.1 in the production-dependencies group ([#312](https://github.com/chrischall/zillow-mcp/issues/312)) ([b26e6b7](https://github.com/chrischall/zillow-mcp/commit/b26e6b77beeca0f9dbc632171c2bbf109be74e6c))
+
 ## [1.2.2](https://github.com/chrischall/zillow-mcp/compare/v1.2.1...v1.2.2) (2026-10-09)
 
 

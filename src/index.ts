@@ -40,7 +40,7 @@ import { SessionRegistry } from './sessions.js';
 import { resolveWsPort } from './ws-port.js';
 import { registerSessionTools } from './tools/sessions.js';
 
-const VERSION = '1.2.2'; // x-release-please-version
+const VERSION = '1.2.3'; // x-release-please-version
 
 // Validated ZILLOW_WS_PORT (fleet-audit#916): junk / out-of-range values
 // warn on stderr and fall back to the default instead of becoming NaN.
