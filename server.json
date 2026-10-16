@@ -35,6 +35,12 @@
           "format": "filepath"
         },
         {
+          "name": "ZILLOW_OUTPUT_DIR",
+          "description": "Directory zillow_sweep_area writes its optional output_path JSON files into (default ~/Downloads/zillow-mcp); paths outside it are refused.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "ZILLOW_DEBUG",
           "description": "Set to 1 for verbose fetchproxy transport logging to stderr.",
           "isRequired": false,

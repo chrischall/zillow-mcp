@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ZillowClient } from '../../src/client.js';
+import { BotWallError, type ZillowClient } from '../../src/client.js';
 import {
   buildSearchQueryState,
   outsideBounds,
@@ -39,8 +39,18 @@ function page(list: RawListing[], total?: number, where: 'searchList' | 'categor
 
 const fetchHtml = vi.fn();
 const client = { fetchHtml } as unknown as ZillowClient;
-beforeEach(() => fetchHtml.mockReset());
-afterEach(() => vi.useRealTimers());
+// sweep_area output is confined to ZILLOW_OUTPUT_DIR (fleet-audit#1357);
+// every test gets its own fresh root.
+let outRoot: string;
+beforeEach(() => {
+  fetchHtml.mockReset();
+  outRoot = mkdtempSync(join(tmpdir(), 'sweep-root-'));
+  vi.stubEnv('ZILLOW_OUTPUT_DIR', outRoot);
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe('totalResultCount', () => {
   it('reads cat1.searchList, then categoryTotals, else null', () => {
@@ -132,8 +142,7 @@ describe('sweepArea', () => {
     for (const ids of [[7, 101], [7, 102], [103], [104, 105]]) {
       fetchHtml.mockResolvedValueOnce(page(ids.map((z) => listing(z, 650_000)), ids.length)).mockResolvedValueOnce(page([], ids.length));
     }
-    const dir = mkdtempSync(join(tmpdir(), 'sweep-'));
-    const out = join(dir, 'z.json');
+    const out = join(outRoot, 'z.json');
     const s = await sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: out, tile_cap: 400 });
     expect(s.complete).toBe(true);
     expect(s.split_tiles).toBe(1);
@@ -153,8 +162,7 @@ describe('sweepArea', () => {
   });
   it('stops at the request budget and reports incomplete', async () => {
     fetchHtml.mockResolvedValueOnce(page([listing(1, 1)], 1));
-    const dir = mkdtempSync(join(tmpdir(), 'sweep-'));
-    const s = await sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: join(dir, 'z.json'), max_requests: 1 });
+    const s = await sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: 'z.json', max_requests: 1 });
     expect(s.complete).toBe(false);
     expect(s.budget_hit).toBe(true);
   });
@@ -240,21 +248,59 @@ describe('sweep delay applies between every request', () => {
 });
 
 describe('sweep output_path validation', () => {
-  it('rejects a relative path before any request', async () => {
-    await expect(sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: 'out/z.json' })).rejects.toThrow(/absolute/);
+  it('writes a bare file name into the ZILLOW_OUTPUT_DIR root (fleet-audit#1357)', async () => {
+    fetchHtml.mockResolvedValueOnce(page([listing(1, 1)], 1));
+    fetchHtml.mockResolvedValueOnce(page([listing(11, 600_000)], 1)).mockResolvedValueOnce(page([], 1));
+    const s = await sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: 'sj.json' });
+    expect(s.output_path).toBe(join(outRoot, 'sj.json'));
+    expect(JSON.parse(readFileSync(join(outRoot, 'sj.json'), 'utf8')).results).toHaveLength(1);
+  });
+  it('refuses an absolute path outside the output root before any request (fleet-audit#1357)', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'sweep-elsewhere-'));
+    await expect(
+      sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: join(elsewhere, 'settings.json') })
+    ).rejects.toThrow(/output directory/);
+    expect(existsSync(join(elsewhere, 'settings.json'))).toBe(false);
+    expect(fetchHtml).not.toHaveBeenCalled();
+  });
+  it('refuses a relative path that climbs out of the output root', async () => {
+    await expect(
+      sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: '../../escape/z.json' })
+    ).rejects.toThrow(/output directory/);
     expect(fetchHtml).not.toHaveBeenCalled();
   });
   it('rejects a path without a .json extension', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sweep-'));
-    await expect(sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: join(dir, '.bashrc') })).rejects.toThrow(/\.json/);
+    await expect(sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: join(outRoot, '.bashrc') })).rejects.toThrow(/\.json/);
     expect(fetchHtml).not.toHaveBeenCalled();
   });
   it('refuses to overwrite an existing file', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sweep-'));
-    const out = join(dir, 'z.json');
+    const out = join(outRoot, 'z.json');
     writeFileSync(out, 'keep me');
     await expect(sweepArea(client, { location: 'San Jose, CA', delay_ms: 0, output_path: out })).rejects.toThrow(/already exists/);
     expect(readFileSync(out, 'utf8')).toBe('keep me');
     expect(fetchHtml).not.toHaveBeenCalled();
+  });
+});
+
+describe('sweep is governed like the bulk tools (fleet-audit#1356)', () => {
+  it('stops the whole sweep on the first bot-wall and reports blocked + retry_after_s', async () => {
+    fetchHtml.mockResolvedValueOnce(page([listing(999, 1)], 1)); // resolve
+    fetchHtml.mockResolvedValueOnce(page([listing(1, 1)], 5000)); // root: split
+    fetchHtml.mockRejectedValueOnce(new BotWallError('/homes/x', 45)); // child 0 walled
+    fetchHtml.mockResolvedValue(page([listing(50, 600_000)], 1)); // must never be reached
+    const s = await sweepArea(client, { location: 'San Jose, CA', delay_ms: 0 });
+    expect(fetchHtml).toHaveBeenCalledTimes(3);
+    expect(s.complete).toBe(false);
+    expect(s.blocked).toBe(true);
+    expect(s.retry_after_s).toBe(45);
+    expect(s.unique_listings).toBe(0);
+  });
+  it('spends a token from the RPM bucket before every Zillow request', async () => {
+    const acquire = vi.fn(async () => {});
+    fetchHtml.mockResolvedValueOnce(page([listing(1, 1)], 1)); // resolve
+    fetchHtml.mockResolvedValueOnce(page([listing(11, 600_000), listing(12, 610_000)], 2)).mockResolvedValueOnce(page([], 2));
+    await sweepArea(client, { location: 'San Jose, CA', delay_ms: 0 }, { bucket: { acquire } as never });
+    expect(fetchHtml).toHaveBeenCalledTimes(3);
+    expect(acquire).toHaveBeenCalledTimes(3);
   });
 });

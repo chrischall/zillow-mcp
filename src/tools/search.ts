@@ -1,10 +1,19 @@
 import { z } from 'zod';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, extname, isAbsolute } from 'node:path';
+import { existsSync } from 'node:fs';
+import { extname, isAbsolute, join } from 'node:path';
 import { FIRST_DIGIT_TO_STATES, tokenize } from '@chrischall/realty-core';
-import { minifiedResult } from '@chrischall/mcp-utils';
+import {
+  assertPathWithinRoots,
+  FileWriteRefusedError,
+  minifiedResult,
+  resolveOutputDir,
+  writeFileSafe,
+} from '@chrischall/mcp-utils';
+import { TokenBucket } from '@chrischall/mcp-utils/fetchproxy';
 import type { McpServer } from '@modelcontextprotocol/server';
-import type { ZillowClient } from '../client.js';
+import { BotWallError, type ZillowClient } from '../client.js';
+import { governClient, type ResolveGovernor } from './governor.js';
+import { ZILLOW_BURST, ZILLOW_RPM } from './bulk-get.js';
 import { viewArg, viewResponse } from '../view.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findPropertyInPageProps, type RawProperty } from './properties.js';
@@ -893,9 +902,9 @@ export function registerSearchTools(
     {
       title: 'Exhaustively sweep a Zillow search area',
       description:
-        "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas. Sequential requests with a delay. Read-only against Zillow; the only write is the optional local output file.",
+        "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas (inside the output directory: ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp). Sequential requests with a delay, paced by the same per-host requests-per-minute throttle as `zillow_bulk_get`; if Zillow's bot-wall blocks a request the sweep stops and returns `{ blocked: true, retry_after_s }` with what it had. Read-only against Zillow; the only write is the optional local output file.",
       // destructiveHint: false — read-only against Zillow; the only write is
-      // the optional local output_path, which must be a NEW absolute .json
+      // the optional local output_path, which must be a NEW .json file inside ZILLOW_OUTPUT_DIR
       // file (existing files are refused and the write uses flag 'wx'), so no
       // prior state is ever lost. Purely additive.
       annotations: { title: 'Sweep Zillow area', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -915,7 +924,7 @@ export function registerSearchTools(
         tile_cap: z.number().int().positive().max(1000).optional().describe('Treat a tile as complete only if its total is at most this (default 400).'),
         delay_ms: z.number().int().min(0).max(10000).optional().describe('Pause before every Zillow request, including each page within a tile (default 1200).'),
         max_requests: z.number().int().positive().max(400).optional().describe('Hard request budget (default 150), counting the resolve call and every page; the sweep stops mid-tile rather than exceed it.'),
-        output_path: z.string().optional().describe('Optional absolute path of a NEW .json file to write the full results (and per-tile counts) to; an existing file is never overwritten. Omit to get the results inline; use a file for large areas so the listings stay out of the conversation.'),
+        output_path: z.string().optional().describe('Optional NEW .json file to write the full results (and per-tile counts) to: a file name (e.g. "san-jose.json") written into the output directory (ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp), or an absolute path inside it. Paths outside that directory are refused, and an existing file is never overwritten. Omit to get the results inline; use a file for large areas so the listings stay out of the conversation.'),
       }),
     },
     async (input) => {
@@ -949,15 +958,36 @@ export function filterFailure(f: FormattedListing, input: SearchInput): string {
   return 'other';
 }
 
+/** Env var naming the directory sweep output files are confined to. */
+export const SWEEP_OUTPUT_DIR_ENV = 'ZILLOW_OUTPUT_DIR';
+
 /**
- * `output_path` comes from the model, so guard it before any request: an
- * absolute path (a relative one would land wherever the server's cwd is), a
- * `.json` file (not a dotfile or script), and never an existing file.
+ * `output_path` comes from the model, so confine it before any request
+ * (fleet-audit#1357): it resolves against the operator's output directory
+ * (`ZILLOW_OUTPUT_DIR`, default `~/Downloads/zillow-mcp` — never the cwd) and
+ * must stay inside it through symlinks; it must be a `.json` file (not a
+ * dotfile or script) and never an existing file. Returns the confined path
+ * and its root.
  */
-export function assertWritableOutputPath(p: string): void {
-  if (!isAbsolute(p)) throw new Error(`output_path must be an absolute path; got "${p}".`);
+export function resolveSweepOutputPath(p: string): { path: string; root: string } {
   if (extname(p).toLowerCase() !== '.json') throw new Error(`output_path must end in .json; got "${p}".`);
-  if (existsSync(p)) throw new Error(`output_path ${p} already exists; refusing to overwrite it. Pass a new file path.`);
+  const root = resolveOutputDir(undefined, SWEEP_OUTPUT_DIR_ENV, { name: 'zillow-mcp' });
+  const target = isAbsolute(p) ? p : join(root, p);
+  try {
+    assertPathWithinRoots(target, [root]);
+  } catch {
+    throw new Error(
+      `output_path "${p}" is outside the output directory ${root}; pass a file name, or set ${SWEEP_OUTPUT_DIR_ENV} to choose the directory.`
+    );
+  }
+  if (existsSync(target)) throw new Error(`output_path ${target} already exists; refusing to overwrite it. Pass a new file path.`);
+  return { path: target, root };
+}
+
+/** Test seams for {@link sweepArea}. */
+export interface SweepTuning {
+  /** RPM bucket every Zillow request spends from; defaults to bulk_get's {@link ZILLOW_RPM} / {@link ZILLOW_BURST}. */
+  bucket?: TokenBucket;
 }
 
 /** Split a box into four quadrants. */
@@ -972,12 +1002,22 @@ export function quarter(b: MapBounds): MapBounds[] {
   ];
 }
 
-export async function sweepArea(client: ZillowClient, input: SweepInput) {
+export async function sweepArea(rawClient: ZillowClient, input: SweepInput, tuning: SweepTuning = {}) {
   const maxDepth = input.max_depth ?? 6;
   const tileCap = input.tile_cap ?? 400;
   const delay = input.delay_ms ?? 1200;
   const budget = input.max_requests ?? 150;
-  if (input.output_path !== undefined) assertWritableOutputPath(input.output_path);
+  const output = input.output_path !== undefined ? resolveSweepOutputPath(input.output_path) : undefined;
+  // fleet-audit#1356: the same governor as bulk_get / resolve_addresses —
+  // every request (resolve, each tile, each page) spends a token from one
+  // RPM bucket, so `delay_ms: 0` cannot exceed ZILLOW_RPM sustained, and the
+  // first bot-wall trips a breaker that stops the sweep instead of dialling
+  // the wall for every remaining tile.
+  const gov: ResolveGovernor = {
+    bucket: tuning.bucket ?? new TokenBucket({ ratePerMinute: ZILLOW_RPM, burst: ZILLOW_BURST }),
+    wall: null,
+  };
+  const client = governClient(rawClient, gov);
   const resolved = await resolveLocationOrListings(client, input.location);
   if (resolved.kind !== 'region') {
     throw new LocationNotResolved(input.location, 'sweeps need a region (city, ZIP, county), not an address');
@@ -990,9 +1030,11 @@ export async function sweepArea(client: ZillowClient, input: SweepInput) {
   const warnings = new Set<string>();
   let requests = 1; // the resolve call
   let budgetHit = false;
+  let blocked = false;
   const queue: Array<{ id: string; b: MapBounds; depth: number }> = [{ id: 't', b: root, depth: 0 }];
   while (queue.length) {
     const t = queue.shift()!;
+    if (blocked) { tiles.push({ id: t.id, bounds: t.b, depth: t.depth, total: null, fetched: 0, kept: 0, truncated: true, split: false, outside_bounds: 0, dropped_filter_guard: 0 }); continue; }
     if (requests >= budget) { budgetHit = true; tiles.push({ id: t.id, bounds: t.b, depth: t.depth, total: null, fetched: 0, kept: 0, truncated: true, split: false, outside_bounds: 0, dropped_filter_guard: 0 }); continue; }
     if (delay) await sleep(delay);
     let res: Awaited<ReturnType<typeof runRegionSearch>>;
@@ -1005,7 +1047,9 @@ export async function sweepArea(client: ZillowClient, input: SweepInput) {
       { splitAbove: t.depth < maxDepth ? tileCap : undefined, maxPages: budget - requests, delayMs: delay }
     );
     } catch (e) {
-      // One failing tile must not discard the rest of the sweep.
+      // One failing tile must not discard the rest of the sweep — unless it
+      // is the bot-wall: then every remaining tile would hit it too.
+      if (e instanceof BotWallError) blocked = true;
       requests += 1;
       tileErrors.push({ id: t.id, bounds: t.b, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
       tiles.push({ id: t.id, bounds: t.b, depth: t.depth, total: null, fetched: 0, kept: 0, truncated: true, split: false, outside_bounds: 0, dropped_filter_guard: 0 });
@@ -1013,6 +1057,8 @@ export async function sweepArea(client: ZillowClient, input: SweepInput) {
     }
     const { results, meta } = res;
     requests += meta.pages_fetched;
+    // A wall on a deeper page is absorbed as a page_error; the breaker saw it.
+    if (gov.wall) blocked = true;
     if (meta.stop_reason === 'budget' && meta.truncated) budgetHit = true;
     if (meta.stop_reason === 'page_error') warnings.add('Zillow refused a deep result page (HTTP error) on some tiles; those tiles kept what earlier pages returned and count as truncated.');
     if (meta.total_result_count === null) warnings.add('Zillow returned no total count on some tiles (shape drift?) — completeness for those tiles inferred from paging only.');
@@ -1041,26 +1087,29 @@ export async function sweepArea(client: ZillowClient, input: SweepInput) {
     budget_hit: budgetHit,
     tiles,
     unique_listings: byZpid.size,
-    complete: !budgetHit && tileErrors.length === 0 && stillTruncated.length === 0,
+    complete: !budgetHit && !blocked && tileErrors.length === 0 && stillTruncated.length === 0,
+    ...(blocked ? { blocked: true, retry_after_s: gov.wall?.retryAfterSeconds ?? 0 } : {}),
     tile_errors: tileErrors,
     warnings: [...warnings],
     results: [...byZpid.values()],
     dropped: [...droppedAll.values()],
   };
-  if (input.output_path) {
-    mkdirSync(dirname(input.output_path), { recursive: true });
+  if (output) {
+    // No parent directories are created: the root exists (resolveOutputDir
+    // made it) and a subdirectory inside it must already exist.
     try {
-      // 'wx': never clobber a file that appeared while the sweep ran.
-      writeFileSync(input.output_path, JSON.stringify(out, null, 1), { flag: 'wx' });
+      // Exclusive, no-follow create: never clobber a file (or follow a
+      // symlink) that appeared while the sweep ran.
+      await writeFileSafe(output.path, Buffer.from(JSON.stringify(out, null, 1)), { allowedRoots: [output.root] });
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw new Error(`output_path ${input.output_path} already exists; refusing to overwrite it. Pass a new file path.`);
+      if (e instanceof FileWriteRefusedError && e.reason === 'exists') {
+        throw new Error(`output_path ${output.path} already exists; refusing to overwrite it. Pass a new file path.`);
       }
       throw e;
     }
   }
   return {
-    ...(input.output_path ? { output_path: input.output_path } : {}),
+    ...(output ? { output_path: output.path } : {}),
     complete: out.complete,
     unique_listings: out.unique_listings,
     requests,
@@ -1068,11 +1117,12 @@ export async function sweepArea(client: ZillowClient, input: SweepInput) {
     split_tiles: tiles.length - leaves.length,
     truncated_leaf_tiles: stillTruncated.map((t) => ({ id: t.id, total: t.total, fetched: t.fetched, bounds: t.bounds })),
     budget_hit: budgetHit,
+    ...(blocked ? { blocked: true, retry_after_s: gov.wall?.retryAfterSeconds ?? 0 } : {}),
     ...(tileErrors.length ? { tile_errors: tileErrors } : {}),
     sum_of_leaf_totals: leaves.reduce((a, t) => a + (t.total ?? 0), 0),
     sum_of_leaf_shortfall: leaves.reduce((a, t) => a + (t.shortfall ?? 0), 0),
     dropped_by_reason: [...droppedAll.values()].reduce<Record<string, number>>((a, d) => ((a[d.reason] = (a[d.reason] ?? 0) + 1), a), {}),
     warnings: out.warnings,
-    ...(input.output_path ? {} : { results: out.results }),
+    ...(output ? {} : { results: out.results }),
   };
 }
