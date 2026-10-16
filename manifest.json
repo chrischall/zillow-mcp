@@ -37,6 +37,7 @@
         "ZILLOW_COMMUNITIES_FILE": "${user_config.zillow_communities_file}",
         "ZILLOW_LOCALITY_ALIASES_FILE": "${user_config.zillow_locality_aliases_file}",
         "ZILLOW_DEBUG": "${user_config.zillow_debug}",
+        "ZILLOW_OUTPUT_DIR": "${user_config.zillow_output_dir}",
         "FETCHPROXY_WS_HOST": "${user_config.fetchproxy_ws_host}",
         "FETCHPROXY_IDENTITY_DIR": "${user_config.fetchproxy_identity_dir}"
       }
@@ -60,6 +61,13 @@
       "title": "Locality aliases file",
       "description": "Path to a JSON file of [a, b] locality pairs (each registered both ways) that overrides the default locality aliases used by the address resolver.",
       "required": false
+    },
+    "zillow_output_dir": {
+      "type": "string",
+      "title": "Output directory",
+      "description": "Directory zillow_sweep_area writes its optional output_path JSON files into (default: ~/Downloads/zillow-mcp). Paths outside it are refused.",
+      "required": false,
+      "sensitive": false
     },
     "zillow_debug": {
       "type": "string",

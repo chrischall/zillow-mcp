@@ -81,7 +81,7 @@ const LOCAL = new Set([
 
 // Every write, pinned to its truthful destructive classification.
 // - zillow_sweep_area: read-only against Zillow; its only write is the
-//   optional local `output_path`, which must be a NEW absolute .json file
+//   optional local `output_path`, which must be a NEW .json file inside ZILLOW_OUTPUT_DIR
 //   (an existing one is refused, and the write uses the 'wx' flag), so no
 //   prior state is ever lost — purely additive.
 // - the two session writes touch only the process-local, label-only
