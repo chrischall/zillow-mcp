@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.4](https://github.com/chrischall/zillow-mcp/compare/v1.2.3...v1.2.4) (2026-10-16)
+
+
+### Bug Fixes
+
+* **plugin:** launch the published package so marketplace installs start ([#317](https://github.com/chrischall/zillow-mcp/issues/317)) ([88c8311](https://github.com/chrischall/zillow-mcp/commit/88c83111cd51d92332557c1696ff9210edeb5611))
+* **sweep:** confine sweep_area output to ZILLOW_OUTPUT_DIR and govern its requests ([#314](https://github.com/chrischall/zillow-mcp/issues/314)) ([e6299c9](https://github.com/chrischall/zillow-mcp/commit/e6299c9bcf7444799ef3e99055911629f0ef4867))
+
 ## [1.2.3](https://github.com/chrischall/zillow-mcp/compare/v1.2.2...v1.2.3) (2026-10-10)
 
 
