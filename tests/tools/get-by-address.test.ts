@@ -210,6 +210,50 @@ describe('zillow_get_by_address tool', () => {
     expect(unitParsed.zpid).toBe('102228838');
   });
 
+  it('resolves a full address (city / state / ZIP inside `address`) to the street listing (fleet-audit#1355)', async () => {
+    // Zillow returns the street line only. realty-core <=0.6.3 scored the
+    // whole query, so the locality tokens diluted "126 Sleeping Bear Ln,
+    // Lake Lure, NC 28746" to exactly 0.5 and every rung rejected the
+    // right house; 0.6.4 scores the query's street segment.
+    mockFetchHtml.mockResolvedValue(
+      htmlWithFirstListing({
+        zpid: 102228838,
+        detailUrl:
+          '/homedetails/126-Sleeping-Bear-Ln-Lake-Lure-NC-28746/102228838_zpid/',
+        streetAddress: '126 Sleeping Bear Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      })
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '126 Sleeping Bear Ln, Lake Lure, NC 28746',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(result);
+    expect(parsed.resolved).toBe(true);
+    expect(parsed.zpid).toBe('102228838');
+  });
+
+  it('still rejects a different house number for a full-address query', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWithFirstListing({
+        zpid: 102228840,
+        detailUrl:
+          '/homedetails/128-Sleeping-Bear-Ln-Lake-Lure-NC-28746/102228840_zpid/',
+        streetAddress: '128 Sleeping Bear Ln',
+        city: 'Lake Lure',
+        state: 'NC',
+        zipcode: '28746',
+      })
+    );
+    const result = await harness.callTool('zillow_get_by_address', {
+      address: '126 Sleeping Bear Ln, Lake Lure, NC 28746',
+    });
+    const parsed = parseToolResult<{ resolved: boolean; zpid?: string }>(result);
+    expect(parsed.zpid).not.toBe('102228840');
+    expect(parsed.resolved).toBe(false);
+  });
+
   it('returns resolved=false when no listing comes back', async () => {
     mockFetchHtml.mockResolvedValue(
       '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"searchPageState":{"cat1":{"searchResults":{"listResults":[]}}}}}}</script>'
