@@ -4,6 +4,19 @@ slug: zillow
 summary: >-
   Zillow real-estate access for Claude — search listings, fetch property
   details, Zestimate history, saved searches & homes, market reports
+examples:
+  - prompt: >-
+      Find 3-bedroom houses for sale in Asheville, NC under $550,000 and list
+      them with price, square footage and Zestimate.
+    note: Searches active Zillow listings with price and bed filters.
+  - prompt: >-
+      What's the housing market like in Brooklyn right now? Give me the median
+      sale price, days on market and year-over-year home value change.
+    note: Pulls Zillow's regional market report and home value index.
+  - prompt: >-
+      Compare the homes on my Zillow saved list side by side on price, lot
+      size, year built and how each list price sits against its Zestimate.
+    note: Reads your saved homes from your signed-in Zillow tab.
 #
 # Hosting note (a comment, not user-facing summary text): this is a
 # BROWSER-BRIDGE MCP — it reaches its site through the user's signed-in
