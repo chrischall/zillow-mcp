@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.5](https://github.com/chrischall/zillow-mcp/compare/v1.2.4...v1.2.5) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** Bump @chrischall/mcp-utils from 3.0.3 to 3.3.0 in the production-dependencies group ([#325](https://github.com/chrischall/zillow-mcp/issues/325)) ([727a551](https://github.com/chrischall/zillow-mcp/commit/727a5518f8edfe35d269e4c2ffde6a0bcb7f37e4))
+
+
+### Documentation
+
+* **mint:** add sample prompts for the public catalog ([#322](https://github.com/chrischall/zillow-mcp/issues/322)) ([24dd837](https://github.com/chrischall/zillow-mcp/commit/24dd8378b62d13ad64c959d8d4b2489071d2ba2b))
+
 ## [1.2.4](https://github.com/chrischall/zillow-mcp/compare/v1.2.3...v1.2.4) (2026-10-16)
 
 
