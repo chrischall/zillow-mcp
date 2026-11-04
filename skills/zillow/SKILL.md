@@ -55,7 +55,7 @@ That's it. No API keys, no env vars.
 
 ### Signed-in user data (the unique value vs. Bridge-API competitors)
 
-- **`zillow_get_saved_searches`** — Your saved searches, with new-listing counts and notification frequency. `view: "brief"` answers one line per search (`name — <last update> — <N new>`).
+- **`zillow_get_saved_searches`** — Your saved searches, with new-listing counts and notification frequency. `view: "brief"` answers one line per search (`name — <last update> — <N new | no new listings | new count unknown>`).
 - **`zillow_get_saved_homes`** — Homes you've favorited.
 
 ## Response shape (`view`)
