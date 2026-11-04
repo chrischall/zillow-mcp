@@ -207,13 +207,46 @@ describe('canonical reads answer view: brief', () => {
     ]);
   });
 
-  it('an empty saved-search list answers an empty brief, not an error', async () => {
+  it('an empty saved-search list answers the single `-- none` note, not an error', async () => {
     mockFetchHtml.mockResolvedValue(htmlWith({ savedSearches: [] }));
     const h = await harness();
     const result = await h.callTool('zillow_get_saved_searches', { view: 'brief' });
     await h.close();
     expect(result.isError).toBeFalsy();
-    expect((result.content as Array<{ text: string }>)[0].text).toBe('');
+    expect((result.content as Array<{ text: string }>)[0].text).toBe('-- none');
+  });
+
+  it('a search named like a note, or starting with a backslash, is escaped with one leading backslash', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWith({
+        savedSearches: [
+          { id: 1, name: '-- none', newCount: 2, searchQueryState: {} },
+          { id: 2, name: '\\server share', newCount: 0, searchQueryState: {} },
+          { id: 3, name: '--tight', newCount: 0, searchQueryState: {} },
+        ],
+      }),
+    );
+    const h = await harness();
+    const result = await h.callTool('zillow_get_saved_searches', { view: 'brief' });
+    await h.close();
+    expect((result.content as Array<{ text: string }>)[0].text.split('\n')).toEqual([
+      '\\-- none — no date — 2 new',
+      '\\\\server share — no date — no new listings',
+      '--tight — no date — no new listings',
+    ]);
+  });
+
+  it('an escaped long name is still cut so the whole line stays ≤ 120 chars', async () => {
+    mockFetchHtml.mockResolvedValue(
+      htmlWith({ savedSearches: [{ id: 1, name: `-- ${'y'.repeat(200)}`, newCount: 1, searchQueryState: {} }] }),
+    );
+    const h = await harness();
+    const result = await h.callTool('zillow_get_saved_searches', { view: 'brief' });
+    await h.close();
+    const line = (result.content as Array<{ text: string }>)[0].text;
+    expect(line.length).toBe(120);
+    expect(line.startsWith('\\-- yyy')).toBe(true);
+    expect(line.endsWith('… — no date — 1 new')).toBe(true);
   });
 
   it('view omitted keeps the full JSON answer', async () => {
