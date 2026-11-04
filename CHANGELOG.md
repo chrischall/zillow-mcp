@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.3.0](https://github.com/chrischall/zillow-mcp/compare/v1.2.5...v1.3.0) (2026-11-04)
+
+
+### Features
+
+* context-group hints, a brief view on saved searches ([#330](https://github.com/chrischall/zillow-mcp/issues/330)) ([7c7fa08](https://github.com/chrischall/zillow-mcp/commit/7c7fa08241fb30cffa1c4c7864615b422d9c3fcb))
+
+
+### Bug Fixes
+
+* **deps:** Bump @fetchproxy/server from 3.6.2 to 3.6.3 in the production-dependencies group ([#328](https://github.com/chrischall/zillow-mcp/issues/328)) ([768d8a5](https://github.com/chrischall/zillow-mcp/commit/768d8a53a96ef5d30f1cbe5765e437b08aaa05de))
+
+
+### Documentation
+
+* **saved:** document the brief view's "new count unknown" status ([#332](https://github.com/chrischall/zillow-mcp/issues/332)) ([3a14c6d](https://github.com/chrischall/zillow-mcp/commit/3a14c6d65c30b368bb065aea17fc22a07b396741))
+* **skill:** the quick summary names all three brief statuses ([#334](https://github.com/chrischall/zillow-mcp/issues/334)) ([ca9f87d](https://github.com/chrischall/zillow-mcp/commit/ca9f87d7b79ba22fba9aeadec0e16c54e4c08aef))
+
 ## [1.2.5](https://github.com/chrischall/zillow-mcp/compare/v1.2.4...v1.2.5) (2026-10-29)
 
 
