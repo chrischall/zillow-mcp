@@ -171,10 +171,13 @@ function briefDate(v: unknown): string {
  * most 120 characters (the name is shortened). The date is the search's last
  * update (`updatedAt`); the status is Zillow's new-listing count (`newCount`),
  * the one field that answers "anything new?". A search without that field
- * says so rather than claiming nothing is new.
+ * says so rather than claiming nothing is new. A name starting with `-- ` or
+ * `\` is escaped with one leading `\` so it can never read as a note line
+ * (the gateway strips one backslash from every item line).
  */
 export function briefSearchLine(raw: RawSavedSearch): string {
-  const name = typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name.trim() : '(unnamed search)';
+  const plain = typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name.trim() : '(unnamed search)';
+  const name = plain.startsWith('-- ') || plain.startsWith('\\') ? `\\${plain}` : plain;
   const n = raw.newCount;
   const status =
     typeof n !== 'number' ? 'new count unknown' : n > 0 ? `${n} new` : 'no new listings';
@@ -231,7 +234,7 @@ export function registerSavedTools(
           .describe(
             '"full" (default) returns each saved search as JSON; "brief" returns one line per search: ' +
               'name — <last update as an ISO date, or "no date"> — <N new | no new listings | new count unknown> ' +
-              '("new count unknown" when Zillow omits the count for that search).'
+              '("new count unknown" when Zillow omits the count for that search); no saved searches answers the single note line "-- none".'
           ),
       }),
     },
@@ -243,7 +246,7 @@ export function registerSavedTools(
       const pageProps = getPageProps(nextData);
       const searches = findSavedSearches(pageProps);
       if (view === 'brief') {
-        return { content: [{ type: 'text' as const, text: searches.map(briefSearchLine).join('\n') }] };
+        return { content: [{ type: 'text' as const, text: searches.length === 0 ? '-- none' : searches.map(briefSearchLine).join('\n') }] };
       }
       return minifiedResult(searches.map(formatSearch));
     }

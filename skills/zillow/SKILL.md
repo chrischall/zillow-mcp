@@ -148,7 +148,9 @@ tool except `zillow_healthcheck` carries `_meta.mint` with `domain: "home"`).
   "anything new on my saved searches?" — with `view: "brief"`, one line per
   search: `name — <last update, ISO date | no date> — <N new | no new listings | new count unknown>`
   (`new count unknown` when Zillow omits a search's new-listing count — it is
-  not a claim that nothing is new).
+  not a claim that nothing is new). No saved searches answers the single note
+  line `-- none`, and a search whose own name starts with `-- ` or `\` is
+  escaped with one leading `\` so it never reads as a note.
   It takes no date range and declares **no subject**: a saved search is a
   query, not a person, property or account, so there is no listable set to
   publish as an enum.
