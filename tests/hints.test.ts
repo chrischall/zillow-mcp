@@ -12,7 +12,7 @@ import { createTestHarness } from './helpers.js';
 type Listed = {
   name: string;
   annotations?: { readOnlyHint?: boolean };
-  inputSchema: { properties?: Record<string, { enum?: unknown[] }> };
+  inputSchema: { properties?: Record<string, { enum?: unknown[]; description?: string }> };
   _meta?: { mint?: Record<string, unknown> };
 };
 
@@ -140,6 +140,14 @@ describe('_meta.mint on tools/list', () => {
       aliases: ['new listings', 'saved searches', 'house hunting', 'homes for sale'],
     });
     expect(t.inputSchema.properties?.view?.enum).toEqual(['full', 'brief']);
+  });
+
+  it('saved searches: the view description names every brief status briefSearchLine can emit', async () => {
+    const t = (await served()).find((x) => x.name === 'zillow_get_saved_searches')!;
+    const desc = t.inputSchema.properties?.view?.description ?? '';
+    for (const status of ['N new', 'no new listings', 'new count unknown']) {
+      expect(desc, status).toContain(status);
+    }
   });
 });
 

@@ -146,7 +146,9 @@ tool except `zillow_healthcheck` carries `_meta.mint` with `domain: "home"`).
 
 - **Canonical read:** `zillow_get_saved_searches` answers **what's new** —
   "anything new on my saved searches?" — with `view: "brief"`, one line per
-  search: `name — <last update, ISO date | no date> — <N new | no new listings>`.
+  search: `name — <last update, ISO date | no date> — <N new | no new listings | new count unknown>`
+  (`new count unknown` when Zillow omits a search's new-listing count — it is
+  not a claim that nothing is new).
   It takes no date range and declares **no subject**: a saved search is a
   query, not a person, property or account, so there is no listable set to
   publish as an enum.

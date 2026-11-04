@@ -230,7 +230,8 @@ export function registerSavedTools(
           .optional()
           .describe(
             '"full" (default) returns each saved search as JSON; "brief" returns one line per search: ' +
-              'name — <last update as an ISO date, or "no date"> — <N new | no new listings>.'
+              'name — <last update as an ISO date, or "no date"> — <N new | no new listings | new count unknown> ' +
+              '("new count unknown" when Zillow omits the count for that search).'
           ),
       }),
     },
