@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/chrischall/zillow-mcp/compare/v1.3.0...v1.3.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **brief:** align the brief view with the fleet contract ([#335](https://github.com/chrischall/zillow-mcp/issues/335)) ([77c390b](https://github.com/chrischall/zillow-mcp/commit/77c390bdf68d07aece8914fcd2bbd5b60af242ef))
+
 ## [1.3.0](https://github.com/chrischall/zillow-mcp/compare/v1.2.5...v1.3.0) (2026-11-04)
 
 
