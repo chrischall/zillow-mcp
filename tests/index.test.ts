@@ -3,21 +3,7 @@
 // up in index.ts" mistakes that the per-tool tests miss.
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import type { ZillowClient } from '../src/client.js';
-import { registerSearchTools } from '../src/tools/search.js';
-import { registerPropertyTools } from '../src/tools/properties.js';
-import { registerZestimateTools } from '../src/tools/zestimate.js';
-import { registerSavedTools } from '../src/tools/saved.js';
-import { registerMarketTools } from '../src/tools/market.js';
-import { registerMortgageTools } from '../src/tools/mortgage.js';
-import { registerHealthcheckTools } from '../src/tools/healthcheck.js';
-import { registerHistoryTools } from '../src/tools/history.js';
-import { registerCompareTools } from '../src/tools/compare.js';
-import { registerAffordabilityTools } from '../src/tools/affordability.js';
-import { registerPhotosTools } from '../src/tools/photos.js';
-import { registerGetByAddressTools } from '../src/tools/get-by-address.js';
-import { registerBulkGetTools } from '../src/tools/bulk-get.js';
-import { registerResolveAddressesTools } from '../src/tools/resolve-addresses.js';
-import { registerSessionTools } from '../src/tools/sessions.js';
+import { buildTools } from '../src/registrars.js';
 import { SessionRegistry } from '../src/sessions.js';
 import { readFileSync } from 'node:fs';
 import { createTestHarness } from './helpers.js';
@@ -60,21 +46,7 @@ describe('tool registration', () => {
   it('registers every advertised zillow_* tool', async () => {
     const sessions = new SessionRegistry();
     harness = await createTestHarness((server) => {
-      registerSearchTools(server, mockClient);
-      registerPropertyTools(server, mockClient);
-      registerZestimateTools(server, mockClient);
-      registerSavedTools(server, mockClient, sessions);
-      registerMarketTools(server, mockClient);
-      registerMortgageTools(server);
-      registerHistoryTools(server, mockClient);
-      registerCompareTools(server, mockClient);
-      registerAffordabilityTools(server);
-      registerPhotosTools(server, mockClient);
-      registerHealthcheckTools(server, mockClient);
-      registerGetByAddressTools(server, mockClient);
-      registerBulkGetTools(server, mockClient);
-      registerResolveAddressesTools(server, mockClient);
-      registerSessionTools(server, sessions);
+      for (const register of buildTools(sessions)) register(server, mockClient);
     });
     const tools = await harness.listTools();
     const names = tools.map((t) => t.name).sort();

@@ -6,6 +6,7 @@ import {
   type MortgageInput as CoreMortgageInput,
 } from '@chrischall/realty-core';
 import { minifiedResult } from '@chrischall/mcp-utils';
+import { withSharedRegistrarMeta } from './hints.js';
 
 /**
  * Local-only mortgage payment calculator. Parity with sap156/zillow-mcp-
@@ -72,7 +73,7 @@ export function registerMortgageTools(server: McpServer): void {
   // registrar (fleet-audit#1090). `shape: 'canonical'` adds the echoed
   // `home_price` to zillow's previous output (additive only) and caps
   // `loan_term_years` at MAX_LOAN_TERM_YEARS.
-  registerMortgageTool(server, {
+  registerMortgageTool(withSharedRegistrarMeta(server), {
     z,
     prefix: 'zillow',
     shape: 'canonical',

@@ -5,6 +5,7 @@ import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findArrayByShape } from '../page-props.js';
 import type { SessionRegistry } from '../sessions.js';
+import { homeMeta } from './hints.js';
 
 /**
  * Signed-in-user surfaces. These are the unique value zillow-mcp delivers
@@ -156,6 +157,33 @@ function formatHome(raw: RawSavedHome) {
   };
 }
 
+const BRIEF_MAX = 120;
+
+/** An ISO calendar date (`YYYY-MM-DD`) from Zillow's timestamp, or `no date`. */
+function briefDate(v: unknown): string {
+  if (typeof v !== 'string' && typeof v !== 'number') return 'no date';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? 'no date' : d.toISOString().slice(0, 10);
+}
+
+/**
+ * One saved search as one line, `name — <ISO date | no date> — <status>`, at
+ * most 120 characters (the name is shortened). The date is the search's last
+ * update (`updatedAt`); the status is Zillow's new-listing count (`newCount`),
+ * the one field that answers "anything new?". A search without that field
+ * says so rather than claiming nothing is new.
+ */
+export function briefSearchLine(raw: RawSavedSearch): string {
+  const name = typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name.trim() : '(unnamed search)';
+  const n = raw.newCount;
+  const status =
+    typeof n !== 'number' ? 'new count unknown' : n > 0 ? `${n} new` : 'no new listings';
+  const tail = ` — ${briefDate(raw.updatedAt)} — ${status}`;
+  const room = BRIEF_MAX - tail.length;
+  const shown = name.length > room ? `${name.slice(0, Math.max(room - 1, 0))}…` : name;
+  return `${shown}${tail}`;
+}
+
 export function registerSavedTools(
   server: McpServer,
   client: ZillowClient,
@@ -177,9 +205,13 @@ export function registerSavedTools(
   server.registerTool(
     'zillow_get_saved_searches',
     {
+      _meta: homeMeta('whats-new', {
+        canonical: true,
+        aliases: ['new listings', 'saved searches', 'house hunting', 'homes for sale'],
+      }),
       title: 'Get my saved Zillow searches',
       description:
-        "The signed-in user's saved searches on zillow.com (name, filters, new-listing count, notification frequency). Requires the user to be signed in at zillow.com in the bridged browser tab — throws SessionNotAuthenticatedError otherwise. An optional `session_id` (from `zillow_register_session`) is checked against the session registry — an unknown id errors — but it is a label only: the request always goes through whichever browser tab the extension is signed into. Read-only; safe to call repeatedly.",
+        "The signed-in user's saved searches on zillow.com (name, filters, new-listing count, notification frequency) — the answer to \"anything new on my saved searches?\". `view: 'brief'` gives one line per search with its new-listing count. Requires the user to be signed in at zillow.com in the bridged browser tab — throws SessionNotAuthenticatedError otherwise. An optional `session_id` (from `zillow_register_session`) is checked against the session registry — an unknown id errors — but it is a label only: the request always goes through whichever browser tab the extension is signed into. Read-only; safe to call repeatedly.",
       annotations: {
         title: 'Get my saved Zillow searches',
         readOnlyHint: true,
@@ -193,15 +225,25 @@ export function registerSavedTools(
           .describe(
             'Optional registered session id (from `zillow_register_session`). Defaults to the active session.'
           ),
+        view: z
+          .enum(['full', 'brief'])
+          .optional()
+          .describe(
+            '"full" (default) returns each saved search as JSON; "brief" returns one line per search: ' +
+              'name — <last update as an ISO date, or "no date"> — <N new | no new listings>.'
+          ),
       }),
     },
-    async ({ session_id }) => {
+    async ({ session_id, view }) => {
       resolveSession(session_id);
       // Note: path is case-sensitive (Zillow's web app uses capital S)
       const html = await client.fetchHtml('/myzillow/SavedSearches');
       const nextData = extractNextData(html);
       const pageProps = getPageProps(nextData);
       const searches = findSavedSearches(pageProps);
+      if (view === 'brief') {
+        return { content: [{ type: 'text' as const, text: searches.map(briefSearchLine).join('\n') }] };
+      }
       return minifiedResult(searches.map(formatSearch));
     }
   );
@@ -209,6 +251,7 @@ export function registerSavedTools(
   server.registerTool(
     'zillow_get_saved_homes',
     {
+      _meta: homeMeta('lookup', { aliases: ['saved homes', 'favorites', 'favorite homes', 'my homes'] }),
       title: 'Get my saved (favorited) Zillow homes',
       description:
         "The signed-in user's saved (favorited) homes on zillow.com, flattened across all of the user's collections. Returns address, price, Zestimate, status, and when each home was saved. An optional `session_id` (from `zillow_register_session`) is checked against the session registry — an unknown id errors — but it is a label only: the request always goes through whichever browser tab the extension is signed into. Requires the user to be signed in. Read-only; safe to call repeatedly.",

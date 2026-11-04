@@ -18,6 +18,7 @@ import {
   type FormattedProperty,
   zpidSchema,
 } from './properties.js';
+import { homeMeta } from './hints.js';
 
 // `chunk` comes from the shared resilience kit. The fan-out no longer
 // pages internally (the deadline-bounded `runBoundedBatch` owns dispatch),
@@ -301,6 +302,7 @@ export function registerBulkGetTools(
   server.registerTool(
     'zillow_bulk_get',
     {
+      _meta: homeMeta('lookup'),
       title: 'Bulk-fetch Zillow properties by zpid',
       description:
         `Fetch up to ${BULK_GET_MAX} Zillow property records in a single call — the "give me everything for these N saved homes" endpoint. Returns one structured row per input id ` +

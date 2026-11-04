@@ -7,6 +7,7 @@ import {
   type AffordabilityResult,
 } from '@chrischall/realty-core';
 import { minifiedResult } from '@chrischall/mcp-utils';
+import { homeMeta, withSharedRegistrarMeta } from './hints.js';
 
 /**
  * Two local-only financial calculators. No network, no Zillow data —
@@ -238,7 +239,7 @@ function round2(n: number): number {
 export function registerAffordabilityTools(server: McpServer): void {
   // Shared realty-core registrar (fleet-audit#1090): same schema / DTI
   // bounds zillow already had, plus the MAX_LOAN_TERM_YEARS cap.
-  registerAffordabilityTool(server, {
+  registerAffordabilityTool(withSharedRegistrarMeta(server), {
     z,
     prefix: 'zillow',
     toResult: minifiedResult,
@@ -247,6 +248,7 @@ export function registerAffordabilityTools(server: McpServer): void {
   server.registerTool(
     'zillow_estimate_rent_vs_buy',
     {
+      _meta: homeMeta('other', { aliases: ['rent or buy', 'rent vs buy', 'renting', 'buying a home'] }),
       title: 'Estimate rent-vs-buy break-even over a horizon',
       description:
         "Project the cumulative cost of buying a home versus renting a comparable place over N years. Accounts for down payment, closing costs, monthly PITI, maintenance (~1%/yr default), property appreciation (~3%/yr default), rent growth (~3%/yr default), and the opportunity cost of the down payment (renter invests it at the investment_return_rate, default 6%/yr). Mortgage P&I stops once the loan is paid off, so horizons longer than the loan term are handled. horizon_years and loan_term_years are capped at 50. Returns the year-by-year cumulative costs, the break-even year, and the net difference at the horizon. No network — pure local math.",
