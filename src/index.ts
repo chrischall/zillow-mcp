@@ -26,7 +26,7 @@ import { buildTools } from './registrars.js';
 import { SessionRegistry } from './sessions.js';
 import { resolveWsPort } from './ws-port.js';
 
-const VERSION = '1.2.5'; // x-release-please-version
+const VERSION = '1.3.0'; // x-release-please-version
 
 // Validated ZILLOW_WS_PORT (fleet-audit#916): junk / out-of-range values
 // warn on stderr and fall back to the default instead of becoming NaN.
