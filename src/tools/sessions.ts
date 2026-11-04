@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { registerSessionTools as registerSharedSessionTools } from '@chrischall/mcp-utils/session';
 import type { SessionRegistry } from '../sessions.js';
+import { withSharedRegistrarMeta } from './hints.js';
 
 /**
  * MCP tool surface for the session registry (`src/sessions.ts`).
@@ -26,7 +27,7 @@ export function registerSessionTools(
   server: McpServer,
   registry: SessionRegistry
 ): void {
-  registerSharedSessionTools(withAdditiveSessionWrites(server), registry, {
+  registerSharedSessionTools(withSharedRegistrarMeta(withAdditiveSessionWrites(server)), registry, {
     prefix: 'zillow',
     serviceLabel: 'Zillow',
     // Nothing in zillow-mcp reads the registry to route a request — every

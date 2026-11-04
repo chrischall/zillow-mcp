@@ -17,6 +17,7 @@ import {
 } from './resolver.js';
 import { OVERALL_DEADLINE_MS, ZILLOW_BURST, ZILLOW_RPM } from './bulk-get.js';
 import { governClient, type ResolveGovernor } from './governor.js';
+import { homeMeta } from './hints.js';
 
 export { governClient, type ResolveGovernor } from './governor.js';
 
@@ -298,6 +299,7 @@ export function registerResolveAddressesTools(
   server.registerTool(
     'zillow_resolve_addresses',
     {
+      _meta: homeMeta('lookup', { aliases: ['addresses', 'address list'] }),
       title: 'Bulk-resolve addresses → Zillow zpids',
       description:
         `Resolve up to ${RESOLVE_ADDRESSES_MAX} free-text or structured addresses to Zillow zpids + canonical URLs in one call. ` +

@@ -9,6 +9,7 @@ import {
 } from './bulk-get.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { type FormattedProperty, zpidSchema } from './properties.js';
+import { homeMeta } from './hints.js';
 
 /**
  * Side-by-side comparison of N Zillow properties. Calls
@@ -65,6 +66,7 @@ export function registerCompareTools(
   server.registerTool(
     'zillow_compare_properties',
     {
+      _meta: homeMeta('lookup', { aliases: ['compare homes', 'side by side'] }),
       title: 'Compare multiple Zillow properties side-by-side',
       description:
         'Side-by-side analysis of 2-25 Zillow properties. **If you just want N property records, use `zillow_bulk_get` instead** — compare is for genuine side-by-side (its pivoted summary table is the value-add); bulk_get is the fetch-many endpoint and accepts up to 200 ids. (Issue #79 raised this cap from 8 to 25 — a 19-listing analysis now fits in one call instead of three.) ' +

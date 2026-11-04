@@ -25,6 +25,7 @@ export type {
   RawPriceHistoryEntry,
   RawTaxHistoryEntry,
 } from './history-format.js';
+import { homeMeta } from './hints.js';
 
 export function registerHistoryTools(
   server: McpServer,
@@ -33,6 +34,7 @@ export function registerHistoryTools(
   server.registerTool(
     'zillow_get_price_history',
     {
+      _meta: homeMeta('lookup', { aliases: ['price history', 'sold price', 'price drop', 'last sold'] }),
       title: 'Get Zillow price history for a property',
       description:
         "Listing-price events for a property — listings, price changes, pending, sold, etc. — by zpid or homedetails URL. Returns two parallel arrays: `events` (raw Zillow shape with `event` strings and MLS attribution) and `events_normalized` (cross-MCP shared shape with a fixed `type` enum: Listed/PriceChange/Pending/Contingent/Sold/Withdrawn/Relisted/Delisted). The normalized form lets callers merge histories across real-estate MCPs without re-implementing taxonomy. Sourced from the same homedetails page as zillow_get_property. For some listings (commonly non-Showcase) Zillow omits the history from the server-rendered page; then `events` is empty and an explanatory `note` is returned — distinct from a genuine no-history.",
@@ -73,6 +75,7 @@ export function registerHistoryTools(
   server.registerTool(
     'zillow_get_tax_history',
     {
+      _meta: homeMeta('lookup', { aliases: ['property tax', 'taxes', 'tax assessment'] }),
       title: 'Get Zillow tax history for a property',
       description:
         "Year-by-year property-tax record for a property: tax paid, assessed value, and the year-over-year change rates. Sourced from the homedetails page. Useful for spotting reassessment jumps or comparing tax burdens across properties. For some listings (commonly non-Showcase) Zillow omits the history from the server-rendered page; then `events` is empty and an explanatory `note` is returned — distinct from a genuine no-history.",

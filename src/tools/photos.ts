@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { fetchPropertyRecord, zpidSchema } from './properties.js';
+import { homeMeta } from './hints.js';
 
 /**
  * Zillow embeds the full photo gallery for a property inside the
@@ -127,6 +128,7 @@ export function registerPhotosTools(
   server.registerTool(
     'zillow_get_property_photos',
     {
+      _meta: homeMeta('lookup', { aliases: ['photos', 'pictures', 'listing photos'] }),
       title: 'Get Zillow property photo gallery',
       description:
         "The full photo gallery for a Zillow property — every image embedded in the homedetails page. Each entry returns the canonical hero URL plus the widest jpeg + webp variants and caption when present. Provide exactly one of `zpid` or `url`. Set `include_sources: true` to also include the full multi-width source lists (warning: a 50+ photo property can exceed the per-call token budget). Returns `{ zpid, count, photos, street_view_url?, high_res_url? }`. Read-only; safe to call repeatedly.",

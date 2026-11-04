@@ -48,6 +48,8 @@ The SSR `__NEXT_DATA__` cache is the canonical, full-shape source — Zillow is 
 src/
   index.ts              # entry — builds FetchproxyTransport, ZillowClient,
                         #   registers tool groups, connects stdio transport
+  registrars.ts         # buildTools(sessions) — the served registrar list,
+                        #   shared with tests/hints.test.ts + index.test.ts
   transport.ts          # ZillowTransport interface
   transport-fetchproxy.ts # thin delegate over mcp-utils' createFetchproxyTransport
                         #   (FetchproxyServer construction + start/close/status +
@@ -64,6 +66,10 @@ src/
   sessions.ts           # re-exports SessionRegistry from
                         #   @chrischall/mcp-utils/session (fleet-shared)
   tools/
+    hints.ts            # _meta.mint context-group hints (group `home`;
+                        #   saved searches = the one canonical whats-new read,
+                        #   view: brief) + the wrapper that adds them to tools
+                        #   registered by shared realty-core/mcp-utils registrars
     search.ts           # zillow_search_properties (buildSearchQueryState + formatListing),
                         #   runRegionSearch (paging + completeness meta), zillow_sweep_area
     properties.ts       # zillow_get_property + the shared fetchPropertyRecord

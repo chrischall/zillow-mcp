@@ -55,7 +55,7 @@ That's it. No API keys, no env vars.
 
 ### Signed-in user data (the unique value vs. Bridge-API competitors)
 
-- **`zillow_get_saved_searches`** — Your saved searches, with new-listing counts and notification frequency.
+- **`zillow_get_saved_searches`** — Your saved searches, with new-listing counts and notification frequency. `view: "brief"` answers one line per search (`name — <last update> — <N new>`).
 - **`zillow_get_saved_homes`** — Homes you've favorited.
 
 ## Response shape (`view`)
@@ -102,7 +102,11 @@ would look like nothing at all.)
 formatting, so `full` already IS what the tool built, and a third value would
 silently alias one that exists.
 
-### Why the other seventeen have none
+`zillow_get_saved_searches` takes a different `view`, `"full" | "brief"`
+(full is the default): `brief` is the context-groups line (see below), not a
+media rung.
+
+### Why the other sixteen have none
 
 - **`zillow_get_property_photos`** — its PRODUCT is the image. Stripping media
   there would not shrink the response, it would empty it. This tool is the
@@ -122,10 +126,10 @@ silently alias one that exists.
 - **`zillow_calculate_mortgage`, `zillow_calculate_affordability`,
   `zillow_estimate_rent_vs_buy`** make no network call at all. They compute
   from your inputs, so there is no upstream payload to project.
-- **`zillow_get_saved_homes` and `zillow_get_saved_searches`** answer with
-  hand-shaped records of your own saved activity. Note that a saved home
-  carries a constructed `image_url` too, from `imgSrc` — consistent with the
-  three tools above, and returned unconditionally here.
+- **`zillow_get_saved_homes`** answers with hand-shaped records of your own
+  saved activity. Note that a saved home carries a constructed `image_url`
+  too, from `imgSrc` — consistent with the three tools above, and returned
+  unconditionally here.
 - **`zillow_register_session`, `zillow_set_active_session`,
   `zillow_get_session_context`** answer with a receipt or with session state.
 - **`zillow_healthcheck`** answers with a bridge diagnostic.
@@ -134,6 +138,28 @@ Passing `view` to one of those is not an error and will not fail: the tool
 does not declare it, so zod drops the unknown key and the call runs exactly as
 it would have. Nothing warns you, so a successful call is not evidence the
 rung was honoured.
+
+## In context groups
+
+zillow-mcp is a member of the **home** group (mcp-host context groups; every
+tool except `zillow_healthcheck` carries `_meta.mint` with `domain: "home"`).
+
+- **Canonical read:** `zillow_get_saved_searches` answers **what's new** —
+  "anything new on my saved searches?" — with `view: "brief"`, one line per
+  search: `name — <last update, ISO date | no date> — <N new | no new listings>`.
+  It takes no date range and declares **no subject**: a saved search is a
+  query, not a person, property or account, so there is no listable set to
+  publish as an enum.
+- Nothing here answers **what's due** or **what's on**; every other read is a
+  `lookup` (search, property, history, market), the calculators and session
+  tools are `other`.
+- **A compound ask** looks like "what's new at home — any new listings on my
+  saved searches, and is the pool heater on?": the group fans out to this
+  canonical read beside the other home members' and reads back one line each.
+- **Browser-bridged:** every call rides the signed-in zillow.com tab through the
+  ContextMint Bridge, so when the browser is not open (or the extension is not
+  connected) the group answers that Zillow **needs your browser open** rather
+  than an empty list.
 
 ## Trigger examples
 

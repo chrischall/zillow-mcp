@@ -1,7 +1,7 @@
 // Fleet annotation meta-test, read off the MCP wire (tools/list) rather than
 // a hand-kept list, so a shared registrar (the mcp-utils session trio) is
-// checked exactly as a client sees it. The registrar list mirrors
-// src/index.ts's `tools: [...]`.
+// checked exactly as a client sees it. The registrar list is the one served by
+// src/index.ts via buildTools (src/registrars.ts).
 //
 // `destructiveHint` DEFAULTS TO TRUE whenever readOnlyHint is false, so a
 // write that forgets to declare it is published as destructive and nothing
@@ -9,21 +9,7 @@
 // unless something asserts the key is present.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { ZillowClient } from '../src/client.js';
-import { registerSearchTools } from '../src/tools/search.js';
-import { registerPropertyTools } from '../src/tools/properties.js';
-import { registerZestimateTools } from '../src/tools/zestimate.js';
-import { registerSavedTools } from '../src/tools/saved.js';
-import { registerMarketTools } from '../src/tools/market.js';
-import { registerMortgageTools } from '../src/tools/mortgage.js';
-import { registerHistoryTools } from '../src/tools/history.js';
-import { registerCompareTools } from '../src/tools/compare.js';
-import { registerAffordabilityTools } from '../src/tools/affordability.js';
-import { registerPhotosTools } from '../src/tools/photos.js';
-import { registerHealthcheckTools } from '../src/tools/healthcheck.js';
-import { registerGetByAddressTools } from '../src/tools/get-by-address.js';
-import { registerBulkGetTools } from '../src/tools/bulk-get.js';
-import { registerResolveAddressesTools } from '../src/tools/resolve-addresses.js';
-import { registerSessionTools } from '../src/tools/sessions.js';
+import { buildTools } from '../src/registrars.js';
 import { SessionRegistry } from '../src/sessions.js';
 import { createTestHarness } from './helpers.js';
 
@@ -44,21 +30,7 @@ let annotations: Record<string, Ann | undefined>;
 beforeAll(async () => {
   const sessions = new SessionRegistry();
   harness = await createTestHarness((server) => {
-    registerSearchTools(server, client);
-    registerPropertyTools(server, client);
-    registerZestimateTools(server, client);
-    registerSavedTools(server, client, sessions);
-    registerMarketTools(server, client);
-    registerMortgageTools(server);
-    registerHistoryTools(server, client);
-    registerCompareTools(server, client);
-    registerAffordabilityTools(server);
-    registerPhotosTools(server, client);
-    registerHealthcheckTools(server, client);
-    registerGetByAddressTools(server, client);
-    registerBulkGetTools(server, client);
-    registerResolveAddressesTools(server, client);
-    registerSessionTools(server, sessions);
+    for (const register of buildTools(sessions)) register(server, client);
   });
   const { tools } = await harness.client.listTools();
   annotations = Object.fromEntries(tools.map((t) => [t.name, t.annotations as Ann | undefined]));

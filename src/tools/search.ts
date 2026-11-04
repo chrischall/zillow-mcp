@@ -17,6 +17,7 @@ import { ZILLOW_BURST, ZILLOW_RPM } from './bulk-get.js';
 import { viewArg, viewResponse } from '../view.js';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { findPropertyInPageProps, type RawProperty } from './properties.js';
+import { homeMeta } from './hints.js';
 
 /**
  * Zillow's search page is SSR Next.js. We hit it twice:
@@ -787,6 +788,7 @@ export function registerSearchTools(
   server.registerTool(
     'zillow_search_properties',
     {
+      _meta: homeMeta('lookup', { aliases: ['homes for sale', 'listings', 'houses', 'real estate', 'house hunting'] }),
       title: 'Search Zillow listings',
       description:
         "Search Zillow listings by location (city, ZIP, neighborhood, or address) and optional filters (status, price band, beds/baths minimums, home types). Returns matching properties with price, beds/baths, sqft, Zestimate, status, image, and homedetails URL. Works with city/ZIP-level queries (filtered against your criteria) AND with full-address or street-only queries (returns the listings Zillow resolves to directly — filters are not applied in this single-round-trip path; use zillow_get_by_address for the cleanest one-shot address → zpid lookup). Throws LocationNotResolved if Zillow can't pin either a region or matching listings for the input (instead of silently falling back to your default search region). Heads up: Zillow renders ~40 listings per page server-side; this tool auto-paginates by default when `limit` exceeds that, walking subsequent pages and concatenating results (set `auto_paginate: false` to opt out and get the single-page response). For dense markets, price-band the search to enumerate fully. Does NOT return Zestimate history — use zillow_get_zestimate_history for that. Read-only; safe to call repeatedly.",
@@ -900,6 +902,7 @@ export function registerSearchTools(
   server.registerTool(
     'zillow_sweep_area',
     {
+      _meta: homeMeta('lookup', { aliases: ['every listing', 'homes for sale', 'whole area'] }),
       title: 'Exhaustively sweep a Zillow search area',
       description:
         "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas (inside the output directory: ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp). Sequential requests with a delay, paced by the same per-host requests-per-minute throttle as `zillow_bulk_get`; if Zillow's bot-wall blocks a request the sweep stops and returns `{ blocked: true, retry_after_s }` with what it had. Read-only against Zillow; the only write is the optional local output file.",

@@ -4,6 +4,7 @@ import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { fetchPropertyRecord, zpidSchema } from './properties.js';
 import { seriesAvailabilityNote } from './series-note.js';
+import { homeMeta } from './hints.js';
 
 /**
  * Zillow embeds Zestimate history inside the property record under
@@ -88,6 +89,7 @@ export function registerZestimateTools(
   server.registerTool(
     'zillow_get_zestimate_history',
     {
+      _meta: homeMeta('lookup', { aliases: ['zestimate', 'home value', 'house worth', 'value history'] }),
       title: 'Get Zestimate history for a property',
       description:
         "Historical Zestimate values for a property by zpid or homedetails URL. Returns a time series of {date, value, rent?} entries (rent included when Zillow has a rent Zestimate for the property). Note: zillow_get_property returns only the *current* Zestimate as a scalar — call this tool when you need the trend. For some listings (commonly non-Showcase) Zillow renders the trend client-side and omits it from the server-rendered page; then `points` is empty and an explanatory `note` is returned — distinct from a genuine no-history. Read-only; safe to call repeatedly.",

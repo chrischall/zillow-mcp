@@ -4,6 +4,7 @@ import type { ZillowClient } from '../client.js';
 import { minifiedResult } from '@chrischall/mcp-utils';
 import { extractNextData, getPageProps } from '../next-data.js';
 import { isPathUnder, urlToPath } from '../url.js';
+import { homeMeta } from './hints.js';
 
 /**
  * Zillow's market data lives on the "home values" page,
@@ -163,6 +164,7 @@ export function registerMarketTools(
   server.registerTool(
     'zillow_get_market_report',
     {
+      _meta: homeMeta('lookup', { aliases: ['housing market', 'home prices', 'market trends'] }),
       title: 'Get Zillow market report for a region',
       description:
         'Market report for a Zillow region: median sale/list prices, days on market, for-sale inventory, new listings, Zillow Home Value Index (ZHVI), and year-over-year ZHVI change. Provide either a `region_path` (e.g. "/home-values/6181/brooklyn-ny/") or a full Zillow home-values URL. Read-only; safe to call repeatedly.',
