@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2](https://github.com/chrischall/zillow-mcp/compare/v1.3.1...v1.3.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** upgrade @chrischall/mcp-utils to 3.7.2 so uploads carry only the file's bytes ([#340](https://github.com/chrischall/zillow-mcp/issues/340)) ([badcdb1](https://github.com/chrischall/zillow-mcp/commit/badcdb1c61e1b77d1a5b58a6a7c62ade8c58b0ec))
+* **sweep:** return zillow_sweep_area output as a download link on hosted deployments ([#338](https://github.com/chrischall/zillow-mcp/issues/338)) ([69ef1ba](https://github.com/chrischall/zillow-mcp/commit/69ef1ba666ecade247fa21bcaefee7755d17d8c5))
+
 ## [1.3.1](https://github.com/chrischall/zillow-mcp/compare/v1.3.0...v1.3.1) (2026-11-04)
 
 
