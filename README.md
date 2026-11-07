@@ -22,7 +22,7 @@ None of them can see what *you* have saved, favorited, or recently viewed — be
 | Tool | Purpose | Auth-scoped |
 | --- | --- | :---: |
 | `zillow_search_properties` | Search listings by location, status, price band, beds/baths, home type. Optional `map_bounds` viewport; `include_meta` reports Zillow's own total vs fetched, so truncation is visible | |
-| `zillow_sweep_area` | Exhaustive enumeration of an area: recursive map tiling until no tile is truncated, deduped, with a completeness summary and drift warnings; optional JSON output file | |
+| `zillow_sweep_area` | Exhaustive enumeration of an area: recursive map tiling until no tile is truncated, deduped, with a completeness summary and drift warnings; optional JSON output file (a download link when hosted) | |
 | `zillow_get_property` | Full record for a zpid (price, Zestimate, beds, schools, neighborhood, price history) | |
 | `zillow_get_by_address` | Resolve a free-text address (with optional city/state/zip) to its Zillow zpid + canonical URL | |
 | `zillow_resolve_addresses` | Batch-resolve many free-text addresses (or structured rows) to zpids + canonical URLs | |
@@ -52,6 +52,15 @@ Changes to tool inputs and outputs, so you can adjust any scripts or prompts tha
 - **A zpid must be a number.** Every tool that takes a `zpid` (`zillow_get_property`, `zillow_bulk_get`, `zillow_compare_properties`, `zillow_get_property_photos`, `zillow_get_zestimate_history`, `zillow_get_price_history`, `zillow_get_tax_history`) accepts a positive whole number, or a string of digits only such as `"12345"`. Any other string, such as `"12345_zpid"` or a URL, is now rejected as invalid input. Pass a homedetails URL in the `url` or `urls` field instead.
 
 - **Pass `zpids` or `urls`, not both.** `zillow_bulk_get` and `zillow_compare_properties` now return an error when a call includes both lists. Before, the `urls` list was silently ignored. To fetch both kinds, make two calls.
+
+## Upgrading
+
+### next release
+
+- **`zillow_sweep_area` on a hosted deployment** (mcp-host, where the server and the caller share no filesystem). Running locally, nothing changes.
+  - With `output_path`, the file is no longer written to the server's disk, which you could not reach. It goes to the host's file store as a zip, and the reply carries a download link. The reply has `output_url` (the signed link to the zip), `output_expires_at` (when the link stops working, 1 hour by default) and `output_file` (the file's name inside the zip, the base name of your `output_path`). It has no `output_path`.
+  - If the host has no file store, an `output_path` call is refused before any request is made. Leave `output_path` out to get the listings inline.
+  - Without `output_path`, the listings still come back inline. If they are larger than 10 MiB, they come back as a link instead (the same three fields plus a `note`, with no `results`), because the host would reject a reply that large. With no file store the call fails with a "too large" error that tells you to narrow the area.
 
 ## Acknowledgement of Terms
 

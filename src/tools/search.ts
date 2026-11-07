@@ -1,15 +1,18 @@
 import { z } from 'zod';
 import { existsSync } from 'node:fs';
-import { extname, isAbsolute, join } from 'node:path';
+import { basename, extname, isAbsolute, join } from 'node:path';
 import { FIRST_DIGIT_TO_STATES, tokenize } from '@chrischall/realty-core';
 import {
   assertPathWithinRoots,
   FileWriteRefusedError,
+  McpToolError,
   minifiedResult,
   resolveOutputDir,
   writeFileSafe,
 } from '@chrischall/mcp-utils';
 import { TokenBucket } from '@chrischall/mcp-utils/fetchproxy';
+import { blobStoreFromEnv, isHostedEnv, openExportSink, sanitizeExportFileName, type ExportSink } from '@chrischall/mcp-utils/export';
+import type { EnvSource } from '@chrischall/mcp-utils';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { BotWallError, type ZillowClient } from '../client.js';
 import { governClient, type ResolveGovernor } from './governor.js';
@@ -905,9 +908,10 @@ export function registerSearchTools(
       _meta: homeMeta('lookup', { aliases: ['every listing', 'homes for sale', 'whole area'] }),
       title: 'Exhaustively sweep a Zillow search area',
       description:
-        "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas (inside the output directory: ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp). Sequential requests with a delay, paced by the same per-host requests-per-minute throttle as `zillow_bulk_get`; if Zillow's bot-wall blocks a request the sweep stops and returns `{ blocked: true, retry_after_s }` with what it had. Read-only against Zillow; the only write is the optional local output file.",
+        "Enumerate EVERY Zillow listing matching the filters inside a location (resolved like zillow_search_properties) or an explicit bounding box, without silent truncation. Splits the area into map tiles and recursively quarters any tile whose Zillow-reported total exceeds what one query can return, dedupes by zpid and re-applies the numeric filters (drift guard). Returns a completeness summary (requests, tiles, unique listings, tiles still truncated at max depth, drift warnings such as Zillow ignoring the price filter or the viewport) plus the listings, or writes the listings to `output_path` as JSON for large areas (inside the output directory: ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp). On a hosted deployment the file is returned instead as a zip behind a signed download link (`output_url`, `output_expires_at`, `output_file`), and inline results too large to return are moved to such a link. Sequential requests with a delay, paced by the same per-host requests-per-minute throttle as `zillow_bulk_get`; if Zillow's bot-wall blocks a request the sweep stops and returns `{ blocked: true, retry_after_s }` with what it had. Read-only against Zillow; the only write is the optional local output file.",
       // destructiveHint: false — read-only against Zillow; the only write is
-      // the optional local output_path, which must be a NEW .json file inside ZILLOW_OUTPUT_DIR
+      // the optional output_path: locally a NEW .json file inside ZILLOW_OUTPUT_DIR;
+      // hosted, a fresh zip in the blob store (exp/<id>/part-0001.zip), never the disk
       // file (existing files are refused and the write uses flag 'wx'), so no
       // prior state is ever lost. Purely additive.
       annotations: { title: 'Sweep Zillow area', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -927,7 +931,7 @@ export function registerSearchTools(
         tile_cap: z.number().int().positive().max(1000).optional().describe('Treat a tile as complete only if its total is at most this (default 400).'),
         delay_ms: z.number().int().min(0).max(10000).optional().describe('Pause before every Zillow request, including each page within a tile (default 1200).'),
         max_requests: z.number().int().positive().max(400).optional().describe('Hard request budget (default 150), counting the resolve call and every page; the sweep stops mid-tile rather than exceed it.'),
-        output_path: z.string().optional().describe('Optional NEW .json file to write the full results (and per-tile counts) to: a file name (e.g. "san-jose.json") written into the output directory (ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp), or an absolute path inside it. Paths outside that directory are refused, and an existing file is never overwritten. Omit to get the results inline; use a file for large areas so the listings stay out of the conversation.'),
+        output_path: z.string().optional().describe('Optional NEW .json file to write the full results (and per-tile counts) to: a file name (e.g. "san-jose.json") written into the output directory (ZILLOW_OUTPUT_DIR, default ~/Downloads/zillow-mcp), or an absolute path inside it. Paths outside that directory are refused, and an existing file is never overwritten. Omit to get the results inline; use a file for large areas so the listings stay out of the conversation. On a hosted deployment only the base name is used: it names the .json inside a zip returned as a signed download link (output_url).'),
       }),
     },
     async (input) => {
@@ -991,6 +995,56 @@ export function resolveSweepOutputPath(p: string): { path: string; root: string 
 export interface SweepTuning {
   /** RPM bucket every Zillow request spends from; defaults to bulk_get's {@link ZILLOW_RPM} / {@link ZILLOW_BURST}. */
   bucket?: TokenBucket;
+  /** Environment read for hosted detection and the blob store (`MCP_DATA_DIR`, `MCP_BLOB_*`). Default `process.env`. */
+  env?: EnvSource;
+  /** Hosted only: largest inline reply, in bytes of JSON. Default {@link SWEEP_INLINE_MAX_BYTES}. */
+  inlineMaxBytes?: number;
+  /** Hosted only: the export sink's part limit (`maxBytes`). Default: the sink's own. */
+  exportMaxBytes?: number;
+}
+
+/**
+ * Largest inline sweep reply on a hosted deployment. mcp-host swaps a child
+ * result over 14 MiB for a generic error, so a reply past this goes out as a
+ * link (or, with no blob store, is refused with a remedy) instead.
+ */
+export const SWEEP_INLINE_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Name of the file inside the zip when an oversized inline reply is moved to a link. */
+const SWEEP_DEFAULT_EXPORT_FILE = 'zillow-sweep.json';
+
+/**
+ * Hosted: the zip entry an `output_path` names. The caller shares no disk with
+ * this process, so only the base name survives — it labels the file inside
+ * the downloaded zip. Still `.json` only.
+ */
+export function hostedSweepFileName(p: string): string {
+  if (extname(p).toLowerCase() !== '.json') throw new Error(`output_path must end in .json; got "${p}".`);
+  const name = sanitizeExportFileName(basename(p));
+  return extname(name).toLowerCase() === '.json' ? name : SWEEP_DEFAULT_EXPORT_FILE;
+}
+
+function noStoreRefusal(): McpToolError {
+  return new McpToolError(
+    'output_path cannot be delivered on this hosted deployment: it has no disk you can reach and no blob store to hold a download link. Omit output_path to get the listings inline.',
+    { kind: 'too_large', hint: 'Omit output_path to get the listings inline, and narrow the area (bounds, filters) or lower max_requests if the result is large.' }
+  );
+}
+
+function openSweepSink(env: EnvSource, tuning: SweepTuning): Promise<ExportSink> {
+  return openExportSink({
+    name: 'zillow-mcp',
+    envVar: SWEEP_OUTPUT_DIR_ENV,
+    baseName: 'zillow-sweep',
+    env,
+    ...(tuning.exportMaxBytes !== undefined ? { maxBytes: tuning.exportMaxBytes } : {}),
+  });
+}
+
+async function exportToLink(sink: ExportSink, fileName: string, json: string) {
+  await sink.addFile(fileName, json, 'application/json');
+  const loc = await sink.finish();
+  return { output_url: loc.location, output_expires_at: loc.urlExpiresAt, output_file: fileName };
 }
 
 /** Split a box into four quadrants. */
@@ -1010,7 +1064,24 @@ export async function sweepArea(rawClient: ZillowClient, input: SweepInput, tuni
   const tileCap = input.tile_cap ?? 400;
   const delay = input.delay_ms ?? 1200;
   const budget = input.max_requests ?? 150;
-  const output = input.output_path !== undefined ? resolveSweepOutputPath(input.output_path) : undefined;
+  // Where the sweep file goes. Locally: the confined disk path, unchanged.
+  // Hosted (mcp-host): the caller shares no filesystem, so a disk write is
+  // useless — the file goes to the blob store as a zip behind a signed link,
+  // and with no blob store output_path is refused before any request.
+  const env = tuning.env ?? process.env;
+  const hosted = isHostedEnv(env);
+  let output: { path: string; root: string } | undefined;
+  let exportFile: string | undefined;
+  let sink: ExportSink | undefined;
+  if (input.output_path !== undefined) {
+    if (!hosted) output = resolveSweepOutputPath(input.output_path);
+    else {
+      exportFile = hostedSweepFileName(input.output_path);
+      if (!blobStoreFromEnv(env)) throw noStoreRefusal();
+      // Opened now so a misconfigured store fails before a sweep's worth of requests.
+      sink = await openSweepSink(env, tuning);
+    }
+  }
   // fleet-audit#1356: the same governor as bulk_get / resolve_addresses —
   // every request (resolve, each tile, each page) spends a token from one
   // RPM bucket, so `delay_ms: 0` cannot exceed ZILLOW_RPM sustained, and the
@@ -1097,7 +1168,10 @@ export async function sweepArea(rawClient: ZillowClient, input: SweepInput, tuni
     results: [...byZpid.values()],
     dropped: [...droppedAll.values()],
   };
-  if (output) {
+  let link: Awaited<ReturnType<typeof exportToLink>> | undefined;
+  if (sink) {
+    link = await exportToLink(sink, exportFile!, JSON.stringify(out, null, 1));
+  } else if (output) {
     // No parent directories are created: the root exists (resolveOutputDir
     // made it) and a subdirectory inside it must already exist.
     try {
@@ -1111,7 +1185,7 @@ export async function sweepArea(rawClient: ZillowClient, input: SweepInput, tuni
       throw e;
     }
   }
-  return {
+  const summary = {
     ...(output ? { output_path: output.path } : {}),
     complete: out.complete,
     unique_listings: out.unique_listings,
@@ -1126,6 +1200,28 @@ export async function sweepArea(rawClient: ZillowClient, input: SweepInput, tuni
     sum_of_leaf_shortfall: leaves.reduce((a, t) => a + (t.shortfall ?? 0), 0),
     dropped_by_reason: [...droppedAll.values()].reduce<Record<string, number>>((a, d) => ((a[d.reason] = (a[d.reason] ?? 0) + 1), a), {}),
     warnings: out.warnings,
-    ...(output ? {} : { results: out.results }),
   };
+  if (output || link) return { ...summary, ...link };
+  const inline = { ...summary, results: out.results };
+  if (hosted) {
+    // An inline reply past mcp-host's result cap would be swapped for a
+    // generic error and the whole sweep lost: hand it over as a link instead.
+    const cap = tuning.inlineMaxBytes ?? SWEEP_INLINE_MAX_BYTES;
+    const size = Buffer.byteLength(JSON.stringify(inline));
+    if (size > cap) {
+      if (!blobStoreFromEnv(env)) {
+        throw new McpToolError(
+          `The sweep found ${out.unique_listings} listings (${size} bytes), too large to return inline on this hosted deployment (limit ${cap} bytes), and it has no blob store for a download link.`,
+          { kind: 'too_large', hint: 'Narrow the area (bounds, filters) or lower max_requests, then sweep again.' }
+        );
+      }
+      const moved = await exportToLink(await openSweepSink(env, tuning), SWEEP_DEFAULT_EXPORT_FILE, JSON.stringify(out, null, 1));
+      return {
+        ...summary,
+        ...moved,
+        note: `The listings were too large to return inline (${size} bytes); download the full set from output_url (a zip holding ${SWEEP_DEFAULT_EXPORT_FILE}).`,
+      };
+    }
+  }
+  return inline;
 }
