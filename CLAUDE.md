@@ -124,7 +124,7 @@ ZILLOW_WS_PORT=37149   # override the fetchproxy WebSocket port
 ZILLOW_COMMUNITIES_FILE=/path/to/communities.json     # override the community vocabulary (JSON string array)
 ZILLOW_LOCALITY_ALIASES_FILE=/path/to/aliases.json   # override the locality aliases (JSON array of [a, b] pairs)
 ZILLOW_DEBUG=1         # verbose fetchproxy transport logging to stderr
-ZILLOW_OUTPUT_DIR=/path # where zillow_sweep_area writes output_path files (default ~/Downloads/zillow-mcp; paths outside it are refused)
+ZILLOW_OUTPUT_DIR=/path # where zillow_sweep_area writes output_path files (default ~/Downloads/zillow-mcp; paths outside it are refused). Local installs only
 ```
 
 ## Conventions
@@ -136,6 +136,10 @@ ZILLOW_OUTPUT_DIR=/path # where zillow_sweep_area writes output_path files (defa
 - Write a failing test before implementation (TDD).
 - ESM + NodeNext: imports use `.js` extensions even for `.ts` source.
 - stdio transport: log warnings/banners to **stderr** only — stdout is reserved for JSON-RPC.
+
+## Hosted sweep output
+
+On a hosted deployment (`isHostedEnv`: `MCP_DATA_DIR` or `MCP_BLOB_BASE_URL` set) the caller shares no disk with this process, so `zillow_sweep_area` never writes the runner's disk. An `output_path` keeps only its base name and goes through `openExportSink` (`@chrischall/mcp-utils/export`) as a zip in the blob store, returned as `output_url` / `output_expires_at` / `output_file`. The sink is opened BEFORE the sweep so a broken store fails before the requests are spent; with no blob store `output_path` is refused up front. An inline reply over `SWEEP_INLINE_MAX_BYTES` (10 MiB, under mcp-host's 14 MiB result cap) moves to a link with a `note`, or is refused `too_large` when there is no store. Locally all of this is skipped and the disk path is unchanged. Tests: `tests/tools/sweep-hosted.test.ts` (fake store behind a stubbed `fetch`).
 
 ## Zillow quirks
 
