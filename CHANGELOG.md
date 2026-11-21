@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.3](https://github.com/chrischall/zillow-mcp/compare/v1.3.2...v1.3.3) (2026-11-21)
+
+
+### Bug Fixes
+
+* **deps:** Bump @chrischall/mcp-utils from 3.7.2 to 3.9.0 in the production-dependencies group ([#346](https://github.com/chrischall/zillow-mcp/issues/346)) ([3cf5adc](https://github.com/chrischall/zillow-mcp/commit/3cf5adc57eeeee8a05233d25406422f3186cef03))
+* **deps:** Bump @fetchproxy/server from 3.6.3 to 3.8.0 in the production-dependencies group ([#343](https://github.com/chrischall/zillow-mcp/issues/343)) ([6936c02](https://github.com/chrischall/zillow-mcp/commit/6936c021bf277bb97da0f76087a783dfc0da0422))
+
 ## [1.3.2](https://github.com/chrischall/zillow-mcp/compare/v1.3.1...v1.3.2) (2026-11-07)
 
 
